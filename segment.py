@@ -4232,11 +4232,13 @@ def _segment_visual_problem_markers(
     image: Image.Image,
     page_id: str,
     options: SegmentOptions,
+    *,
+    min_markers: int = 2,
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
     marker_mask, content_box, columns = _visual_marker_column_boxes(image, options)
     marker_tops_by_column = [_visual_problem_marker_tops(image, column_box) for column_box in columns]
     marker_count = sum(len(tops) for tops in marker_tops_by_column)
-    if marker_count < 2:
+    if marker_count < min_markers:
         return None
 
     blocks: list[ContentBlock] = []
@@ -5273,7 +5275,16 @@ def segment_page(
                 usable_text_lines,
             )
         if marker_result is None and _is_image_upload_document_source(image_path, source_metadata):
-            marker_result = _segment_visual_problem_markers(image, page_id, resolved_options)
+            # Scanned exam PDFs: a page holding one question after a long
+            # passage has a single number; the stricter scan marker checks
+            # (period shape, white space above) make one marker trustworthy.
+            scanned_pdf_page = str(source_metadata.get("source_type") or "").lower() == "pdf" and _is_scanned_pdf_page_metadata(source_metadata)
+            marker_result = _segment_visual_problem_markers(
+                image,
+                page_id,
+                resolved_options,
+                min_markers=1 if scanned_pdf_page else 2,
+            )
             if (
                 marker_result is None
                 and str(source_metadata.get("source_type") or "").lower() == "pdf"
