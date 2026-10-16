@@ -834,7 +834,7 @@ function ManualSplitEditor({
                           key={mode}
                           type="button"
                           className={`crop-frame-handle ${mode}`}
-                          aria-label={`수동 분할 영역 ${mode}`}
+                          aria-label={`직접 자르기 영역 ${mode}`}
                           onMouseDown={(evt) => onHandleMouseDown?.(region.id, mode, evt)}
                           onClick={(evt) => evt.stopPropagation()}
                         />
@@ -857,7 +857,7 @@ function ManualSplitEditor({
           </div>
         </ReviewCanvasZoomShell>
       </div>
-      <aside className="manual-split-panel" aria-label="수동 분할 영역 목록">
+      <aside className="manual-split-panel" aria-label="직접 자르기 영역 목록">
         <div className="manual-split-panel-head">
           <strong>영역 {regionList.length}개</strong>
           {hasOverlap && <span className="manual-split-warning">겹침 있음</span>}
@@ -1502,13 +1502,26 @@ function ReviewStage({
     : null;
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
+  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
+  // The same unresolved set the 검수 badge and the EDB 제작 warning count,
+  // so filters, box colours and 확인 완료 also cover page-level warnings.
+  const unresolvedProblemIdSet = useMemo(
+    () => collectUnresolvedReviewProblemIds(session, reviewSummary.actionableRiskFlagCounts),
+    [session, reviewSummary]
+  );
+  const reviewStatusOf = useCallback((problem) => {
+    const status = deriveProblemStatus(problem);
+    return status === 'normal' && unresolvedProblemIdSet.has(String(problem?.id || ''))
+      ? 'check_needed'
+      : status;
+  }, [unresolvedProblemIdSet]);
   const statusCounts = useMemo(() => {
-    const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(scopedProblems);
+    const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(scopedProblems, { unresolvedProblemIds: unresolvedProblemIdSet });
     if (helperCounts) return helperCounts;
     const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
     const passageGroups = new Set();
     scopedProblems.forEach(problem => {
-      const status = deriveProblemStatus(problem);
+      const status = reviewStatusOf(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
       const passageGroupId = passageGroupIdFor(problem);
@@ -1520,12 +1533,11 @@ function ReviewStage({
     counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
     counts.passageGroups = passageGroups.size;
     return counts;
-  }, [scopedProblems]);
+  }, [scopedProblems, unresolvedProblemIdSet, reviewStatusOf]);
   const sessionCounts = useMemo(
     () => reviewScopeActive ? countSessionProblems(scopedProblems) : sessionProblemCounts(session),
     [reviewScopeActive, scopedProblems, session]
   );
-  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
   const passageReviewProblemIds = useMemo(
     () => new Set(reviewSummary.passageReviewProblemIds || []),
     [reviewSummary.passageReviewProblemIds]
@@ -1572,7 +1584,7 @@ function ReviewStage({
         ? hasRiskFlag(page, reviewRiskFilter)
         : false;
       const pageProblems = allPageProblems
-        .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
+        .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds, unresolvedProblemIds: unresolvedProblemIdSet }))
         .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
       problemCount += pageProblems.length;
       pageProblems.forEach(problem => {
@@ -1587,10 +1599,15 @@ function ReviewStage({
       problemIds: Array.from(problemIdSet),
       retryPageIds: Array.from(retryPageIdSet),
     };
-  }, [pages, problemsById, pageRetryIds, passageReviewProblemIds, reviewFilter, reviewRiskFilter, riskFilterHasProblemMatches, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet]);
+  }, [pages, problemsById, pageRetryIds, passageReviewProblemIds, unresolvedProblemIdSet, reviewFilter, reviewRiskFilter, riskFilterHasProblemMatches, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet]);
   const actionableProblemIds = useMemo(() => scopedProblems
-    .filter(problem => problem?.id && deriveProblemStatus(problem) !== 'normal')
-    .map(problem => problem.id), [scopedProblems]);
+    .filter(problem => problem?.id && unresolvedProblemIdSet.has(String(problem.id)))
+    .map(problem => problem.id), [scopedProblems, unresolvedProblemIdSet]);
+  // One 확인 완료 action whose target follows what is on screen: the active
+  // filter's problems when one is set, otherwise everything still flagged.
+  const confirmTargetIds = activeReviewFilter
+    ? visibleReviewScope.problemIds.filter(id => unresolvedProblemIdSet.has(String(id)))
+    : actionableProblemIds;
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
   const selectedCanBoxEdit = Boolean(
@@ -2604,7 +2621,7 @@ function ReviewStage({
     </div>
   ) : manualSplit ? (
     <div className="review-actionbar manual-split-actionbar">
-      <span className="count-chip">수동 분할</span>
+      <span className="count-chip">직접 자르기</span>
       <span className="hint">
         드래그로 그리고, 스탬프로 찍고, 선택 영역은 바로 조정하세요.
         {' '}
@@ -2671,36 +2688,29 @@ function ReviewStage({
           <button type="button" onClick={clearReviewScope}>전체 세션 보기</button>
         </span>
       )}
-      <span className="hint">문제 박스를 확인하고, 이상한 페이지만 AI로 다시 인식하세요.</span>
+      <span className="hint">이상한 박스만 고치고, 괜찮으면 [확인 완료]를 누르세요. 남은 표시는 EDB 제작 때 한 번 더 묻습니다.</span>
       <div className="spacer" />
       {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
-        <>
-          <button
-            className="btn"
-            type="button"
-            onClick={selectVisibleProblems}
-            disabled={mutating}
-          >
-            표시 항목 선택 {visibleReviewScope.problemIds.length}
-          </button>
-          <button
-            className="btn"
-            type="button"
-            onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
-            disabled={mutating}
-          >
-            표시 항목 확인 완료 {visibleReviewScope.problemIds.length}
-          </button>
-        </>
-      )}
-      {!activeReviewFilter && actionableProblemIds.length > 0 && (
         <button
           className="btn"
           type="button"
-          onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
+          onClick={selectVisibleProblems}
           disabled={mutating}
         >
-          확인 필요 전체 확인 {actionableProblemIds.length}
+          표시 항목 선택 {visibleReviewScope.problemIds.length}
+        </button>
+      )}
+      {confirmTargetIds.length > 0 && (
+        <button
+          className="btn soft-success"
+          type="button"
+          title={activeReviewFilter
+            ? '지금 보이는 항목의 확인 필요 표시를 지웁니다'
+            : '확인 필요 표시를 모두 지웁니다'}
+          onClick={() => onConfirm?.(null, { problemIds: confirmTargetIds, bulk: true })}
+          disabled={mutating}
+        >
+          {Icon.check} 확인 완료 {confirmTargetIds.length}
         </button>
       )}
       {showBulkRetry && (
@@ -2794,7 +2804,7 @@ function ReviewStage({
                 disabled={mutating || !selectedCanManualSplit}
                 title={selectedCanManualSplit ? '선택한 원본 페이지를 직접 여러 영역으로 자르기' : '같은 원본 페이지의 항목을 선택해야 합니다'}
               >
-                {Icon.pen} 수동 쪼개기
+                {Icon.pen} 직접 자르기
               </button>
             </>
           )}
@@ -2813,9 +2823,9 @@ function ReviewStage({
                 type="button"
                 onClick={beginManualSplitForSelection}
                 disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 수동 분할할 수 있습니다'}
+                title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 직접 자를 수 있습니다'}
               >
-                {Icon.pen} 수동 쪼개기
+                {Icon.pen} 직접 자르기
               </button>
             </>
           )}
@@ -2824,6 +2834,7 @@ function ReviewStage({
           <button
             className="btn soft-success"
             type="button"
+            title="선택한 항목의 확인 필요 표시를 지웁니다"
             onClick={() => onConfirm?.(null, { problemIds: selectedList, bulk: true })}
             disabled={mutating}
           >
@@ -3076,7 +3087,7 @@ function ReviewStage({
               ? hasRiskFlag(page, reviewRiskFilter)
               : false;
             const pageProblems = allPageProblems
-              .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
+              .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds, unresolvedProblemIds: unresolvedProblemIdSet }))
               .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
             if ((reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
             const pageCounts = countSessionProblems(allPageProblems);
@@ -3121,7 +3132,7 @@ function ReviewStage({
                     onClick={() => beginManualPageSplit(page, allPageProblems.map(problem => problem.id))}
                     disabled={mutating || !!manualSplit || !page.sourceImageUri}
                   >
-                    수동 쪼개기
+                    직접 자르기
                   </button>
                   <span style={{ fontSize: 11, color: 'var(--muted-2)', fontFamily: "'JetBrains Mono', monospace" }}>
                     {page.width}×{page.height}
@@ -3174,7 +3185,7 @@ function ReviewStage({
                     const heightPct = (bbox.height / h) * 100;
                     const isSelected = selectedIds.has(prob.id);
                     const isActive = prob.id === activeId;
-                    const status = deriveProblemStatus(prob);
+                    const status = reviewStatusOf(prob);
                     const statusMeta = reviewStatusMeta(status);
                     const isRisky = status !== 'normal';
                     const isSplitting = splitTarget === prob.id;
@@ -3636,7 +3647,7 @@ function ItemsRail({
                               type="button"
                               disabled={!publish.canOpenClassinHandoff}
                               onClick={() => openClassinHandoff(publish)}
-                              title={publish.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
+                              title={publish.canOpenClassinHandoff ? 'ClassIn 확인용 파일 열기' : 'ClassIn 확인용 파일이 없습니다'}
                             >
                               {Icon.check}
                             </button>
@@ -4564,9 +4575,9 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
               type="button"
               onClick={() => openClassinHandoff(summary)}
               disabled={!summary.canOpenClassinHandoff}
-              title={summary.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
+              title={summary.canOpenClassinHandoff ? 'ClassIn 확인용 파일 열기' : 'ClassIn 확인용 파일이 없습니다'}
             >
-              {Icon.check}<span>ClassIn 검수</span>
+              {Icon.check}<span>ClassIn 확인 파일</span>
             </button>
             <button
               className="btn"
@@ -4582,9 +4593,9 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
               type="button"
               onClick={() => onClassinReviewComplete?.()}
               disabled={!summary.canMarkClassinReviewComplete || !onClassinReviewComplete}
-              title={summary.classinReviewPassed ? '이미 ClassIn 검수를 완료했습니다' : 'ClassIn에서 확인한 결과를 완료로 저장'}
+              title={summary.classinReviewPassed ? '이미 ClassIn 확인을 완료했습니다' : 'ClassIn에서 확인한 결과를 완료로 저장'}
             >
-              {Icon.check}<span>{summary.classinReviewPassed ? '검수 완료됨' : '검수 완료'}</span>
+              {Icon.check}<span>{summary.classinReviewPassed ? 'ClassIn 확인됨' : 'ClassIn 확인 완료'}</span>
             </button>
           </div>
           {history.length > 1 && (
@@ -4614,7 +4625,7 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
                   <button
                     className="icon-btn"
                     type="button"
-                    title="ClassIn 검수 파일 열기"
+                    title="ClassIn 확인용 파일 열기"
                     disabled={!item.canOpenClassinHandoff}
                     onClick={() => openClassinHandoff(item)}
                   >{Icon.check}</button>
@@ -4631,12 +4642,11 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
 // ─── RIGHT: tabbed panel ──────────────────────────────────────────────────
 function SidePanel({
   item, items, activeIndex,
-  setStep, applyToAll, bulk, setBulk,
+  setStep, applyToAll,
   setPlacement, mutateSession, mutating,
   boardColumns, setBoardColumns,
   boardColor, setBoardColor,
   accent, setAccent,
-  onConfirm,
   userSettings, runtimeDiagnostics, onSaveGeminiKey,
   onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
   aiEnabled, setAiEnabled,
@@ -4812,7 +4822,9 @@ function SidePanel({
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
-  const showItemConfirmBar = !!item && (bulk || item.step !== 'raw');
+  // Step choices apply immediately; the only footer action left is copying
+  // this item's step to every item. Warnings are cleared in 검수 only.
+  const showStepApplyAllBar = !!item && item.step !== 'raw';
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
@@ -5228,24 +5240,16 @@ function SidePanel({
             )}
           </div>
 
-          {showItemConfirmBar && (
+          {showStepApplyAllBar && (
           <div className="tab-foot">
-            <label className="check">
-              <input type="checkbox" checked={bulk} onChange={e => setBulk(e.target.checked)} />
-              전체 적용
-            </label>
             <div className="spacer" />
-            <button className="btn" disabled={!item}>건너뛰기</button>
             <button
-              className="btn primary"
-              disabled={!item || item.step === 'raw'}
-              onClick={() => {
-                if (!item) return;
-                if (bulk) applyToAll(item.step, { silent: true });
-                onConfirm(item.id, { bulk });
-              }}
+              className="btn"
+              type="button"
+              title="고른 처리 단계를 모든 자료에 똑같이 적용합니다 (확인 필요 표시는 그대로)"
+              onClick={() => applyToAll(item.step)}
             >
-              {Icon.check} {bulk ? '일괄 확인' : '확인'}
+              {Icon.check} 이 단계를 전체에 적용
             </button>
           </div>
           )}
@@ -7081,7 +7085,13 @@ function problemMatchesReviewFilter(problem, filter, options = {}){
     const problemId = String(problem?.id || problem?.problem_id || '').trim();
     return Boolean(problemId && idSet.has(problemId));
   }
-  return deriveProblemStatus(problem) === normalizedFilter;
+  const status = deriveProblemStatus(problem);
+  const unresolved = options?.unresolvedProblemIds;
+  const effectiveStatus = status === 'normal' && unresolved instanceof Set
+    && unresolved.has(String(problem?.id || problem?.problem_id || ''))
+    ? 'check_needed'
+    : status;
+  return effectiveStatus === normalizedFilter;
 }
 
 function countSessionProblems(problems){
@@ -8691,7 +8701,7 @@ async function postClassinReviewResult(payload){
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload || {}),
   });
-  const json = await expectOkJson(resp, 'ClassIn 검수 저장 실패');
+  const json = await expectOkJson(resp, 'ClassIn 확인 저장 실패');
   return json.session;
 }
 
@@ -8737,7 +8747,6 @@ function App(){
   const [items, setItems] = useState([]);
   const [activeId, setActiveId] = useState(null);
   const [fileName, setFileName] = useState('새 세션');
-  const [bulk, setBulk] = useState(false);
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
   const [session, setSession] = useState(null);
@@ -9129,7 +9138,7 @@ function App(){
       label: action === 'split' ? '문제를 가르는 중…'
         : action === 'merge' ? '문제를 합치는 중…'
         : action === 'crop' ? '이미지를 자르는 중…'
-        : action === 'bulk-crop' ? '수동 분할을 적용하는 중…'
+        : action === 'bulk-crop' ? '직접 자르기를 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
         : '변경 중…',
       startedAt: Date.now(),
@@ -9145,7 +9154,7 @@ function App(){
         action === 'split' ? '문제를 두 개로 갈랐어요'
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
-        : action === 'bulk-crop' ? '수동 분할을 적용했어요'
+        : action === 'bulk-crop' ? '직접 자르기를 적용했어요'
         : '문제를 제외했어요'
       );
       return next;
@@ -10004,9 +10013,7 @@ function App(){
 
   const onConfirm = (id, options = {}) => {
     const explicitProblemIds = Array.isArray(options.problemIds) ? options.problemIds : null;
-    const targetIds = explicitProblemIds?.length
-      ? explicitProblemIds
-      : options.bulk ? items.map(item => item.id) : [id];
+    const targetIds = explicitProblemIds?.length ? explicitProblemIds : [id];
     const confirmedIds = new Set(targetIds.filter(Boolean));
     if (!confirmedIds.size) return;
     const nextItemsForSnapshot = items.map(item => (
@@ -10024,11 +10031,9 @@ function App(){
       postRestore(nextSession).catch(e => console.warn('[board] confirm persist failed:', e.message));
     }
     setPublished(false);
-    if (options.bulk) {
-      showToast(`전체 ${confirmedIds.size}개 확인 완료`);
-      return;
-    }
-    showToast(`"${items.find(i=>i.id===id)?.name}" 확인 완료`);
+    showToast(confirmedIds.size === 1
+      ? `"${items.find(i => i.id === [...confirmedIds][0])?.name || '항목'}" 확인 완료`
+      : `${confirmedIds.size}개 확인 완료`);
   };
 
   const markClassinReviewComplete = useCallback(async () => {
@@ -10044,9 +10049,9 @@ function App(){
       setSession(updated);
       refreshSessionHistory();
       setPublished(true);
-      showToast('ClassIn 검수 완료로 저장했어요');
+      showToast('ClassIn 확인 완료로 저장했어요');
     } catch (e) {
-      showSimpleErrorToast(e, 'ClassIn 검수 저장 실패');
+      showSimpleErrorToast(e, 'ClassIn 확인 저장 실패');
     }
   }, [session, refreshSessionHistory, showSimpleErrorToast]);
 
@@ -10274,8 +10279,6 @@ function App(){
           activeIndex={activeIndex}
           setStep={setStep}
           applyToAll={applyToAll}
-          bulk={bulk}
-          setBulk={setBulk}
           setPlacement={setPlacement}
           mutateSession={mutateSession}
           mutating={mutating}
@@ -10285,7 +10288,6 @@ function App(){
           setBoardColor={v => setTweak('boardColor', v)}
           accent={t.accent}
           setAccent={v => setTweak('accent', v)}
-          onConfirm={onConfirm}
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}
           onSaveGeminiKey={onSaveGeminiKey}

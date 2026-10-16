@@ -45,7 +45,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("placement-position-control", side_panel)
         self.assertIn("const [cropPresetsOpen, setCropPresetsOpen] = useState(false)", side_panel)
         self.assertIn("자르기 프리셋", side_panel)
-        self.assertIn("showItemConfirmBar", side_panel)
+        self.assertIn("showStepApplyAllBar", side_panel)
         self.assertIn("view === 'review'", side_panel)
 
     def test_side_panel_exposes_three_tabs_and_group_placement_rules(self) -> None:
@@ -509,7 +509,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("reviewFilter === 'passage-review'", review_stage)
         self.assertIn("'passage-review' ? 'all' : 'passage-review'", review_stage)
         self.assertIn("passageReviewProblemIds", review_stage)
-        self.assertIn("problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds })", review_stage)
+        self.assertIn("problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds, unresolvedProblemIds: unresolvedProblemIdSet })", review_stage)
 
     def test_review_summary_removes_confirmed_passage_review_queue_items(self) -> None:
         run_node(

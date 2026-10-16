@@ -76,21 +76,34 @@
     return riskFlagsFor(problem).length ? "check_needed" : "normal";
   }
 
+  // A problem whose own status is normal still needs review when its page
+  // carries an unresolved warning (options.unresolvedProblemIds), matching
+  // the count shown on the 검수 tab badge and in the EDB publish warning.
+  function reviewStatusFor(problem, options = {}) {
+    const status = deriveProblemStatus(problem);
+    if (status !== "normal") return status;
+    const rawIds = options?.unresolvedProblemIds;
+    if (!rawIds) return status;
+    const idSet = rawIds instanceof Set ? rawIds : new Set(Array.isArray(rawIds) ? rawIds.map(String) : []);
+    const id = problemIdFor(problem);
+    return id && idSet.has(id) ? "check_needed" : status;
+  }
+
   function problemMatchesReviewFilter(problem, filter, options = {}) {
     const normalizedFilter = String(filter || "all").trim() || "all";
     if (normalizedFilter === "all") return true;
     if (normalizedFilter === "supplemental") return isSupplementalProblem(problem);
     if (normalizedFilter === "passage") return isPassageProblem(problem);
     if (normalizedFilter === "passage-review") return isPassageReviewProblem(problem, options);
-    return deriveProblemStatus(problem) === normalizedFilter;
+    return reviewStatusFor(problem, options) === normalizedFilter;
   }
 
-  function countReviewFilters(problems) {
+  function countReviewFilters(problems, options = {}) {
     const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, supplemental: 0, passage: 0, passageGroups: 0 };
     if (!Array.isArray(problems)) return counts;
     const passageGroups = new Set();
     problems.forEach(problem => {
-      const status = deriveProblemStatus(problem);
+      const status = reviewStatusFor(problem, options);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
       if (isSupplementalProblem(problem)) counts.supplemental += 1;
@@ -114,6 +127,7 @@
     passageGroupIdFor,
     problemIdFor,
     problemMatchesReviewFilter,
+    reviewStatusFor,
     riskFlagsFor,
   };
 });

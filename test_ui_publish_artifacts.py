@@ -24,7 +24,8 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("ClassIn 열기", panel)
         self.assertIn("openPublishedEdb(summary)", panel)
         self.assertIn("summary.canOpenClassinHandoff", panel)
-        self.assertIn("ClassIn 검수", panel)
+        self.assertIn("ClassIn 확인 파일", panel)
+        self.assertNotIn("ClassIn 검수", panel)
         self.assertIn("summary.classinReviewStatusLabel", panel)
         self.assertIn("summary.classinHandoffStatusLabel", panel)
         self.assertIn("summary.classinPreflightStatusLabel", panel)
@@ -40,7 +41,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("사전점검", panel)
         self.assertIn("지문", panel)
         self.assertIn("summary.canMarkClassinReviewComplete", panel)
-        self.assertIn("검수 완료", panel)
+        self.assertIn("ClassIn 확인 완료", panel)
 
     def test_recent_sessions_expose_direct_publish_artifact_actions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
