@@ -425,7 +425,12 @@ class TestPackagingSourceHardening(unittest.TestCase):
 
     def test_workflow_skips_feed_without_complete_urls_and_records_real_arch(self) -> None:
         source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
-        self.assertIn("if: inputs.macos_download_url != '' && inputs.windows_download_url != ''", source)
+        feed_job = source.split("  update-feed:\n", 1)[1]
+        feed_condition = next(line.strip() for line in feed_job.splitlines() if line.strip().startswith("if:"))
+        self.assertIn("!cancelled()", feed_condition)
+        self.assertIn("needs.macos.result == 'success'", feed_condition)
+        self.assertIn("needs.windows.result == 'success'", feed_condition)
+        self.assertIn("inputs.macos_download_url != '' && inputs.windows_download_url != ''", feed_condition)
         self.assertIn('arch=$(uname -m)', source)
         self.assertIn("MACOS_ARTIFACT_ARCH: ${{ needs.macos.outputs.artifact_arch }}", source)
         self.assertIn("WINDOWS_ARTIFACT_ARCH: ${{ needs.windows.outputs.artifact_arch }}", source)
