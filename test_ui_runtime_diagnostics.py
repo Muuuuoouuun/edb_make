@@ -197,7 +197,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertNotIn("className=\"ptools\"", preview_block)
         self.assertIn("className=\"ptools detail-tools\"", detail_block)
         self.assertIn("분류 · 번호 정정 · 추가 고화질", detail_block)
-        self.assertIn("tab === 'placement'", side_panel)
+        self.assertIn('id="side-panel-placement"', side_panel)
         self.assertIn("placement-position-control", side_panel)
         self.assertIn("const [cropPresetsOpen, setCropPresetsOpen] = useState(false)", side_panel)
         self.assertIn("자르기 프리셋", side_panel)
@@ -226,12 +226,12 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
-        self.assertIn('role="tablist"', side_panel)
-        self.assertEqual(side_panel.count('role="tab"'), 3)
-        self.assertIn('title="자료 편집"', side_panel)
-        self.assertNotIn('자료 편집 <span className="badge"', side_panel)
-        self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
-        self.assertIn("AI, 칠판 배경, 문서 변환, 앱 정보", side_panel)
+        # State-driven inspector: no tab strip; app settings open as a dialog.
+        self.assertNotIn('role="tablist"', side_panel)
+        self.assertEqual(side_panel.count('role="tab"'), 0)
+        self.assertIn('className="inspector-heading"', side_panel)
+        self.assertIn('role="dialog" aria-modal="true" aria-label="설정"', side_panel)
+        self.assertIn("hidden={!settingsDialogOpen}", side_panel)
         rules = side_panel.split('className="placement-section placement-rules"', 1)[1]
         rules = rules.split('className={`placement-diagnostic', 1)[0]
         self.assertIn("자동 배치 안내", rules)
@@ -254,8 +254,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
         self.assertIn("RIGHT_PANEL_TAB_KEY", side_panel)
         self.assertIn("event.key === 'ArrowRight'", side_panel)
-        self.assertIn('aria-controls="side-panel-placement"', side_panel)
-        self.assertIn('role="tabpanel"', side_panel)
+        self.assertIn('id="side-panel-placement"', side_panel)
+        self.assertIn('id="side-panel-board" role="dialog"', side_panel)
         self.assertIn("function SettingsSection", source)
         self.assertEqual(side_panel.count("<SettingsSection"), 3)
         self.assertIn('<SidebarDisclosure', side_panel)
@@ -418,9 +418,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("data-tooltip", topbar)
         self.assertIn("칠판으로 돌아가기", topbar)
         self.assertIn("현재 배치로 EDB 파일 제작", topbar)
-        self.assertIn("선택한 자료의 처리 방식과 세부 편집", side_panel)
         self.assertIn("지문 분류, 여백 자르기, 추가 고화질 처리", side_panel)
-        self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
         self.assertIn(".ui-tooltip", html)
         self.assertIn("position: fixed", html)
 
@@ -596,11 +594,11 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
         layout_controls = source.split("function BoardLayoutControls", 1)[1]
         layout_controls = layout_controls.split("function SidePanel", 1)[0]
-        item_tab = side_panel.split("{tab === 'item' && (", 1)[1]
-        item_tab = item_tab.split("{tab === 'placement' && (", 1)[0]
-        placement_tab = side_panel.split("{tab === 'placement' && (", 1)[1]
-        placement_tab = placement_tab.split("{tab === 'board' && (", 1)[0]
-        settings_tab = side_panel.split("{tab === 'board' && (", 1)[1]
+        item_tab = side_panel.split('id="side-panel-item"', 1)[1]
+        item_tab = item_tab.split('id="side-panel-placement"', 1)[0]
+        placement_tab = side_panel.split('id="side-panel-placement"', 1)[1]
+        placement_tab = placement_tab.split('id="side-panel-board"', 1)[0]
+        settings_tab = side_panel.split("{settingsDialogOpen && (", 1)[1]
         materialize = source.split("function materializeSessionForItems", 1)[1]
         materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
 

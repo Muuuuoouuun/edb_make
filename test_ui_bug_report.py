@@ -21,7 +21,7 @@ class BugReportUiTests(unittest.TestCase):
         )
 
     def test_settings_and_toolbar_open_one_accessible_report_dialog(self):
-        settings = self.app.split("{tab === 'board' && (", 1)[1].split(
+        settings = self.app.split("{settingsDialogOpen && (", 1)[1].split(
             "function LoadingOverlay", 1
         )[0]
         self.assertIn('aria-label="버그 리포트"', settings)
