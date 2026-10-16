@@ -95,22 +95,19 @@ class TestWorkspaceLayout(unittest.TestCase):
 
     def test_panel_shortcut_does_not_hide_an_active_review_editor(self) -> None:
         run_node(NODE_SETUP + r"""
-        let pane = 'stage', focusPanelCollapsed = true, homePanelOpen = false;
+        let pane = 'stage', focusPanelCollapsed = true;
         const sandbox = { reviewEditorActive: false, useCallback: callback => callback,
           setMobilePane: value => { pane = value; },
-          setFocusPanelCollapsed: value => { focusPanelCollapsed = value; },
-          setHomePanelOpen: value => { homePanelOpen = value; } };
+          setFocusPanelCollapsed: value => { focusPanelCollapsed = value; } };
         vm.createContext(sandbox);
         const callback = section('  const revealSidePanel = useCallback(', '  const [mutating, setMutating]');
         const invoke = () => vm.runInContext('(() => {' + callback + 'revealSidePanel(); })()', sandbox);
         invoke(); assert.equal(pane, 'panel');
         assert.equal(focusPanelCollapsed, false, 'panel shortcut reopens the floating focus panel');
-        assert.equal(homePanelOpen, true, 'panel shortcut also reveals settings on the empty home');
         pane = 'stage'; sandbox.reviewEditorActive = true;
-        focusPanelCollapsed = true; homePanelOpen = false;
+        focusPanelCollapsed = true;
         invoke(); assert.equal(pane, 'stage');
         assert.equal(focusPanelCollapsed, false);
-        assert.equal(homePanelOpen, true);
         assert.equal(pane, 'stage', 'active review editing must retain the visible mobile stage');
         """)
 

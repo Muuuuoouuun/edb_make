@@ -594,11 +594,6 @@
   }
   .editor-mode-control .btn{ border-radius: 999px; padding-inline: 8px; font-size: var(--text-xs); }
   .editor-mode-control [aria-pressed="true"]{ background: var(--surface); color: var(--accent-ink); }
-  .main.editor-basic-mode .home-settings-heading{
-    display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;
-    border-bottom: 1px solid var(--line); font-size: var(--text-sm);
-  }
-  .home-settings-heading > div{ display: flex; gap: 8px; }
   .review-stage-toolbar{
     min-height: 48px;
     height: auto;
@@ -3452,6 +3447,39 @@
     border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
     box-shadow: 0 8px 24px rgba(19, 33, 55, .08);
   }
+  .app-update-dialog{
+    width: min(520px, calc(100vw - 32px));
+    max-width: calc(100vw - 16px);
+    max-height: calc(100dvh - 16px);
+    box-sizing: border-box;
+    margin: auto;
+    padding: 0;
+    overflow-y: auto;
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow-2);
+  }
+  .app-update-dialog::backdrop{ background: rgba(15, 23, 42, .38); }
+  .app-update-dialog > header{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .app-update-dialog > header > div{ display: grid; flex: 1; min-width: 0; gap: 4px; }
+  .app-update-dialog > header strong{ font-size: var(--text-md); }
+  .app-update-dialog > header small{ font-size: var(--text-xs); color: var(--muted); }
+  .app-update-dialog .icon-btn,
+  .app-update-dialog .btn{ min-height: 44px; min-width: 44px; }
+  .app-update-dialog .btn{ white-space: normal; }
+  .app-update-content{ display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 16px; font-size: var(--text-sm); }
+  .app-update-content .update-install-card{ grid-template-columns: minmax(0, 1fr); }
+  .app-update-content .settings-action-row{ flex-wrap: wrap; }
+  .app-update-content .settings-action-row > .btn{ flex-basis: 120px; }
+  .app-update-content > p{ margin: 0; }
   .bug-report-dialog-backdrop{
     position: fixed;
     inset: 0;

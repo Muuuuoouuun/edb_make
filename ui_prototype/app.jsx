@@ -8952,7 +8952,7 @@ function SidePanel({
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
-  focusMode = false, onToggleFocusPanel, homeSettingsOpen = false, onCloseHomeSettings,
+  focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
   const consumedUpdateRequestRef = useRef(0);
   const [storedTab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
@@ -8989,6 +8989,10 @@ function SidePanel({
   const cropControlRef = useRef(null);
   const updateDisclosureRef = useRef(null);
   useEffect(() => {
+    if (emptyHome) {
+      consumedUpdateRequestRef.current = updatePanelRequest;
+      return;
+    }
     if (!updatePanelRequest || consumedUpdateRequestRef.current === updatePanelRequest) return;
     setTab('board');
     const disclosure = updateDisclosureRef.current;
@@ -9014,7 +9018,7 @@ function SidePanel({
       cancelAnimationFrame(frame);
       resizeObserver.disconnect();
     };
-  }, [updatePanelRequest, tab, setTab]);
+  }, [updatePanelRequest, tab, setTab, emptyHome]);
   const panelTabRefs = useRef({});
   const panelBusy = Boolean(mutating || sessionEditState?.busy);
   const handlePanelTabKeyDown = (event) => {
@@ -9433,20 +9437,126 @@ function SidePanel({
     if (savedCropActive) applyManualCrop(reset);
   };
 
+  const updateControls = (
+    <>
+      {updateInfo?.channelStatus === 'not_configured' && <div className="runtime-note warn" role="status">
+        업데이트 배포 주소가 아직 설정되지 않았습니다. 현재 버전이 최신인지 확인하거나 새 버전을 설치할 수 없습니다. 관리자에게 업데이트가 설정된 배포본을 요청해 주세요.
+      </div>}
+      {updateArchitectureBlocked ? (
+        <div className="runtime-note warn update-architecture-note" role="status">
+          <strong>이 기기용 업데이트 파일 없음</strong>
+          {updateArchitectureSteps.map(step => <small key={step}>{step}</small>)}
+        </div>
+      ) : updateInfo?.error && (
+        <div className="runtime-note warn">
+          {updateInfo.error}
+        </div>
+      )}
+      <div className="settings-action-row">
+        <button
+          className="btn"
+          type="button"
+          onClick={() => onCheckUpdate?.()}
+          disabled={updateActionBusy}
+        >
+          {updateBusy ? '확인 중...' : '업데이트 확인'}
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => onOpenUpdate?.()}
+          disabled={updateActionBusy || !updateDownloadUrl}
+          title={updateArchitectureBlocked
+            ? '현재 아키텍처용 설치 파일을 선택해 주세요'
+            : updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
+        >
+          {Icon.download} 다운로드 열기
+        </button>
+      </div>
+      {updateInfo?.updateAvailable && <div className="update-install-card">
+        <div className="lbl">
+          관리자 PIN 업데이트
+          <small>
+            {updateAutomaticEnabled
+              ? '배포 파일을 검증한 뒤 앱을 종료하고 현재 설치 위치에 덮어씁니다.'
+              : '관리자가 업데이트 PIN을 설정한 배포본에서 사용할 수 있습니다.'}
+          </small>
+        </div>
+        <div className="key-input-row update-pin-row">
+          <input
+            type={showUpdatePin ? 'text' : 'password'}
+            className="key-input"
+            aria-label="업데이트 PIN"
+            placeholder="업데이트 PIN (숫자 4~12자리)"
+            value={updatePinDraft}
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={12}
+            autoComplete="one-time-code"
+            disabled={updateActionBusy || !updateAutomaticEnabled}
+            onChange={event => setUpdatePinDraft(event.target.value.replace(/\D/g, '').slice(0, 12))}
+            onKeyDown={event => {
+              if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
+              event.preventDefault();
+              requestUpdateInstall();
+            }}
+          />
+          <button
+            className="btn icon"
+            type="button"
+            onClick={() => setShowUpdatePin(visible => !visible)}
+            disabled={updateActionBusy || !updateAutomaticEnabled}
+            title={showUpdatePin ? 'PIN 숨기기' : 'PIN 보기'}
+            aria-label={showUpdatePin ? '업데이트 PIN 숨기기' : '업데이트 PIN 보기'}
+            aria-pressed={showUpdatePin}
+          >
+            <span aria-hidden="true">{showUpdatePin ? Icon.eyeOff : Icon.eye}</span>
+          </button>
+        </div>
+        <button
+          className="btn primary update-install-button"
+          type="button"
+          disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4}
+          title={!updateAutomaticEnabled
+            ? '이 배포본에 업데이트 PIN이 설정되지 않았습니다'
+            : !updateInfo?.updateAvailable
+              ? '업데이트 확인 후 새 버전이 있을 때 사용할 수 있습니다'
+              : !updateAutomaticReady
+                ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
+                : 'PIN 확인 후 새 버전을 덮어씁니다'}
+          onClick={requestUpdateInstall}
+        >
+          {updateInstallBusy ? '검증·설치 준비 중...' : '관리자 PIN 확인 후 업데이트'}
+        </button>
+      </div>}
+
+    </>
+  );
+
+  if (emptyHome) return (
+    <HomeUpdateDialog
+      open={homeUpdateOpen}
+      onClose={onCloseHomeUpdate}
+      busy={updateInstallBusy}
+      versionLine={updateVersionLine}
+      statusLabel={updateStatusLabel}
+    >{updateControls}</HomeUpdateDialog>
+  );
+
   return (
     <div className={`col right ${view === 'review' ? 'review-context' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정">
-      {(focusMode || homeSettingsOpen) && (
-        <div className={`focus-panel-heading ${homeSettingsOpen ? 'home-settings-heading' : ''}`}>
+      {focusMode && (
+        <div className="focus-panel-heading">
           <div>
-            <strong>{homeSettingsOpen ? '앱 설정' : '편집 도구'}</strong>
+            <strong>편집 도구</strong>
           </div>
           <button
             className="icon-btn focus-panel-toggle"
             type="button"
-            aria-label={homeSettingsOpen ? '시작화면 설정 닫기' : '편집 패널 접기'}
+            aria-label="편집 패널 접기"
             aria-expanded="true"
             aria-controls="workspace-panel"
-            onClick={homeSettingsOpen ? onCloseHomeSettings : onToggleFocusPanel}
+            onClick={onToggleFocusPanel}
           >{Icon.chevronDown}</button>
         </div>
       )}
@@ -10393,96 +10503,7 @@ function SidePanel({
               className="settings-update-disclosure"
               disclosureRef={updateDisclosureRef}
             >
-            {updateInfo?.channelStatus === 'not_configured' && <div className="runtime-note warn" role="status">
-              업데이트 배포 주소가 아직 설정되지 않았습니다. 현재 버전이 최신인지 확인하거나 새 버전을 설치할 수 없습니다. 관리자에게 업데이트가 설정된 배포본을 요청해 주세요.
-            </div>}
-            {updateArchitectureBlocked ? (
-              <div className="runtime-note warn update-architecture-note" role="status">
-                <strong>이 기기용 업데이트 파일 없음</strong>
-                {updateArchitectureSteps.map(step => <small key={step}>{step}</small>)}
-              </div>
-            ) : updateInfo?.error && (
-              <div className="runtime-note warn">
-                {updateInfo.error}
-              </div>
-            )}
-            <div className="settings-action-row">
-              <button
-                className="btn"
-                type="button"
-                onClick={() => onCheckUpdate?.()}
-                disabled={updateActionBusy}
-              >
-                {updateBusy ? '확인 중...' : '업데이트 확인'}
-              </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={() => onOpenUpdate?.()}
-                disabled={updateActionBusy || !updateDownloadUrl}
-                title={updateArchitectureBlocked
-                  ? '현재 아키텍처용 설치 파일을 선택해 주세요'
-                  : updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
-              >
-                {Icon.download} 다운로드 열기
-              </button>
-            </div>
-            {updateInfo?.updateAvailable && <div className="update-install-card">
-              <div className="lbl">
-                관리자 PIN 업데이트
-                <small>
-                  {updateAutomaticEnabled
-                    ? '배포 파일을 검증한 뒤 앱을 종료하고 현재 설치 위치에 덮어씁니다.'
-                    : '관리자가 업데이트 PIN을 설정한 배포본에서 사용할 수 있습니다.'}
-                </small>
-              </div>
-              <div className="key-input-row update-pin-row">
-                <input
-                  type={showUpdatePin ? 'text' : 'password'}
-                  className="key-input"
-                  aria-label="업데이트 PIN"
-                  placeholder="업데이트 PIN (숫자 4~12자리)"
-                  value={updatePinDraft}
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                  maxLength={12}
-                  autoComplete="one-time-code"
-                  disabled={updateActionBusy || !updateAutomaticEnabled}
-                  onChange={event => setUpdatePinDraft(event.target.value.replace(/\D/g, '').slice(0, 12))}
-                  onKeyDown={event => {
-                    if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
-                    event.preventDefault();
-                    requestUpdateInstall();
-                  }}
-                />
-                <button
-                  className="btn icon"
-                  type="button"
-                  onClick={() => setShowUpdatePin(visible => !visible)}
-                  disabled={updateActionBusy || !updateAutomaticEnabled}
-                  title={showUpdatePin ? 'PIN 숨기기' : 'PIN 보기'}
-                  aria-label={showUpdatePin ? '업데이트 PIN 숨기기' : '업데이트 PIN 보기'}
-                  aria-pressed={showUpdatePin}
-                >
-                  <span aria-hidden="true">{showUpdatePin ? Icon.eyeOff : Icon.eye}</span>
-                </button>
-              </div>
-              <button
-                className="btn primary update-install-button"
-                type="button"
-                disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4}
-                title={!updateAutomaticEnabled
-                  ? '이 배포본에 업데이트 PIN이 설정되지 않았습니다'
-                  : !updateInfo?.updateAvailable
-                    ? '업데이트 확인 후 새 버전이 있을 때 사용할 수 있습니다'
-                    : !updateAutomaticReady
-                      ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
-                      : 'PIN 확인 후 새 버전을 덮어씁니다'}
-                onClick={requestUpdateInstall}
-              >
-                {updateInstallBusy ? '검증·설치 준비 중...' : '관리자 PIN 확인 후 업데이트'}
-              </button>
-            </div>}
+            {updateControls}
 
             </SidebarDisclosure>
           </div>
@@ -10490,6 +10511,59 @@ function SidePanel({
       )}
       </section>
     </div>
+  );
+}
+
+function HomeUpdateDialog({ open, onClose, busy, versionLine, statusLabel, children }){
+  const dialogRef = useRef(null);
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const previousFocus = document.activeElement;
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      const target = previousFocus?.isConnected ? previousFocus : document.querySelector('.topbar-update');
+      target?.focus?.({ preventScroll: true });
+    };
+  }, [open]);
+  if (!open) return null;
+  return (
+    <dialog
+      ref={dialogRef}
+      className="app-update-dialog"
+      aria-modal="true"
+      aria-labelledby="home-update-title"
+      aria-describedby="home-update-version"
+      onCancel={event => { event.preventDefault(); if (!busy) onClose?.(); }}
+      onKeyDown={event => {
+        if (event.key !== 'Tab') return;
+        const controls = Array.from(dialogRef.current?.querySelectorAll('button:not(:disabled), input:not(:disabled)') || []);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault(); last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first?.focus();
+        }
+      }}
+      onClick={event => {
+        if (event.target !== event.currentTarget || busy) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose?.();
+      }}
+    >
+      <header>
+        <div>
+          <strong id="home-update-title">앱 업데이트</strong>
+          <small id="home-update-version">{versionLine}</small>
+        </div>
+        <button className="icon-btn" type="button" aria-label="업데이트 창 닫기" disabled={busy} onClick={onClose}>{Icon.close}</button>
+      </header>
+      <div className="app-update-content">
+        <p role="status" aria-live="polite">{statusLabel}</p>
+        {children}
+      </div>
+    </dialog>
   );
 }
 
@@ -15298,7 +15372,7 @@ function App(){
   const [focusMode, setFocusMode] = useStoredPreference('edb.editorFocusMode', false, isStoredBoolean);
   const [focusPanelCollapsed, setFocusPanelCollapsed] = useState(false);
   const [focusRailExpanded, setFocusRailExpanded] = useState(true);
-  const [homePanelOpen, setHomePanelOpen] = useState(false);
+  const [homeUpdateOpen, setHomeUpdateOpen] = useState(false);
   const focusPanelReopenRef = useRef(null);
   const [activeId, setActiveId] = useState(null);
   const [moveFeedback, setMoveFeedback] = useState(null);
@@ -15370,6 +15444,9 @@ function App(){
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
+  useEffect(() => {
+    if (items.length || pendingFiles.length) setHomeUpdateOpen(false);
+  }, [items.length, pendingFiles.length]);
   const [selectedPendingFileKey, setSelectedPendingFileKey] = useState(null);
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
@@ -15381,7 +15458,6 @@ function App(){
   const [reviewEditorActive, setReviewEditorActive] = useState(false);
   const revealSidePanel = useCallback(() => {
     setFocusPanelCollapsed(false);
-    setHomePanelOpen(true);
     if (!reviewEditorActive) setMobilePane('panel');
   }, [reviewEditorActive]);
   const [mutating, setMutating] = useState(false);
@@ -15820,10 +15896,11 @@ function App(){
   }, [showSimpleErrorToast, showToast]);
 
   const openUpdateSettings = useCallback(() => {
-    revealSidePanel();
+    if (!items.length && !pendingFiles.length) setHomeUpdateOpen(true);
+    else revealSidePanel();
     setUpdatePanelRequest(previous => previous + 1);
     void checkForUpdates({ silent: true });
-  }, [revealSidePanel, checkForUpdates]);
+  }, [items.length, pendingFiles.length, revealSidePanel, checkForUpdates]);
 
   const openUpdatePage = useCallback(async () => {
     if (updateBusy) {
@@ -18322,7 +18399,7 @@ function App(){
         }}
       />
       <div
-        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? `home-mode ${homePanelOpen ? 'home-settings-open' : ''}` : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
+        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? 'home-mode' : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
         style={{ '--focus-board-color': t.boardColor }}
         data-mobile-pane={mobilePane}
         inert={hasPendingSessionConflict ? '' : undefined}
@@ -18480,8 +18557,9 @@ function App(){
           onRevealPanel={revealSidePanel}
           focusMode={focusEditorActive}
           onToggleFocusPanel={() => { setFocusPanelCollapsed(true); window.requestAnimationFrame(() => focusPanelReopenRef.current?.focus()); }}
-          homeSettingsOpen={homePanelOpen && view === 'board' && !items.length && !pendingFiles.length}
-          onCloseHomeSettings={() => { setHomePanelOpen(false); document.querySelector('.topbar-update')?.focus(); }}
+          emptyHome={view === 'board' && !items.length && !pendingFiles.length}
+          homeUpdateOpen={homeUpdateOpen}
+          onCloseHomeUpdate={() => setHomeUpdateOpen(false)}
           item={active}
           items={items}
           activeIndex={activeIndex}

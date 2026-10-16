@@ -144,7 +144,7 @@ body.dark .main.editor-focus-mode .stage-wrap {
   pointer-events: none;
 }
 
-.main.editor-basic-mode:not(.editor-focus-mode) .focus-panel-heading:not(.home-settings-heading) {
+.main.editor-basic-mode:not(.editor-focus-mode) .focus-panel-heading {
   display: none;
 }
 

@@ -18,12 +18,13 @@ class TestEditorBasicMode(unittest.TestCase):
         const sandbox = renderSandbox();
         const mainClass = source.match(/className=\{(`main editor-basic-mode[^\n]+`)\}/)[1];
         Object.assign(sandbox, { focusEditorActive: false, focusPanelCollapsed: false,
-          effectiveRailCollapsed: false, homePanelOpen: true, reviewEditorActive: false,
+          effectiveRailCollapsed: false, reviewEditorActive: false,
           view: 'review', items: [], pendingFiles: [] });
         compile(sandbox, 'globalThis.mainClass = () => ' + mainClass + ';');
         assert.ok(!sandbox.mainClass().includes('home-mode'));
         sandbox.view = 'board';
-        assert.ok(sandbox.mainClass().includes('home-mode home-settings-open'));
+        assert.ok(sandbox.mainClass().includes('home-mode'));
+        assert.ok(!sandbox.mainClass().includes('home-settings-open'));
         sandbox.pendingFiles = [{}];
         assert.ok(!sandbox.mainClass().includes('home-mode'));
         """)
@@ -47,13 +48,11 @@ class TestEditorBasicMode(unittest.TestCase):
         run_node(RENDER_SETUP + r"""
         const sandbox = renderSandbox();
         let toggles = 0;
-        let homeCloses = 0;
-        Object.assign(sandbox, { focusMode: true, homeSettingsOpen: false,
+        Object.assign(sandbox, { focusMode: true,
           item: { id: 'p1' }, activeIndex: 0,
-          problemDisplayName: () => '7번 문제', onToggleFocusPanel: () => toggles++,
-          onCloseHomeSettings: () => homeCloses++ });
+          problemDisplayName: () => '7번 문제', onToggleFocusPanel: () => toggles++ });
         compile(sandbox, 'globalThis.heading = () => (<>'
-          + section('      {(focusMode || homeSettingsOpen) && (',
+          + section('      {focusMode && (',
             '      <div className="tab-bar" role="tablist"') + '</>);');
         let tree = sandbox.heading();
         assert.ok(text(tree).includes('편집 도구'));
@@ -66,11 +65,6 @@ class TestEditorBasicMode(unittest.TestCase):
         assert.equal(findClass(sandbox.heading(), 'focus-panel-heading'), undefined);
         sandbox.focusMode = true; sandbox.item = null;
         assert.ok(text(sandbox.heading()).includes('편집 도구'));
-        sandbox.focusMode = false; sandbox.homeSettingsOpen = true;
-        const homeToggle = findClass(sandbox.heading(), 'focus-panel-toggle');
-        assert.equal(homeToggle.props['aria-label'], '시작화면 설정 닫기');
-        homeToggle.props.onClick();
-        assert.equal(homeCloses, 1); assert.equal(toggles, 1);
         """)
 
     def test_reference_palette_is_scoped_and_offline(self):
@@ -87,12 +81,12 @@ class TestEditorBasicMode(unittest.TestCase):
 
     def test_layout_keeps_scroll_regions_controls_and_reduced_motion(self):
         focus_style = (ROOT / 'ui_prototype' / 'editor-focus.css').read_text(encoding='utf-8')
-        self.assertIn('.focus-panel-heading:not(.home-settings-heading)', focus_style)
+        self.assertIn('.main.editor-basic-mode:not(.editor-focus-mode) .focus-panel-heading', focus_style)
         self.assertIn('grid-template-columns: 220px minmax(0, 1fr) 300px', STYLE)
         self.assertIn('.main.editor-basic-mode.review-editor-focus', STYLE)
         self.assertIn('.main.editor-basic-mode.left-collapsed', STYLE)
-        self.assertIn('.main.editor-basic-mode.home-mode.home-settings-open > .col.right', STYLE)
-        self.assertIn('grid-template-columns: minmax(0, 1fr) 300px', STYLE)
+        self.assertIn('.main.editor-basic-mode.home-mode > .col.right', STYLE)
+        self.assertNotIn('home-settings-open', STYLE)
         self.assertIn('@media (prefers-reduced-motion: reduce)', STYLE)
         self.assertIn('outline: 2px solid var(--accent-ink)', STYLE)
         self.assertNotIn('.item .actions {\n  display: none', STYLE)

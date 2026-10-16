@@ -27,6 +27,8 @@ const sandbox = {
   isUpdateArchitectureMismatch: () => false,
   updateArchitectureNotice: () => 'architecture mismatch',
   revealSidePanel: () => { revealed += 1; },
+  items: [{ id: 'p1' }], pendingFiles: [],
+  setHomeUpdateOpen: value => { sandbox.homeUpdateOpen = value; },
   setUpdatePanelRequest: update => { panelRequest = update(panelRequest); },
   postAppUpdateInstall: () => { installs += 1; throw new Error('entry must not install'); },
   installUpdateVersion: () => { installs += 1; throw new Error('entry must not install'); },
@@ -113,7 +115,7 @@ class TestUiUpdateEntry(unittest.TestCase):
         };
         const sandbox = {
           useEffect: callback => { effect = callback; },
-          updatePanelRequest: 1, tab: 'board', setTab: () => {},
+          emptyHome: false, updatePanelRequest: 1, tab: 'board', setTab: () => {},
           updateDisclosureRef: { current: disclosure },
           consumedUpdateRequestRef: { current: 0 },
           requestAnimationFrame: callback => { frames.set(++nextFrame, callback); return nextFrame; },
@@ -125,7 +127,7 @@ class TestUiUpdateEntry(unittest.TestCase):
           },
         };
         vm.createContext(sandbox);
-        vm.runInContext(section('  useEffect(() => {\n    if (!updatePanelRequest', '  const panelTabRefs'), sandbox);
+        vm.runInContext(section('  useEffect(() => {\n    if (emptyHome)', '  const panelTabRefs'), sandbox);
         const cancelled = effect();
         assert.equal(disclosure.open, true);
         cancelled();
@@ -147,6 +149,12 @@ class TestUiUpdateEntry(unittest.TestCase):
         assert.equal(sandbox.consumedUpdateRequestRef.current, 1);
         effect();
         assert.equal(frames.size, 0, 'completed requests must not scroll again on ordinary renders');
+        sandbox.emptyHome = true;
+        sandbox.updatePanelRequest = 2;
+        effect();
+        assert.equal(sandbox.consumedUpdateRequestRef.current, 2,
+          'a home modal request cannot later force the editing panel open');
+        assert.equal(frames.size, 0, 'home updates never scroll or reveal the side panel');
         """)
 
     def test_update_check_deduplicates_in_flight_and_reports_unconfigured_truthfully(self) -> None:
@@ -207,7 +215,23 @@ class TestUiUpdateEntry(unittest.TestCase):
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
-    def test_update_entry_only_reveals_settings_and_checks_silently(self) -> None:
+    def test_empty_home_update_entry_opens_only_the_dialog_and_checks_silently(self) -> None:
+        run_node(UPDATE_SETUP + r"""
+        (async () => {
+          sandbox.items = [];
+          sandbox.openUpdateSettings();
+          sandbox.openUpdateSettings();
+          assert.equal(sandbox.homeUpdateOpen, true);
+          assert.equal(revealed, 0, 'file-free home must never reveal the editing side panel');
+          assert.equal(panelRequest, 2);
+          assert.equal(pendingRequests.length, 1, 'modal entry shares the existing update request guard');
+          pendingRequests[0].resolve({ channelStatus: 'not_configured' });
+          await flush();
+          assert.equal(installs, 0); assert.equal(openedUrls, 0); assert.equal(toasts.length, 0);
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_loaded_update_entry_only_reveals_settings_and_checks_silently(self) -> None:
         run_node(UPDATE_SETUP + r"""
         (async () => {
           sandbox.openUpdateSettings();

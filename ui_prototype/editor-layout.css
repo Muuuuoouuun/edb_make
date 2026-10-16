@@ -583,16 +583,8 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
 }
 
 .main.editor-basic-mode.home-mode > .col.left,
-.main.editor-basic-mode.home-mode:not(.home-settings-open) > .col.right {
+.main.editor-basic-mode.home-mode > .col.right {
   display: none;
-}
-
-.main.editor-basic-mode.home-mode.home-settings-open {
-  grid-template-columns: minmax(0, 1fr) 300px;
-}
-
-.main.editor-basic-mode.home-mode.home-settings-open > .col.right {
-  display: flex;
 }
 
 /* Desktop windows may shrink, but this revision does not introduce a mobile
@@ -610,10 +602,6 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
 
   .main.editor-basic-mode.home-mode {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .main.editor-basic-mode.home-mode.home-settings-open {
-    grid-template-columns: minmax(0, 1fr) 300px;
   }
 
   .main.editor-basic-mode .stage-toolbar .pill {
