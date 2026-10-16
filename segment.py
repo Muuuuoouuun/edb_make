@@ -3516,8 +3516,14 @@ def _dark_numeric_problem_marker_component_offsets(
             and digit["height"] >= max(dot["height"], dot["width"]) * 3.0
             and abs(dot["bottom"] - digit["bottom"]) <= max(6, int(digit["height"] * 0.35))
             # single-pixel scan noise / thin strokes are not a printed period
-            and min(dot["width"], dot["height"]) >= 2
-            and dot["area"] >= max(4, int(dot["width"] * dot["height"] * 0.5))
+            # (only at scan resolution; tiny bitmap-font digits have 1px dots)
+            and (
+                digit["height"] < 12
+                or (
+                    min(dot["width"], dot["height"]) >= 2
+                    and dot["area"] >= max(4, int(dot["width"] * dot["height"] * 0.5))
+                )
+            )
         ]
         if not candidate_digits:
             continue
