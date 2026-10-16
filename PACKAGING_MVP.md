@@ -79,6 +79,8 @@ and leave download URLs empty. This retains the test and package validation
 gates and uploads the Windows installer and Mac DMG/ZIP as workflow artifacts.
 Public releases still require the existing corpus, licensing, signing and
 notarization gates. Internal build artifacts are not a published update feed.
+The Windows job uses UTF-8 Python output so validation of Korean installation
+paths also works on runners whose default console encoding is Western European.
 
 ### Windows `.exe`
 Build the installable Windows setup file on Windows:
