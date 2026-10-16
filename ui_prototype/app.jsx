@@ -1192,7 +1192,7 @@ function TooltipLayer(){
   );
 }
 
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, reviewAttentionCount = 0, onUndo, canUndo, onShutdown, onExportImages, exportingImages, canExportImages }){
+function TopBar({ fileName, setFileName, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, reviewAttentionCount = 0, onUndo, canUndo, onShutdown, onExportImages, exportingImages, canExportImages }){
   const [moreOpen, setMoreOpen] = useState(false);
   const moreRef = useRef(null);
   useEffect(() => {
@@ -1246,10 +1246,6 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
           )}
         </button>
       </div>
-      <div className="progress" title={`${processed} / ${total} 처리됨`}>
-        <div className="bar"><i style={{ width: `${Math.round(progress*100)}%` }} /></div>
-        <span>{processed}/{total} 처리됨</span>
-      </div>
       <div className="topbar-actions" aria-label="보조 작업">
         <button
           className="btn ghost icon"
@@ -1270,27 +1266,6 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
           onClick={onUndo}
           disabled={!canUndo}
         >{Icon.undo}</button>
-        <button
-          className="btn ghost icon"
-          onClick={onRefresh}
-          disabled={refreshing}
-          title={refreshing ? '세션 새로고침 중' : '저장된 최신 세션 다시 읽기'}
-          data-tooltip={refreshing ? '저장된 최신 세션을 읽는 중' : '디스크에 저장된 최신 세션을 다시 읽기'}
-          aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}
-        >
-          <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
-        </button>
-        <button
-          className="btn ghost icon"
-          type="button"
-          title={canExportImages ? '현재 선택 단계 기준 PNG ZIP' : '다운로드할 이미지가 없습니다'}
-          data-tooltip={canExportImages ? '현재 선택한 처리 단계 기준으로 최종 PNG 묶음 다운로드' : '다운로드할 이미지가 없습니다'}
-          aria-label={exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드'}
-          onClick={onExportImages}
-          disabled={!canExportImages || exportingImages}
-        >
-          {Icon.download}
-        </button>
         <div className="topbar-more" ref={moreRef}>
           <button
             className={`btn ghost icon ${moreOpen ? 'on' : ''}`}
@@ -1298,13 +1273,40 @@ function TopBar({ fileName, setFileName, progress, processed, total, onPublish, 
             aria-haspopup="menu"
             aria-expanded={moreOpen}
             title="더보기"
-            data-tooltip="종료 등 추가 작업"
+            data-tooltip="새로고침 · PNG 다운로드 · 종료"
             onClick={() => setMoreOpen(open => !open)}
           >
             {Icon.more}
           </button>
           {moreOpen && (
             <div className="topbar-more-menu" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                disabled={refreshing}
+                title={refreshing ? '세션 새로고침 중' : '저장된 최신 세션 다시 읽기'}
+                aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}
+                onClick={() => {
+                  setMoreOpen(false);
+                  onRefresh?.();
+                }}
+              >
+                <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
+                <span>새로고침</span>
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!canExportImages || exportingImages}
+                title={canExportImages ? '현재 선택 단계 기준 PNG ZIP' : '다운로드할 이미지가 없습니다'}
+                aria-label={exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드'}
+                onClick={() => {
+                  setMoreOpen(false);
+                  onExportImages?.();
+                }}
+              >
+                {Icon.download}<span>PNG 다운로드</span>
+              </button>
               <button
                 type="button"
                 role="menuitem"
@@ -1362,6 +1364,8 @@ function ReviewStage({
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   // Pages still to cut when 직접 자르기 came from the upload queue.
   const [guidedSplitPageIds, setGuidedSplitPageIds] = useState([]);
+  // Less common review tools stay behind the 상세 설정 toggle.
+  const [reviewToolsOpen, toggleReviewTools] = useDetailFoldState('reviewTools');
   const [reviewFilter, setReviewFilter] = useState('all');
   const [reviewRiskFilter, setReviewRiskFilter] = useState(null);
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
@@ -2690,7 +2694,7 @@ function ReviewStage({
       )}
       <span className="hint">이상한 박스만 고치고, 괜찮으면 [확인 완료]를 누르세요. 남은 표시는 EDB 제작 때 한 번 더 묻습니다.</span>
       <div className="spacer" />
-      {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
+      {reviewToolsOpen && activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
         <button
           className="btn"
           type="button"
@@ -2713,9 +2717,9 @@ function ReviewStage({
           {Icon.check} 확인 완료 {confirmTargetIds.length}
         </button>
       )}
-      {showBulkRetry && (
+      {reviewToolsOpen && showBulkRetry && (
         <button
-          className="btn primary"
+          className="btn"
           type="button"
           title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
           onClick={() => doRetryAi(bulkRetryPageIds)}
@@ -2723,6 +2727,13 @@ function ReviewStage({
         >
           페이지 전체 AI 재인식 {bulkRetryProblemCount}
         </button>
+      )}
+      {(showBulkRetry || (activeReviewFilter && visibleReviewScope.problemIds.length > 0)) && (
+        <DetailToggleButton
+          open={reviewToolsOpen}
+          onToggle={toggleReviewTools}
+          title="표시 항목 선택 · 페이지 전체 AI 재인식"
+        />
       )}
     </div>
   ) : (
@@ -2733,7 +2744,7 @@ function ReviewStage({
           {selectedHasPageChromeArtifact
             ? '페이지 선/번호가 감지된 문제입니다. 3단계 원문 보존으로 다시 뽑거나 원본 틀을 조정하세요.'
             : selectedList.length === 1
-            ? '선택 박스 주변만 다시 인식하거나, 틀을 조정해 자르고, 필요하면 두 문제로 나눌 수 있어요.'
+            ? '틀을 조정해 다시 자르거나, 두 문제로 나눌 수 있어요.'
             : sameSourcePage
               ? '같은 페이지의 박스들을 하나로 합치거나, 모두 제외할 수 있어요.'
               : '같은 페이지의 박스만 합칠 수 있어요. (현재 선택은 페이지가 다름)'}
@@ -2752,7 +2763,7 @@ function ReviewStage({
               {Icon.wand} 3단계 원문 보존 {selectedPageChromeProblemIds.length}
             </button>
           )}
-          {selectedList.length >= 2 && (
+          {reviewToolsOpen && selectedList.length >= 2 && (
             <button
               className="btn"
               type="button"
@@ -2765,17 +2776,19 @@ function ReviewStage({
           )}
           {selectedList.length === 1 && (
             <>
+              {reviewToolsOpen && (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => applyExpandedCrop()}
+                  disabled={mutating || !selectedCanBoxEdit}
+                  title="선택한 박스 주변 여백까지 포함해 빠르게 다시 자르기"
+                >
+                  {Icon.crop} 주변 포함 빠른 자르기
+                </button>
+              )}
               <button
                 className="btn primary"
-                type="button"
-                onClick={() => applyExpandedCrop()}
-                disabled={mutating || !selectedCanBoxEdit}
-                title="선택한 박스 주변 여백까지 포함해 빠르게 다시 자르기"
-              >
-                {Icon.crop} 주변 포함 빠른 자르기
-              </button>
-              <button
-                className="btn"
                 type="button"
                 onClick={beginBoxEdit}
                 disabled={mutating || !selectedCanBoxEdit}
@@ -2797,15 +2810,17 @@ function ReviewStage({
               >
                 {Icon.split} 두 문제로 나누기
               </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={beginManualSplitForSelection}
-                disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 원본 페이지를 직접 여러 영역으로 자르기' : '같은 원본 페이지의 항목을 선택해야 합니다'}
-              >
-                {Icon.pen} 직접 자르기
-              </button>
+              {reviewToolsOpen && (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={beginManualSplitForSelection}
+                  disabled={mutating || !selectedCanManualSplit}
+                  title={selectedCanManualSplit ? '선택한 원본 페이지를 직접 여러 영역으로 자르기' : '같은 원본 페이지의 항목을 선택해야 합니다'}
+                >
+                  {Icon.pen} 직접 자르기
+                </button>
+              )}
             </>
           )}
           {selectedList.length >= 2 && (
@@ -2818,15 +2833,17 @@ function ReviewStage({
               >
                 {Icon.align} 합치기
               </button>
-              <button
-                className="btn"
-                type="button"
-                onClick={beginManualSplitForSelection}
-                disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 직접 자를 수 있습니다'}
-              >
-                {Icon.pen} 직접 자르기
-              </button>
+              {reviewToolsOpen && (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={beginManualSplitForSelection}
+                  disabled={mutating || !selectedCanManualSplit}
+                  title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 직접 자를 수 있습니다'}
+                >
+                  {Icon.pen} 직접 자르기
+                </button>
+              )}
             </>
           )}
         </div>
@@ -2852,6 +2869,13 @@ function ReviewStage({
           >
             {Icon.close} 선택 해제
           </button>
+          <DetailToggleButton
+            open={reviewToolsOpen}
+            onToggle={toggleReviewTools}
+            title={selectedList.length === 1
+              ? '주변 포함 빠른 자르기 · 직접 자르기'
+              : '페이지 전체 AI 재인식 · 직접 자르기'}
+          />
         </div>
       </div>
     </div>
@@ -2915,165 +2939,174 @@ function ReviewStage({
           ref={reviewWrapRef}
         >
           {actionBar}
-          <div className="review-summary-strip">
-            <span className="review-summary-title">검수 요약</span>
-            <span className="review-summary-chip">{formatProblemCount(reviewSummary.counts)}</span>
-            <span className={`review-summary-chip ${reviewSummary.warningCount ? 'warn' : 'ok'}`}>
-              주의 {reviewSummary.warningCount}
-            </span>
-            {reviewSummary.aiStages.map(stage => (
-              <span
-                key={stage.stage}
-                className={`review-summary-chip ${stage.usedPageCount || stage.attemptedBlockCount || stage.appliedPageCount ? 'ok' : ''}`}
-                title={aiStageTooltip(stage)}
-              >
-                {aiStageChipText(stage)}
-              </span>
-            ))}
-            {reviewSummary.actionableNeedsReviewCount > 0 && (
-              <span className="review-summary-chip warn">
-                확인 {reviewSummary.actionableNeedsReviewCount}
-                {reviewSummary.reviewStatusCounts.failed ? ` · 실패 ${reviewSummary.reviewStatusCounts.failed}` : ''}
-              </span>
-            )}
-            {reviewSummary.hwpOversegmentationCount > 0 && (
-              <span className="review-summary-chip warn" title="HWP 내부 문항 수보다 최종 분할 수가 크게 많습니다.">
-                HWP 과분할 {reviewSummary.hwpOversegmentationCount}
-              </span>
-            )}
-            {reviewSummary.hwpProblemCountMismatchCount > 0 && reviewSummary.hwpOversegmentationCount <= 0 && (
-              <span className="review-summary-chip warn" title="HWP 내부 문항 수와 최종 분할 수가 다릅니다.">
-                HWP 문항 차이 {reviewSummary.hwpProblemCountMismatchCount}
-              </span>
-            )}
-            {reviewSummary.duplicateProblemNumberGroups.length > 0 && (
-              <span
-                className="review-summary-chip"
-                title="같은 문항 번호가 여러 구간에 보존되어 있습니다."
-              >
-                중복 번호 {reviewSummary.duplicateProblemNumberLabel}
-              </span>
-            )}
-            {reviewSummary.sourceProblemOverlapGroups.length > 0 && (
-              <span
-                className="review-summary-chip warn"
-                title={[
-                  '문항 영역 겹침: 같은 원본 페이지에서 인식 영역이 크게 겹칩니다.',
-                  reviewSummary.sourceProblemOverlapDetailLabel
-                    ? `세부: ${reviewSummary.sourceProblemOverlapDetailLabel}`
-                    : '',
-                ].filter(Boolean).join(' ')}
-              >
-                {reviewSummary.sourceProblemOverlapLabel}
-              </span>
-            )}
-            {reviewSummary.passageGroupSourceReuseGroups.length > 0 && (
-              <button
-                type="button"
-                className={`review-summary-chip warn risk-filter-chip ${reviewRiskFilter === 'passage_group_source_reuse' ? 'on' : ''}`}
-                title={[
-                  '지문 겹침: 같은 지문 묶음에서 원본 영역이 크게 겹칩니다.',
-                  reviewSummary.passageGroupSourceReuseDetailLabel
-                    ? `세부: ${reviewSummary.passageGroupSourceReuseDetailLabel}`
-                    : '',
-                ].filter(Boolean).join(' ')}
-                aria-pressed={reviewRiskFilter === 'passage_group_source_reuse'}
-                data-risk-flag="passage_group_source_reuse"
-                onClick={() => toggleRiskFilter('passage_group_source_reuse')}
-              >
-                {reviewSummary.passageGroupSourceReuseLabel}
-              </button>
-            )}
-            {reviewSummary.passageGroupCount > 0 && (
-              <button
-                type="button"
-                className={`review-summary-chip risk-filter-chip ${reviewFilter === 'passage' ? 'on' : ''}`}
-                title={`${reviewSummary.passageProblemCount}개 문항이 지문 묶음에 연결되어 있습니다.${
-                  reviewSummary.passageContinuationBlockCount > 0
-                    ? ` 이어짐 블록 ${reviewSummary.passageContinuationBlockCount}개 포함.`
-                    : ''
-                }`}
-                aria-pressed={reviewFilter === 'passage'}
-                onClick={() => setReviewFilter(prev => (prev === 'passage' ? 'all' : 'passage'))}
-              >
-                지문 묶음 {reviewSummary.passageGroupCount}
-                {reviewSummary.passageContinuationBlockCount > 0 ? ` · 이어짐 ${reviewSummary.passageContinuationBlockCount}` : ''}
-              </button>
-            )}
-            {reviewSummary.passageReviewItemCount > 0 && (
-              <button
-                type="button"
-                className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
-                title={[
-                  '지문 확인 항목',
-                  reviewSummary.passageReviewLabel,
-                  reviewSummary.passageReviewReasonLabel,
-                  reviewSummary.passageReviewPreview ? `대상 ${reviewSummary.passageReviewPreview}` : '',
-                ].filter(Boolean).join(' · ')}
-                aria-pressed={reviewFilter === 'passage-review'}
-                onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
-              >
-                {reviewSummary.passageReviewLabel}
-                {reviewSummary.passageReviewReasonLabel ? ` · ${reviewSummary.passageReviewReasonLabel}` : ''}
-              </button>
-            )}
-            {reviewSummary.topRiskFlags.map(item => (
-              <button
-                key={item.flag}
-                type="button"
-                className={`review-summary-chip risk-filter-chip ${reviewRiskFilter === item.flag ? 'on' : ''}`}
-                title={`${riskFlagLabel(item.flag)} 항목만 보기`}
-                aria-pressed={reviewRiskFilter === item.flag}
-                data-risk-flag={item.flag}
-                onClick={() => toggleRiskFilter(item.flag)}
-              >
-                {riskFlagLabel(item.flag)} {item.count}
-              </button>
-            ))}
-            {reviewSummary.hwpTextProblemSignalCount > 0 && (
-              <span className="review-summary-chip">
-                HWP 텍스트 {reviewSummary.hwpTextProblemSignalCount}
-                {reviewSummary.hwpTextExtractorLabel ? ` · ${reviewSummary.hwpTextExtractorLabel}` : ''}
-              </span>
-            )}
-            {reviewSummary.hwpTextProblemSignalCount > 0 && reviewSummary.hwpTextProblemCountStatus !== 'unknown' && (
-              <span
-                className={`review-summary-chip ${reviewSummary.hwpTextProblemCountStatus === 'match' ? 'ok' : 'warn'}`}
-                title={reviewSummary.hwpTextProblemCountMessage}
-              >
-                {reviewSummary.hwpTextProblemCountStatus === 'match'
-                  ? '문항 수 일치'
-                  : `문항 수 차이 ${reviewSummary.hwpTextProblemDelta > 0 ? '+' : ''}${reviewSummary.hwpTextProblemDelta}`}
-              </span>
-            )}
-            {reviewSummary.hwpLayoutProblemSignalCount > 0 && (
-              <span className="review-summary-chip">
-                HWP 레이아웃 {reviewSummary.hwpLayoutProblemSignalCount}
-                {reviewSummary.hwpLayoutExtractorLabel ? ` · ${reviewSummary.hwpLayoutExtractorLabel}` : ''}
-              </span>
-            )}
-            {reviewSummary.hwpLayoutProblemSignalCount > 0 && reviewSummary.hwpLayoutProblemCountStatus !== 'unknown' && (
-              <span
-                className={`review-summary-chip ${reviewSummary.hwpLayoutProblemCountStatus === 'match' ? 'ok' : 'warn'}`}
-                title={reviewSummary.hwpLayoutProblemCountMessage}
-              >
-                {reviewSummary.hwpLayoutProblemCountStatus === 'match'
-                  ? '레이아웃 일치'
-                  : `레이아웃 차이 ${reviewSummary.hwpLayoutProblemDelta > 0 ? '+' : ''}${reviewSummary.hwpLayoutProblemDelta}`}
-              </span>
-            )}
-            {reviewSummary.hwpCacheHitPageCount > 0 && (
-              <span
-                className="review-summary-chip ok"
-                title={`렌더 캐시 ${reviewSummary.hwpRendererCacheHitCount} · 정규화 캐시 ${reviewSummary.hwpNormalizedCacheHitCount}`}
-              >
-                HWP 캐시 {reviewSummary.hwpCacheHitPageCount}
-              </span>
-            )}
-            {reviewSummary.warningPreview && (
-              <span className="review-summary-note">{reviewSummary.warningPreview}</span>
-            )}
-          </div>
+          {!manualSplit && (
+            <DetailFold
+              id="reviewSummary"
+              className="review-summary-fold"
+              summary="검수 요약 · 원인별 필터 · HWP 진단"
+              forceOpen={Boolean(reviewRiskFilter) || reviewFilter === 'passage' || reviewFilter === 'passage-review'}
+            >
+              <div className="review-summary-strip">
+                <span className="review-summary-title">검수 요약</span>
+                <span className="review-summary-chip">{formatProblemCount(reviewSummary.counts)}</span>
+                <span className={`review-summary-chip ${reviewSummary.warningCount ? 'warn' : 'ok'}`}>
+                  주의 {reviewSummary.warningCount}
+                </span>
+                {reviewSummary.aiStages.map(stage => (
+                  <span
+                    key={stage.stage}
+                    className={`review-summary-chip ${stage.usedPageCount || stage.attemptedBlockCount || stage.appliedPageCount ? 'ok' : ''}`}
+                    title={aiStageTooltip(stage)}
+                  >
+                    {aiStageChipText(stage)}
+                  </span>
+                ))}
+                {reviewSummary.actionableNeedsReviewCount > 0 && (
+                  <span className="review-summary-chip warn">
+                    확인 {reviewSummary.actionableNeedsReviewCount}
+                    {reviewSummary.reviewStatusCounts.failed ? ` · 실패 ${reviewSummary.reviewStatusCounts.failed}` : ''}
+                  </span>
+                )}
+                {reviewSummary.hwpOversegmentationCount > 0 && (
+                  <span className="review-summary-chip warn" title="HWP 내부 문항 수보다 최종 분할 수가 크게 많습니다.">
+                    HWP 과분할 {reviewSummary.hwpOversegmentationCount}
+                  </span>
+                )}
+                {reviewSummary.hwpProblemCountMismatchCount > 0 && reviewSummary.hwpOversegmentationCount <= 0 && (
+                  <span className="review-summary-chip warn" title="HWP 내부 문항 수와 최종 분할 수가 다릅니다.">
+                    HWP 문항 차이 {reviewSummary.hwpProblemCountMismatchCount}
+                  </span>
+                )}
+                {reviewSummary.duplicateProblemNumberGroups.length > 0 && (
+                  <span
+                    className="review-summary-chip"
+                    title="같은 문항 번호가 여러 구간에 보존되어 있습니다."
+                  >
+                    중복 번호 {reviewSummary.duplicateProblemNumberLabel}
+                  </span>
+                )}
+                {reviewSummary.sourceProblemOverlapGroups.length > 0 && (
+                  <span
+                    className="review-summary-chip warn"
+                    title={[
+                      '문항 영역 겹침: 같은 원본 페이지에서 인식 영역이 크게 겹칩니다.',
+                      reviewSummary.sourceProblemOverlapDetailLabel
+                        ? `세부: ${reviewSummary.sourceProblemOverlapDetailLabel}`
+                        : '',
+                    ].filter(Boolean).join(' ')}
+                  >
+                    {reviewSummary.sourceProblemOverlapLabel}
+                  </span>
+                )}
+                {reviewSummary.passageGroupSourceReuseGroups.length > 0 && (
+                  <button
+                    type="button"
+                    className={`review-summary-chip warn risk-filter-chip ${reviewRiskFilter === 'passage_group_source_reuse' ? 'on' : ''}`}
+                    title={[
+                      '지문 겹침: 같은 지문 묶음에서 원본 영역이 크게 겹칩니다.',
+                      reviewSummary.passageGroupSourceReuseDetailLabel
+                        ? `세부: ${reviewSummary.passageGroupSourceReuseDetailLabel}`
+                        : '',
+                    ].filter(Boolean).join(' ')}
+                    aria-pressed={reviewRiskFilter === 'passage_group_source_reuse'}
+                    data-risk-flag="passage_group_source_reuse"
+                    onClick={() => toggleRiskFilter('passage_group_source_reuse')}
+                  >
+                    {reviewSummary.passageGroupSourceReuseLabel}
+                  </button>
+                )}
+                {reviewSummary.passageGroupCount > 0 && (
+                  <button
+                    type="button"
+                    className={`review-summary-chip risk-filter-chip ${reviewFilter === 'passage' ? 'on' : ''}`}
+                    title={`${reviewSummary.passageProblemCount}개 문항이 지문 묶음에 연결되어 있습니다.${
+                      reviewSummary.passageContinuationBlockCount > 0
+                        ? ` 이어짐 블록 ${reviewSummary.passageContinuationBlockCount}개 포함.`
+                        : ''
+                    }`}
+                    aria-pressed={reviewFilter === 'passage'}
+                    onClick={() => setReviewFilter(prev => (prev === 'passage' ? 'all' : 'passage'))}
+                  >
+                    지문 묶음 {reviewSummary.passageGroupCount}
+                    {reviewSummary.passageContinuationBlockCount > 0 ? ` · 이어짐 ${reviewSummary.passageContinuationBlockCount}` : ''}
+                  </button>
+                )}
+                {reviewSummary.passageReviewItemCount > 0 && (
+                  <button
+                    type="button"
+                    className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
+                    title={[
+                      '지문 확인 항목',
+                      reviewSummary.passageReviewLabel,
+                      reviewSummary.passageReviewReasonLabel,
+                      reviewSummary.passageReviewPreview ? `대상 ${reviewSummary.passageReviewPreview}` : '',
+                    ].filter(Boolean).join(' · ')}
+                    aria-pressed={reviewFilter === 'passage-review'}
+                    onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
+                  >
+                    {reviewSummary.passageReviewLabel}
+                    {reviewSummary.passageReviewReasonLabel ? ` · ${reviewSummary.passageReviewReasonLabel}` : ''}
+                  </button>
+                )}
+                {reviewSummary.topRiskFlags.map(item => (
+                  <button
+                    key={item.flag}
+                    type="button"
+                    className={`review-summary-chip risk-filter-chip ${reviewRiskFilter === item.flag ? 'on' : ''}`}
+                    title={`${riskFlagLabel(item.flag)} 항목만 보기`}
+                    aria-pressed={reviewRiskFilter === item.flag}
+                    data-risk-flag={item.flag}
+                    onClick={() => toggleRiskFilter(item.flag)}
+                  >
+                    {riskFlagLabel(item.flag)} {item.count}
+                  </button>
+                ))}
+                {reviewSummary.hwpTextProblemSignalCount > 0 && (
+                  <span className="review-summary-chip">
+                    HWP 텍스트 {reviewSummary.hwpTextProblemSignalCount}
+                    {reviewSummary.hwpTextExtractorLabel ? ` · ${reviewSummary.hwpTextExtractorLabel}` : ''}
+                  </span>
+                )}
+                {reviewSummary.hwpTextProblemSignalCount > 0 && reviewSummary.hwpTextProblemCountStatus !== 'unknown' && (
+                  <span
+                    className={`review-summary-chip ${reviewSummary.hwpTextProblemCountStatus === 'match' ? 'ok' : 'warn'}`}
+                    title={reviewSummary.hwpTextProblemCountMessage}
+                  >
+                    {reviewSummary.hwpTextProblemCountStatus === 'match'
+                      ? '문항 수 일치'
+                      : `문항 수 차이 ${reviewSummary.hwpTextProblemDelta > 0 ? '+' : ''}${reviewSummary.hwpTextProblemDelta}`}
+                  </span>
+                )}
+                {reviewSummary.hwpLayoutProblemSignalCount > 0 && (
+                  <span className="review-summary-chip">
+                    HWP 레이아웃 {reviewSummary.hwpLayoutProblemSignalCount}
+                    {reviewSummary.hwpLayoutExtractorLabel ? ` · ${reviewSummary.hwpLayoutExtractorLabel}` : ''}
+                  </span>
+                )}
+                {reviewSummary.hwpLayoutProblemSignalCount > 0 && reviewSummary.hwpLayoutProblemCountStatus !== 'unknown' && (
+                  <span
+                    className={`review-summary-chip ${reviewSummary.hwpLayoutProblemCountStatus === 'match' ? 'ok' : 'warn'}`}
+                    title={reviewSummary.hwpLayoutProblemCountMessage}
+                  >
+                    {reviewSummary.hwpLayoutProblemCountStatus === 'match'
+                      ? '레이아웃 일치'
+                      : `레이아웃 차이 ${reviewSummary.hwpLayoutProblemDelta > 0 ? '+' : ''}${reviewSummary.hwpLayoutProblemDelta}`}
+                  </span>
+                )}
+                {reviewSummary.hwpCacheHitPageCount > 0 && (
+                  <span
+                    className="review-summary-chip ok"
+                    title={`렌더 캐시 ${reviewSummary.hwpRendererCacheHitCount} · 정규화 캐시 ${reviewSummary.hwpNormalizedCacheHitCount}`}
+                  >
+                    HWP 캐시 {reviewSummary.hwpCacheHitPageCount}
+                  </span>
+                )}
+                {reviewSummary.warningPreview && (
+                  <span className="review-summary-note">{reviewSummary.warningPreview}</span>
+                )}
+              </div>
+            </DetailFold>
+          )}
           {pages.map(page => {
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
@@ -3099,18 +3132,23 @@ function ReviewStage({
             return (
               <div key={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
                 <div className="review-page-hd">
-                  <span className="pg-num">{page.id}</span>
+                  <span className="pg-num" title={`${page.id} · ${page.width}×${page.height}`}>{page.id}</span>
                   <span className="pg-count">
                     {reviewFilter === 'all' && !reviewRiskFilter
                       ? formatProblemCount(pageCounts)
                       : `${pageProblems.length}/${allPageProblems.length} 표시`}
                   </span>
-                  <span className={`status-badge ${reviewStatusClass(pageStatus)}`}>
+                  <span
+                    className={`status-badge ${reviewStatusClass(pageStatus)}`}
+                    title={hasRisk
+                      ? (pageRiskFlags.length ? pageRiskFlags.map(riskFlagLabel).join(' · ') : '문제 인식 실패')
+                      : undefined}
+                  >
                     {reviewStatusMeta(pageStatus).label}
                   </span>
-                  {hasRisk && (
+                  {hasRisk && reviewToolsOpen && pageRiskFlags.length > 0 && (
                     <span className="pg-risk" title={pageRiskFlags.join(', ')}>
-                      {pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
+                      {pageRiskFlags.map(riskFlagLabel).join(' · ')}
                     </span>
                   )}
                   <div className="spacer" />
@@ -3134,9 +3172,6 @@ function ReviewStage({
                   >
                     직접 자르기
                   </button>
-                  <span style={{ fontSize: 11, color: 'var(--muted-2)', fontFamily: "'JetBrains Mono', monospace" }}>
-                    {page.width}×{page.height}
-                  </span>
                 </div>
                 {manualSplit?.pageId === page.id ? (
                   <ManualSplitEditor
@@ -3284,11 +3319,11 @@ function ReviewStage({
 
 // ─── LEFT: items rail ─────────────────────────────────────────────────────
 function ItemsRail({
-  items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
+  items, activeId, setActive, reorder, removeItem, addSample, handleFiles,
   pendingFiles, selectedPendingFileKey, onSelectPendingFile,
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
   splitMode, setSplitMode,
-  addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
+  recentSessions, restoringSessionId, onRestoreRecentSession,
   onDownloadItemImage, downloadingItemId,
 }){
   const dragId = useRef(null);
@@ -3523,14 +3558,6 @@ function ItemsRail({
         <h2>자료</h2>
         <span className="count">{items.length}</span>
         <div className="spacer" />
-        <button className="icon-btn" title="전체를 2단계 원문 보존 변환" data-tooltip="모든 자료를 빠른 원문 보존 변환으로 지정" onClick={() => bulkApply('s2')} disabled={!items.length}>{Icon.aiBatch}</button>
-        <button
-          className="icon-btn"
-          title={canAddDummy ? '더미 추가' : '실제 세션 또는 대기열이 있을 때는 더미를 추가하지 않습니다'}
-          data-tooltip={canAddDummy ? '테스트용 더미 자료 추가' : '실제 세션 또는 대기열이 있을 때는 더미를 추가하지 않습니다'}
-          onClick={addMockSample}
-          disabled={!canAddDummy}
-        >{Icon.wand}</button>
         <button className="icon-btn" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" onClick={addSample}>{Icon.upload}</button>
       </div>
 
@@ -3854,6 +3881,7 @@ function ItemsRail({
 
 // ─── CENTER: big scrollable board stage ──
 function BoardStage({ items, activeId, setActive, boardColor, boardColumns, fileName, addSample, setPlacement, reorder }){
+  const [statusDetailsOpen, toggleStatusDetails] = useDetailFoldState('boardStatus');
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
@@ -4229,14 +4257,12 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     window.requestAnimationFrame(captureBoardTileRects);
   };
 
-  let processedCount = 0;
   let aiCount = 0;
   let reconstructCount = 0;
   let rawCount = 0;
   let s1Count = 0;
   items.forEach(item => {
     if (item.step === 'raw') rawCount += 1;
-    else processedCount += 1;
     if (item.step === 's1') s1Count += 1;
     else if (item.step === 's2') aiCount += 1;
     else if (item.step === 's3') reconstructCount += 1;
@@ -4410,35 +4436,44 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
         </div>
 
         <div className="stage-status">
-          <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
-          <span className="chip">
-            <span className="pip" />
-            {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
-          </span>
-          {activePlacement && (
-            <span className="chip">
-              행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
-            </span>
-          )}
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
-            1단계 {s1Count}
-          </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
-            원문 보존 {aiCount}
-          </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
-            고화질 {reconstructCount}
-          </span>
-          {rawCount > 0 && (
-            <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
-              미처리 {rawCount}
-            </span>
+          <DetailToggleButton
+            open={statusDetailsOpen}
+            onToggle={toggleStatusDetails}
+            title="배치 기준 · 한 줄 개수 · 처리 단계별 개수"
+          />
+          {statusDetailsOpen && (
+            <>
+              <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
+              <span className="chip">
+                <span className="pip" />
+                {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
+              </span>
+              {activePlacement && (
+                <span className="chip">
+                  행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
+                </span>
+              )}
+              <span className="chip">
+                <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
+                1단계 {s1Count}
+              </span>
+              <span className="chip">
+                <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
+                원문 보존 {aiCount}
+              </span>
+              <span className="chip">
+                <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
+                고화질 {reconstructCount}
+              </span>
+              {rawCount > 0 && (
+                <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
+                  미처리 {rawCount}
+                </span>
+              )}
+            </>
           )}
           <div className="spacer" />
-          <span style={{fontFamily:'JetBrains Mono, monospace'}}>{processedCount}/{items.length} 처리됨 · {layout.totalPages}p</span>
+          <span style={{fontFamily:'JetBrains Mono, monospace'}}>{items.length}개 자료 · {layout.totalPages}p</span>
         </div>
       </div>
     </div>
@@ -4658,6 +4693,7 @@ function SidePanel({
   view,
   pendingFile, pendingFileCount, pendingImageOnly, processQueuedFiles, queueBusy, onPendingPreviewError,
   splitMode, setSplitMode,
+  canAddDummy, onAddDummy,
 }){
   const [tab, setTab] = useState('item');
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
@@ -4675,7 +4711,6 @@ function SidePanel({
   const [placePassageOnce, setPlacePassageOnce] = useState(true);
   const [movePassageGroupTogether, setMovePassageGroupTogether] = useState(true);
   const [breakGroupOnOverflow, setBreakGroupOnOverflow] = useState(true);
-  const [placementApplied, setPlacementApplied] = useState(false);
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
@@ -4828,7 +4863,6 @@ function SidePanel({
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
-    setPlacementApplied(false);
   }, [item?.id, selectedPassageGroupId]);
 
   const updatePlacementTargets = (patchForTarget) => {
@@ -4836,7 +4870,6 @@ function SidePanel({
       const patch = typeof patchForTarget === 'function' ? patchForTarget(target) : patchForTarget;
       if (patch && target?.id) setPlacement?.(target.id, patch);
     });
-    setPlacementApplied(false);
   };
   const updatePlacement = (patch) => {
     if (!item) return;
@@ -4879,7 +4912,6 @@ function SidePanel({
   };
   const applyPlacementPreset = (preset) => {
     setPlacementPreset(preset);
-    setPlacementApplied(false);
     if (preset === 'side-by-side') setBoardColumns?.(2);
     if (preset === 'auto' || preset === 'vertical' || preset === 'passage-only') setBoardColumns?.(1);
   };
@@ -5267,82 +5299,11 @@ function SidePanel({
               {item && <span className={`status-badge ${reviewStatusClass(item.reviewStatus)}`}>{item.statusLabel}</span>}
             </section>
 
-            <section className="placement-section">
-              <div className="placement-section-title">
-                <span>편집 범위</span>
-                <small>{placementTargets.length}개 대상</small>
-              </div>
-              <div className="placement-scope" role="group" aria-label="배치 편집 범위">
-                <button
-                  type="button"
-                  className={placementScope === 'item' ? 'on' : ''}
-                  aria-pressed={placementScope === 'item'}
-                  disabled={!item}
-                  onClick={() => setPlacementScope('item')}
-                >이 문항</button>
-                <button
-                  type="button"
-                  className={placementScope === 'group' ? 'on' : ''}
-                  aria-pressed={placementScope === 'group'}
-                  disabled={!selectedPassageGroupId}
-                  onClick={() => setPlacementScope('group')}
-                >지문 묶음</button>
-                <button
-                  type="button"
-                  className={placementScope === 'all' ? 'on' : ''}
-                  aria-pressed={placementScope === 'all'}
-                  disabled={!items.length}
-                  onClick={() => setPlacementScope('all')}
-                >전체 자료</button>
-              </div>
-            </section>
-
-            <section className="placement-section">
-              <div className="placement-section-title"><span>레이아웃 프리셋</span></div>
-              <div className="placement-presets" role="group" aria-label="레이아웃 프리셋">
-                {[
-                  ['auto', '자동 추천'],
-                  ['vertical', '세로 연결'],
-                  ['side-by-side', '좌우 병렬'],
-                  ['passage-only', '지문 전용'],
-                ].map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={placementPreset === value ? 'on' : ''}
-                    aria-pressed={placementPreset === value}
-                    disabled={!item}
-                    onClick={() => applyPlacementPreset(value)}
-                  >{value === 'auto' && <span aria-hidden="true">✦</span>}{label}</button>
-                ))}
-              </div>
-            </section>
-
             <section className="placement-section placement-size-section">
               <div className="placement-section-title">
-                <span>크기 및 위치</span>
+                <span>크기</span>
                 <small>{placementScalePercent}%</small>
               </div>
-              <div className="placement-width-row">
-                <span>콘텐츠 너비</span>
-                <div className="placement-width-options" role="group" aria-label="콘텐츠 너비">
-                  {[
-                    ['1/3', 1],
-                    ['42%', 1.26],
-                    ['50%', 1.5],
-                  ].map(([label, scale]) => (
-                    <button
-                      key={label}
-                      type="button"
-                      className={Math.abs(placementScale - scale) < 0.035 ? 'on' : ''}
-                      aria-pressed={Math.abs(placementScale - scale) < 0.035}
-                      disabled={!item}
-                      onClick={() => applyWidthPreset(scale)}
-                    >{label}</button>
-                  ))}
-                </div>
-              </div>
-
               <div className="placement-scale-row">
                 <span>비율(스케일)</span>
                 <input
@@ -5359,69 +5320,156 @@ function SidePanel({
                 <strong>{placementScalePercent}%</strong>
               </div>
 
-              <div className="position-control placement-position-control">
-                <div className="position-pad" aria-label="배치 위치 미세 조절">
-                  <button className="pos-btn up" type="button" title="위로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, -PLACEMENT_NUDGE_STEP)}>{Icon.arrowUp}</button>
-                  <button className="pos-btn left" type="button" title="왼쪽으로" disabled={!item} onClick={() => nudgePlacement(-PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowLeft}</button>
-                  <button className="pos-btn reset" type="button" title="위치 초기화" disabled={!item} onClick={resetPlacement}>{Icon.reset}</button>
-                  <button className="pos-btn right" type="button" title="오른쪽으로" disabled={!item} onClick={() => nudgePlacement(PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowRight}</button>
-                  <button className="pos-btn down" type="button" title="아래로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, PLACEMENT_NUDGE_STEP)}>{Icon.arrowDown}</button>
+              <div className="placement-scale-actions">
+                <button type="button" className="btn" disabled={!canZoomOut} onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}>{Icon.zoomOut} 축소</button>
+                <button type="button" className="btn" disabled={!canZoomIn} onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}>{Icon.zoomIn} 확대</button>
+              </div>
+            </section>
+
+            {placementHasOverlap && (
+              <section className="placement-diagnostic warn">
+                <div>
+                  <span>배치 진단</span>
+                  <strong>겹침을 확인하세요</strong>
                 </div>
-                <div className="position-sliders">
-                  <label>
-                    <span>좌우</span>
-                    <input type="range" min="0" max="100" value={Math.round(placementX * 100)} disabled={!item} onChange={event => updatePlacement({ xRatio: Number(event.target.value) / 100 })} />
-                    <strong>{Math.round(placementX * 100)}%</strong>
-                  </label>
-                  <label>
-                    <span>상하</span>
-                    <input type="range" min="0" max="100" value={Math.round((hasVerticalRoom ? placementY : 0) * 100)} disabled={!item || !hasVerticalRoom} onChange={event => updatePlacement({ yRatio: Number(event.target.value) / 100 })} />
-                    <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
-                  </label>
-                  <div className="placement-scale-actions">
-                    <button type="button" className="btn" disabled={!canZoomOut} onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}>{Icon.zoomOut} 축소</button>
-                    <button type="button" className="btn" disabled={!canZoomIn} onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}>{Icon.zoomIn} 확대</button>
+                <span aria-hidden="true">!</span>
+              </section>
+            )}
+
+            <DetailFold
+              id="placement"
+              summary="편집 범위 · 레이아웃 프리셋 · 너비 · 위치 · 지문 묶음 규칙"
+            >
+              <section className="placement-section">
+                <div className="placement-section-title">
+                  <span>편집 범위</span>
+                  <small>{placementTargets.length}개 대상</small>
+                </div>
+                <div className="placement-scope" role="group" aria-label="배치 편집 범위">
+                  <button
+                    type="button"
+                    className={placementScope === 'item' ? 'on' : ''}
+                    aria-pressed={placementScope === 'item'}
+                    disabled={!item}
+                    onClick={() => setPlacementScope('item')}
+                  >이 문항</button>
+                  <button
+                    type="button"
+                    className={placementScope === 'group' ? 'on' : ''}
+                    aria-pressed={placementScope === 'group'}
+                    disabled={!selectedPassageGroupId}
+                    onClick={() => setPlacementScope('group')}
+                  >지문 묶음</button>
+                  <button
+                    type="button"
+                    className={placementScope === 'all' ? 'on' : ''}
+                    aria-pressed={placementScope === 'all'}
+                    disabled={!items.length}
+                    onClick={() => setPlacementScope('all')}
+                  >전체 자료</button>
+                </div>
+              </section>
+
+              <section className="placement-section">
+                <div className="placement-section-title"><span>레이아웃 프리셋</span></div>
+                <div className="placement-presets" role="group" aria-label="레이아웃 프리셋">
+                  {[
+                    ['auto', '자동 추천'],
+                    ['vertical', '세로 연결'],
+                    ['side-by-side', '좌우 병렬'],
+                    ['passage-only', '지문 전용'],
+                  ].map(([value, label]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      className={placementPreset === value ? 'on' : ''}
+                      aria-pressed={placementPreset === value}
+                      disabled={!item}
+                      onClick={() => applyPlacementPreset(value)}
+                    >{value === 'auto' && <span aria-hidden="true">✦</span>}{label}</button>
+                  ))}
+                </div>
+              </section>
+
+              <section className="placement-section">
+                <div className="placement-section-title"><span>너비 및 위치</span></div>
+                <div className="placement-width-row">
+                  <span>콘텐츠 너비</span>
+                  <div className="placement-width-options" role="group" aria-label="콘텐츠 너비">
+                    {[
+                      ['1/3', 1],
+                      ['42%', 1.26],
+                      ['50%', 1.5],
+                    ].map(([label, scale]) => (
+                      <button
+                        key={label}
+                        type="button"
+                        className={Math.abs(placementScale - scale) < 0.035 ? 'on' : ''}
+                        aria-pressed={Math.abs(placementScale - scale) < 0.035}
+                        disabled={!item}
+                        onClick={() => applyWidthPreset(scale)}
+                      >{label}</button>
+                    ))}
                   </div>
                 </div>
-              </div>
-              {showFitWidth && (
-                <button className="btn placement-fit-width" type="button" disabled={!item} onClick={fitPlacementWidth}>
-                  {Icon.stretchHorizontal} 너비 맞춤 이어붙임
-                </button>
+
+                <div className="position-control placement-position-control">
+                  <div className="position-pad" aria-label="배치 위치 미세 조절">
+                    <button className="pos-btn up" type="button" title="위로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, -PLACEMENT_NUDGE_STEP)}>{Icon.arrowUp}</button>
+                    <button className="pos-btn left" type="button" title="왼쪽으로" disabled={!item} onClick={() => nudgePlacement(-PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowLeft}</button>
+                    <button className="pos-btn reset" type="button" title="위치 초기화" disabled={!item} onClick={resetPlacement}>{Icon.reset}</button>
+                    <button className="pos-btn right" type="button" title="오른쪽으로" disabled={!item} onClick={() => nudgePlacement(PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowRight}</button>
+                    <button className="pos-btn down" type="button" title="아래로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, PLACEMENT_NUDGE_STEP)}>{Icon.arrowDown}</button>
+                  </div>
+                  <div className="position-sliders">
+                    <label>
+                      <span>좌우</span>
+                      <input type="range" min="0" max="100" value={Math.round(placementX * 100)} disabled={!item} onChange={event => updatePlacement({ xRatio: Number(event.target.value) / 100 })} />
+                      <strong>{Math.round(placementX * 100)}%</strong>
+                    </label>
+                    <label>
+                      <span>상하</span>
+                      <input type="range" min="0" max="100" value={Math.round((hasVerticalRoom ? placementY : 0) * 100)} disabled={!item || !hasVerticalRoom} onChange={event => updatePlacement({ yRatio: Number(event.target.value) / 100 })} />
+                      <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
+                    </label>
+                  </div>
+                </div>
+                {showFitWidth && (
+                  <button className="btn placement-fit-width" type="button" disabled={!item} onClick={fitPlacementWidth}>
+                    {Icon.stretchHorizontal} 너비 맞춤 이어붙임
+                  </button>
+                )}
+              </section>
+
+              <section className="placement-section placement-rules">
+                <div className="placement-section-title"><span>지문 묶음 규칙</span></div>
+                {[
+                  ['지문 한 번만 배치', placePassageOnce, setPlacePassageOnce],
+                  ['문항 함께 이동', movePassageGroupTogether, setMovePassageGroupTogether],
+                  ['공간 부족 시 다음 칠판', breakGroupOnOverflow, setBreakGroupOnOverflow],
+                ].map(([label, checked, setter]) => (
+                  <label key={label} className="placement-rule-row">
+                    <span>{label}</span>
+                    <input type="checkbox" checked={checked} disabled={!item} onChange={event => setter(event.target.checked)} />
+                  </label>
+                ))}
+              </section>
+
+              {!placementHasOverlap && (
+                <section className="placement-diagnostic ok">
+                  <div>
+                    <span>배치 진단</span>
+                    <strong>{`다음 문항 ${placementNextStartPages.toFixed(1)}p 시작 · 겹침 없음`}</strong>
+                  </div>
+                  <span aria-hidden="true">✓</span>
+                </section>
               )}
-            </section>
-
-            <section className="placement-section placement-rules">
-              <div className="placement-section-title"><span>지문 묶음 규칙</span></div>
-              {[
-                ['지문 한 번만 배치', placePassageOnce, setPlacePassageOnce],
-                ['문항 함께 이동', movePassageGroupTogether, setMovePassageGroupTogether],
-                ['공간 부족 시 다음 칠판', breakGroupOnOverflow, setBreakGroupOnOverflow],
-              ].map(([label, checked, setter]) => (
-                <label key={label} className="placement-rule-row">
-                  <span>{label}</span>
-                  <input type="checkbox" checked={checked} disabled={!item} onChange={event => setter(event.target.checked)} />
-                </label>
-              ))}
-            </section>
-
-            <section className={`placement-diagnostic ${placementHasOverlap ? 'warn' : 'ok'}`}>
-              <div>
-                <span>배치 진단</span>
-                <strong>{placementHasOverlap ? '겹침을 확인하세요' : `다음 문항 ${placementNextStartPages.toFixed(1)}p 시작 · 겹침 없음`}</strong>
-              </div>
-              <span aria-hidden="true">{placementHasOverlap ? '!' : '✓'}</span>
-            </section>
+            </DetailFold>
           </div>
           <div className="tab-foot placement-tab-foot">
-            <button className="btn" type="button" disabled={!item} onClick={resetPlacement}>초기화</button>
+            <span className="hint">바꾸면 바로 칠판에 반영됩니다</span>
             <div className="spacer" />
-            <button
-              className="btn primary"
-              type="button"
-              disabled={!item}
-              onClick={() => setPlacementApplied(true)}
-            >{Icon.check} {placementApplied ? '적용됨' : placementScope === 'group' ? '묶음 적용' : '배치 적용'}</button>
+            <button className="btn" type="button" disabled={!item} onClick={resetPlacement}>위치·크기 초기화</button>
           </div>
         </>
       )}
@@ -5429,7 +5477,14 @@ function SidePanel({
       {tab === 'board' && (
         <>
           <div className="tab-body">
-            <div className="panel-section-hd">레이아웃 <span className="line" /></div>
+            <div className="panel-section-hd">분할 방식 <span className="line" /></div>
+            <SplitModePicker
+              splitMode={splitMode}
+              setSplitMode={setSplitMode}
+              disabled={queueBusy}
+            />
+
+            <div className="panel-section-hd" style={{marginTop:4}}>칠판 <span className="line" /></div>
 
             <div className="row-control">
               <div className="lbl">한 줄 자료 수<small>너비 맞춤 아님 · 한 줄 배치 개수</small></div>
@@ -5440,22 +5495,6 @@ function SidePanel({
               </div>
             </div>
 
-            <div className="row-control">
-              <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">드래그 마그넷<small>배치 칸 가이드에 자동 정렬</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">주변 사진 높이<small>같은 행의 가장 큰 자료 기준</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>칠판 색상 <span className="line" /></div>
 
             <div className="row-control">
               <div className="lbl">칠판 배경<small>실제 교실 칠판과 맞추기</small></div>
@@ -5468,126 +5507,6 @@ function SidePanel({
                        title={c} />
                 ))}
               </div>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">강조색<small>UI 강조에 쓰이는 색</small></div>
-              <div className="swatches">
-                {ACCENTS.map(c => (
-                  <div key={c}
-                       className={`sw ${accent === c ? 'on' : ''}`}
-                       style={{ background: c }}
-                       onClick={() => setAccent(c)}
-                       title={c} />
-                ))}
-              </div>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
-
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 원문 보존</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
-            </button>
-            <button
-              className="btn primary"
-              style={{justifyContent:'space-between'}}
-              onClick={onRecognizeSession}
-              disabled={!canRecognizeSession}
-              title={userSettings?.hasGeminiApiKey ? '현재 세션의 모든 원본 페이지를 문제 단위로 다시 인식' : 'Gemini API 키를 저장하면 AI 인식을 실행할 수 있습니다'}
-            >
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 현재 자료 문제 인식</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>AI</span>
-            </button>
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
-            </button>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">
-                HWP/HWPX
-                <small>{hangulRuntimeSummary(hangulDiagnostics)}</small>
-              </div>
-              <span
-                className="pos-tag"
-                style={{
-                  background: hangulStatusMeta.tone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
-                title={(hangulDiagnostics?.recommendedActions || [])[0] || '한글 문서 변환 상태'}
-              >
-                {hangulStatusMeta.label}
-              </span>
-            </div>
-
-            {hangulDiagnostics && (
-              <div className={`runtime-details ${hangulDetailsExpanded ? 'open' : ''}`}>
-                <button
-                  className="runtime-details-summary"
-                  type="button"
-                  aria-expanded={hangulDetailsExpanded ? 'true' : 'false'}
-                  onClick={() => setHangulDetailsExpanded(open => !open)}
-                >
-                  변환 환경
-                </button>
-                {hangulDetailsExpanded && (
-                  <>
-                    <div className="runtime-tool-grid">
-                      {hangulToolRows.map(row => (
-                        <div key={row.label} className="runtime-tool-row">
-                          <span>{row.label}</span>
-                          <strong>{row.count}</strong>
-                          <small>{row.names || '없음'}</small>
-                        </div>
-                      ))}
-                    </div>
-                    {Array.isArray(hangulDiagnostics?.warnings) && hangulDiagnostics.warnings.length > 0 && (
-                      <div className="runtime-note warn">
-                        {hangulDiagnostics.warnings[0]}
-                      </div>
-                    )}
-                    {Array.isArray(hangulDiagnostics?.recommendedActions) && hangulDiagnostics.recommendedActions.length > 0 && (
-                      <div className="runtime-note">
-                        {hangulDiagnostics.recommendedActions[0]}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                분할 방식
-                <small>업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다</small>
-              </div>
-            </div>
-            <SplitModePicker
-              splitMode={splitMode}
-              setSplitMode={setSplitMode}
-              disabled={queueBusy}
-            />
-
-            <div className="row-control">
-              <div className="lbl">
-                AI 보정 사용
-                <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
-              </div>
-              <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
-                <input
-                  type="checkbox"
-                  checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
-                  disabled={!userSettings?.hasGeminiApiKey}
-                  onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
-                />
-                <span style={{fontSize: 12, color: 'var(--muted)'}}>
-                  {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
-                </span>
-              </label>
             </div>
 
             <div className="panel-section-hd" style={{marginTop:4}}>Gemini API 키 <span className="line" /></div>
@@ -5644,100 +5563,237 @@ function SidePanel({
               </button>
             </div>
 
-            <div className="panel-section-hd" style={{marginTop:4}}>OpenAI API 키 <span className="line" /></div>
+            <DetailFold
+              id="settings"
+              summary="표시 · 강조색 · 일괄 작업 · HWP · AI 보정 · OpenAI 키 · 업데이트"
+              badge={updateInfo?.updateAvailable ? '새 버전' : ''}
+            >
+              <div className="panel-section-hd">표시 <span className="line" /></div>
 
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className={`pos-tag`} style={{background: userSettings?.hasOpenAiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
-                    {userSettings?.hasOpenAiApiKey ? '설정됨' : '미설정'}
-                  </span>
-                  {userSettings?.hasOpenAiApiKey && (
-                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
-                      {userSettings.openAiApiKeyPreview}
-                    </span>
-                  )}
+              <div className="row-control">
+                <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
+                <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
+              </div>
+
+              <div className="row-control">
+                <div className="lbl">드래그 마그넷<small>배치 칸 가이드에 자동 정렬</small></div>
+                <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
+              </div>
+
+              <div className="row-control">
+                <div className="lbl">주변 사진 높이<small>같은 행의 가장 큰 자료 기준</small></div>
+                <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
+              </div>
+
+              <div className="row-control">
+                <div className="lbl">강조색<small>UI 강조에 쓰이는 색</small></div>
+                <div className="swatches">
+                  {ACCENTS.map(c => (
+                    <div key={c}
+                         className={`sw ${accent === c ? 'on' : ''}`}
+                         style={{ background: c }}
+                         onClick={() => setAccent(c)}
+                         title={c} />
+                  ))}
+                </div>
+              </div>
+
+              <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
+
+              <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
+                <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 원문 보존</span>
+                <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
+              </button>
+              <button
+                className="btn primary"
+                style={{justifyContent:'space-between'}}
+                onClick={onRecognizeSession}
+                disabled={!canRecognizeSession}
+                title={userSettings?.hasGeminiApiKey ? '현재 세션의 모든 원본 페이지를 문제 단위로 다시 인식' : 'Gemini API 키를 저장하면 AI 인식을 실행할 수 있습니다'}
+              >
+                <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 현재 자료 문제 인식</span>
+                <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>AI</span>
+              </button>
+              <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
+                <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
+                <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
+              </button>
+
+              <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
+
+              <div className="row-control">
+                <div className="lbl">
+                  HWP/HWPX
+                  <small>{hangulRuntimeSummary(hangulDiagnostics)}</small>
+                </div>
+                <span
+                  className="pos-tag"
+                  style={{
+                    background: hangulStatusMeta.tone,
+                    minWidth: 58,
+                    textAlign: 'center',
+                  }}
+                  title={(hangulDiagnostics?.recommendedActions || [])[0] || '한글 문서 변환 상태'}
+                >
+                  {hangulStatusMeta.label}
                 </span>
-                <small>OpenAI 기반 업스케일 재구성 fallback에만 사용합니다. 기본 3단계 업스케일은 Gemini를 사용합니다.</small>
               </div>
-            </div>
-            <div className="key-input-row">
-              <input
-                type={showOpenAiKey ? 'text' : 'password'}
-                className="key-input"
-                placeholder={userSettings?.hasOpenAiApiKey ? `현재 ${userSettings.openAiApiKeyPreview} (덮어쓰기)` : 'sk-...'}
-                value={openAiKeyDraft}
-                onChange={e => setOpenAiKeyDraft(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <button className="btn icon" type="button" onClick={() => setShowOpenAiKey(s => !s)} title={showOpenAiKey ? '숨기기' : '보기'}>
-                {showOpenAiKey ? '숨' : '보기'}
-              </button>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { onSaveOpenAiKey?.(openAiKeyDraft.trim()); setOpenAiKeyDraft(''); }}
-                disabled={!openAiKeyDraft.trim()}
-              >
-                키 저장
-              </button>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.(''); }}
-                disabled={!userSettings?.hasStoredOpenAiApiKey}
-              >
-                저장된 키 삭제
-              </button>
-            </div>
 
-            <div className="panel-section-hd" style={{marginTop:4}}>앱 업데이트 <span className="line" /></div>
+              {hangulDiagnostics && (
+                <div className={`runtime-details ${hangulDetailsExpanded ? 'open' : ''}`}>
+                  <button
+                    className="runtime-details-summary"
+                    type="button"
+                    aria-expanded={hangulDetailsExpanded ? 'true' : 'false'}
+                    onClick={() => setHangulDetailsExpanded(open => !open)}
+                  >
+                    변환 환경
+                  </button>
+                  {hangulDetailsExpanded && (
+                    <>
+                      <div className="runtime-tool-grid">
+                        {hangulToolRows.map(row => (
+                          <div key={row.label} className="runtime-tool-row">
+                            <span>{row.label}</span>
+                            <strong>{row.count}</strong>
+                            <small>{row.names || '없음'}</small>
+                          </div>
+                        ))}
+                      </div>
+                      {Array.isArray(hangulDiagnostics?.warnings) && hangulDiagnostics.warnings.length > 0 && (
+                        <div className="runtime-note warn">
+                          {hangulDiagnostics.warnings[0]}
+                        </div>
+                      )}
+                      {Array.isArray(hangulDiagnostics?.recommendedActions) && hangulDiagnostics.recommendedActions.length > 0 && (
+                        <div className="runtime-note">
+                          {hangulDiagnostics.recommendedActions[0]}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
-            <div className="row-control">
-              <div className="lbl">
-                현재 버전
-                <small>{updateVersionLine}</small>
+              <div className="row-control">
+                <div className="lbl">
+                  AI 보정 사용
+                  <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
+                </div>
+                <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
+                  <input
+                    type="checkbox"
+                    checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
+                    disabled={!userSettings?.hasGeminiApiKey}
+                    onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
+                  />
+                  <span style={{fontSize: 12, color: 'var(--muted)'}}>
+                    {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
+                  </span>
+                </label>
               </div>
-              <span
-                className="pos-tag"
-                style={{
-                  background: updateStatusTone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
-              >
-                {updateStatusLabel}
-              </span>
-            </div>
-            {updateInfo?.error && (
-              <div className="runtime-note warn">
-                {updateInfo.error}
+
+              <div className="panel-section-hd" style={{marginTop:4}}>OpenAI API 키 <span className="line" /></div>
+
+              <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
+                <div className="lbl">
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>
+                    <span className={`pos-tag`} style={{background: userSettings?.hasOpenAiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
+                      {userSettings?.hasOpenAiApiKey ? '설정됨' : '미설정'}
+                    </span>
+                    {userSettings?.hasOpenAiApiKey && (
+                      <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
+                        {userSettings.openAiApiKeyPreview}
+                      </span>
+                    )}
+                  </span>
+                  <small>OpenAI 기반 업스케일 재구성 fallback에만 사용합니다. 기본 3단계 업스케일은 Gemini를 사용합니다.</small>
+                </div>
               </div>
-            )}
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                type="button"
-                onClick={() => onCheckUpdate?.()}
-                disabled={updateBusy}
-              >
-                {updateBusy ? '확인 중...' : '업데이트 확인'}
-              </button>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                type="button"
-                onClick={() => onOpenUpdate?.()}
-                disabled={updateBusy || !updateDownloadUrl}
-                title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
-              >
-                {Icon.download} 다운로드 열기
-              </button>
-            </div>
+              <div className="key-input-row">
+                <input
+                  type={showOpenAiKey ? 'text' : 'password'}
+                  className="key-input"
+                  placeholder={userSettings?.hasOpenAiApiKey ? `현재 ${userSettings.openAiApiKeyPreview} (덮어쓰기)` : 'sk-...'}
+                  value={openAiKeyDraft}
+                  onChange={e => setOpenAiKeyDraft(e.target.value)}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+                <button className="btn icon" type="button" onClick={() => setShowOpenAiKey(s => !s)} title={showOpenAiKey ? '숨기기' : '보기'}>
+                  {showOpenAiKey ? '숨' : '보기'}
+                </button>
+              </div>
+              <div style={{display: 'flex', gap: 6}}>
+                <button
+                  className="btn primary"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  onClick={() => { onSaveOpenAiKey?.(openAiKeyDraft.trim()); setOpenAiKeyDraft(''); }}
+                  disabled={!openAiKeyDraft.trim()}
+                >
+                  키 저장
+                </button>
+                <button
+                  className="btn"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  onClick={() => { if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.(''); }}
+                  disabled={!userSettings?.hasStoredOpenAiApiKey}
+                >
+                  저장된 키 삭제
+                </button>
+              </div>
+
+              <div className="panel-section-hd" style={{marginTop:4}}>앱 업데이트 <span className="line" /></div>
+
+              <div className="row-control">
+                <div className="lbl">
+                  현재 버전
+                  <small>{updateVersionLine}</small>
+                </div>
+                <span
+                  className="pos-tag"
+                  style={{
+                    background: updateStatusTone,
+                    minWidth: 58,
+                    textAlign: 'center',
+                  }}
+                >
+                  {updateStatusLabel}
+                </span>
+              </div>
+              {updateInfo?.error && (
+                <div className="runtime-note warn">
+                  {updateInfo.error}
+                </div>
+              )}
+              <div style={{display: 'flex', gap: 6}}>
+                <button
+                  className="btn"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  type="button"
+                  onClick={() => onCheckUpdate?.()}
+                  disabled={updateBusy}
+                >
+                  {updateBusy ? '확인 중...' : '업데이트 확인'}
+                </button>
+                <button
+                  className="btn primary"
+                  style={{flex: 1, justifyContent: 'center'}}
+                  type="button"
+                  onClick={() => onOpenUpdate?.()}
+                  disabled={updateBusy || !updateDownloadUrl}
+                  title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
+                >
+                  {Icon.download} 다운로드 열기
+                </button>
+              </div>
+
+              {canAddDummy && (
+                <button className="btn" style={{justifyContent:'space-between'}} type="button" onClick={() => onAddDummy?.()}>
+                  <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 테스트용 더미 자료 추가</span>
+                </button>
+              )}
+            </DetailFold>
           </div>
         </>
       )}
@@ -6563,6 +6619,72 @@ function SplitModePicker({ splitMode, setSplitMode, disabled, compact = false, i
         );
       })}
     </div>
+  );
+}
+
+// Everything beyond the basic flow sits behind a 상세 설정 fold: closed by
+// default, and remembered per viewer once someone opens it.
+const DETAIL_FOLD_STORAGE_PREFIX = 'edb.detailFold.';
+
+function useDetailFoldState(id){
+  const [open, setOpen] = useState(() => {
+    try {
+      return window.localStorage?.getItem(DETAIL_FOLD_STORAGE_PREFIX + id) === '1';
+    } catch (_err) {
+      return false;
+    }
+  });
+  const toggle = useCallback(() => {
+    setOpen(prev => {
+      const next = !prev;
+      try {
+        window.localStorage?.setItem(DETAIL_FOLD_STORAGE_PREFIX + id, next ? '1' : '0');
+      } catch (_err) {
+        // Local storage is optional; the in-memory toggle still works.
+      }
+      return next;
+    });
+  }, [id]);
+  return [open, toggle];
+}
+
+function DetailFold({ id, summary, badge, forceOpen = false, className = '', children }){
+  const [open, toggle] = useDetailFoldState(id);
+  const isOpen = open || forceOpen;
+  return (
+    <div className={`detail-settings detail-fold ${isOpen ? 'open' : ''} ${className}`.trim()}>
+      <button
+        className="detail-settings-toggle"
+        type="button"
+        aria-expanded={isOpen}
+        onClick={toggle}
+      >
+        <span>
+          <strong>상세 설정</strong>
+          {summary && <small>{summary}</small>}
+        </span>
+        <span className="detail-settings-state">
+          {badge ? <em>{badge}</em> : null}
+          <i aria-hidden="true">{isOpen ? '접기' : '펼치기'}</i>
+        </span>
+      </button>
+      {isOpen && <div className="detail-settings-body">{children}</div>}
+    </div>
+  );
+}
+
+// Inline variant for toolbars, where a boxed fold would not fit.
+function DetailToggleButton({ open, onToggle, title }){
+  return (
+    <button
+      className={`btn ghost-action detail-inline-toggle ${open ? 'on' : ''}`}
+      type="button"
+      aria-expanded={open}
+      title={title}
+      onClick={onToggle}
+    >
+      상세 설정 {open ? '▴' : '▾'}
+    </button>
   );
 }
 
@@ -8820,8 +8942,6 @@ function App(){
     () => pendingFiles.find(file => fileQueueKey(file) === selectedPendingFileKey) || null,
     [pendingFiles, selectedPendingFileKey]
   );
-  const processed = items.filter(i => i.step !== 'raw').length;
-  const progress = items.length ? processed / items.length : 0;
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
   const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
   const hasRunningImageEnhance = backgroundJobs.some(job => job.status === 'running' && job.scope === 'image-enhance');
@@ -10195,9 +10315,6 @@ function App(){
       <TopBar
         fileName={fileName}
         setFileName={setFileName}
-        progress={progress}
-        processed={processed}
-        total={items.length}
         onPublish={onPublish}
         published={published}
         onReset={resetSession}
@@ -10223,7 +10340,6 @@ function App(){
           reorder={reorder}
           removeItem={removeItem}
           addSample={addSample}
-          bulkApply={applyToAll}
           handleFiles={handleFiles}
           pendingFiles={pendingFiles}
           selectedPendingFileKey={selectedPendingFileKey}
@@ -10235,8 +10351,6 @@ function App(){
           aiAvailable={!!userSettings?.hasGeminiApiKey}
           splitMode={splitMode}
           setSplitMode={setSplitMode}
-          addMockSample={addMockSample}
-          canAddDummy={!session && !loading && pendingFiles.length === 0}
           recentSessions={recentSessions}
           restoringSessionId={restoringSessionId}
           onRestoreRecentSession={restoreRecentSession}
@@ -10317,6 +10431,8 @@ function App(){
           onPendingPreviewError={showPendingPreviewError}
           splitMode={splitMode}
           setSplitMode={setSplitMode}
+          canAddDummy={!session && !loading && pendingFiles.length === 0}
+          onAddDummy={addMockSample}
         />
       </div>
 

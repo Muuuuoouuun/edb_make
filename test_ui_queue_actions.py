@@ -39,7 +39,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertNotIn("setInputIntent", source)
         self.assertNotIn("INPUT_INTENT_OPTIONS.map", side_panel)
         self.assertIn("splitMode, setSplitMode,", side_panel)
-        self.assertIn("업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다", side_panel)
+        self.assertIn('<div className="panel-section-hd">분할 방식 <span className="line" /></div>', side_panel)
         self.assertEqual(2, side_panel.count("<SplitModePicker") + side_panel.count("<PendingFilePreview"))
 
     def test_image_only_recognition_uses_fast_non_ai_path(self) -> None:
@@ -199,19 +199,25 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("['check_needed', '확인 필요', statusCounts.check_needed]", filter_source)
         self.assertNotIn("['check_needed', '확인 필요', actionableStatusCount]", filter_source)
 
-    def test_topbar_exposes_reset_icon_outside_more_menu(self) -> None:
+    def test_topbar_keeps_reset_and_undo_and_folds_the_rest(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         topbar = source.split("function TopBar", 1)[1]
         topbar = topbar.split("function ReviewStage", 1)[0]
         actions = topbar.split('<div className="topbar-actions"', 1)[1]
         actions = actions.split('<div className="topbar-more"', 1)[0]
+        more_menu = topbar.split('<div className="topbar-more-menu" role="menu">', 1)[1]
 
         self.assertIn('aria-label="초기화"', actions)
         self.assertIn("onClick={onReset}", actions)
         self.assertIn("{Icon.reset}", actions)
-        self.assertLess(actions.index('aria-label="초기화"'), actions.index("aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}"))
+        self.assertIn('aria-label="되돌리기"', actions)
+        self.assertNotIn("onRefresh", actions)
+        self.assertNotIn("onExportImages", actions)
+        self.assertIn("onRefresh?.();", more_menu)
+        self.assertIn("onExportImages?.();", more_menu)
         self.assertIn("저장된 최신 세션 다시 읽기", topbar)
         self.assertNotIn("현재 세션 다시 불러오기", topbar)
+        self.assertNotIn("처리됨", topbar)
 
     def test_review_selected_boxes_delete_key_excludes_and_can_undo(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
