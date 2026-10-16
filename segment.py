@@ -3410,7 +3410,13 @@ def _colored_problem_marker_offsets(image: Image.Image, column_box: Box, box: Bo
     return [min(rows)]
 
 
-def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+def _dark_numeric_problem_marker_component_offsets(
+    image: Image.Image,
+    column_box: Box,
+    box: Box,
+    *,
+    max_digit_left: int = 50,
+) -> list[int]:
     if cv2 is None or np is None:
         return []
 
@@ -3506,7 +3512,25 @@ def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_bo
         if not candidate_digits:
             continue
         digit = max(candidate_digits, key=lambda item: item["right"])
-        offsets.append(min(digit["y"], dot["y"]))
+        # walk left over the other digits of a multi-digit number ("11.")
+        leftmost = digit
+        while True:
+            previous_digit = next(
+                (
+                    other
+                    for other in digit_like
+                    if other is not leftmost
+                    and 0 <= leftmost["x"] - other["right"] <= 8
+                    and abs(other["y"] - leftmost["y"]) <= 6
+                ),
+                None,
+            )
+            if previous_digit is None:
+                break
+            leftmost = previous_digit
+        if leftmost["x"] > max_digit_left:
+            continue
+        offsets.append(min(leftmost["y"], dot["y"]))
 
     if not offsets:
         return []
@@ -3520,10 +3544,16 @@ def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_bo
     return clustered
 
 
-def _visual_problem_marker_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+def _visual_problem_marker_offsets(
+    image: Image.Image,
+    column_box: Box,
+    box: Box,
+    *,
+    max_digit_left: int = 50,
+) -> list[int]:
     offsets = [
         *_colored_problem_marker_offsets(image, column_box, box),
-        *_dark_numeric_problem_marker_component_offsets(image, column_box, box),
+        *_dark_numeric_problem_marker_component_offsets(image, column_box, box, max_digit_left=max_digit_left),
     ]
     if not offsets:
         return []
@@ -3932,12 +3962,27 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
     return marker_mask, content_box, tightened
 
 
+# Visual columns are tightened to the text's left margin, where exam numbers
+# sit.  Choice marks (①②…), list items and ㉠ annotations are indented by
+# 25px+ at 200 dpi; with the old 50px window they were read as problem
+# numbers and real scans were split into 2-3x as many regions.
+VISUAL_MARKER_MAX_DIGIT_LEFT_PX = 14
+
+
 def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[float]:
-    offsets = _visual_problem_marker_offsets(image, column_box, column_box)
+    offsets = _visual_problem_marker_offsets(
+        image,
+        column_box,
+        column_box,
+        max_digit_left=VISUAL_MARKER_MAX_DIGIT_LEFT_PX,
+    )
     tops: list[float] = []
     for offset in offsets:
         top = column_box.top + float(offset)
         if top < column_box.top - 1.0 or top > column_box.bottom + 1.0:
+            continue
+        # page-number box in the footer ("5 / 16")
+        if top > float(image.height) * 0.96:
             continue
         if tops and top - tops[-1] <= 22.0:
             continue
