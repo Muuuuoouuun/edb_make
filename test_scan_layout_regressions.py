@@ -222,3 +222,158 @@ class TestScanLayoutRegressions(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --- reading order (N order: whole left column, then right column) --------
+
+def _page(doc, divider: bool):
+    page = doc.new_page(width=W, height=H)
+    page.insert_font(fontname="ng", fontfile=FONT)
+    if divider:
+        page.draw_line((297, 50), (297, 800), width=0.6)
+    return page
+
+
+def _t(page, x, y, value):
+    page.insert_text((x, y), value, fontname="ng", fontsize=9)
+
+
+def _q(page, column, y, number, *, boxed=False):
+    x0, x1 = COLS[column]
+    _t(page, x0, y, f"{number}. 윗글에 대한 설명으로 가장 적절한 것은?")
+    y += 14
+    if boxed:
+        page.draw_rect(fitz.Rect(x0, y, x1, y + 60), width=0.8)
+        _t(page, (x0 + x1) / 2 - 12, y + 12, "<보 기>")
+        _t(page, x0 + 8, y + 28, "ㄱ. 첫째 진술은 옳다.")
+        _t(page, x0 + 8, y + 42, "ㄴ. 둘째 진술은 옳다.")
+        y += 68
+    for index, mark in enumerate("①②③④⑤"):
+        _t(page, x0 + 6, y, f"{mark} 선택지 {index + 1}번")
+        y += 14
+    return y + 18
+
+
+def _reading_order_doc(case: str, divider: bool):
+    doc = fitz.open()
+    page = _page(doc, divider)
+    if case == "header":
+        page.draw_rect(fitz.Rect(40, 40, 555, 100), width=1)
+        _t(page, 250, 65, "2027학년도 모의고사")
+        _t(page, 230, 85, "국어 영역 (홀수형)")
+        y = 130
+        for number in (1, 2, 3, 4):
+            y = _q(page, 0, y, number)
+        y = 130
+        for number in (5, 6, 7, 8):
+            y = _q(page, 1, y, number)
+    elif case == "rightbox":
+        y = 60
+        for number in (1, 2, 3, 4):
+            y = _q(page, 0, y, number)
+        y = 60
+        for number in (5, 6, 7):
+            y = _q(page, 1, y, number, boxed=number == 6)
+    elif case == "passage_after_question":
+        y = 60
+        for number in (1, 2):
+            y = _q(page, 0, y, number)
+        _t(page, 40, y, "[3~5] 다음 글을 읽고 물음에 답하시오.")
+        y += 10
+        page.draw_rect(fitz.Rect(36, y, 289, 790), width=0.8)
+        line_y = y + 14
+        while line_y < 780:
+            _t(page, 44, line_y, LINE)
+            line_y += 14
+        page.draw_rect(fitz.Rect(306, 50, 559, 300), width=0.8)
+        line_y = 64
+        while line_y < 290:
+            _t(page, 314, line_y, LINE)
+            line_y += 14
+        y = 320
+        for number in (3, 4, 5):
+            y = _q(page, 1, y, number)
+    return doc
+
+
+def _scan_of(doc):
+    scan = fitz.open()
+    for page in doc:
+        pixmap = page.get_pixmap(dpi=200)
+        target = scan.new_page(width=page.rect.width, height=page.rect.height)
+        target.insert_image(target.rect, pixmap=pixmap)
+    return scan
+
+
+def _first_page_model(doc, temp_dir: str, name: str):
+    path = Path(temp_dir) / name
+    doc.save(path)
+    pages = prepare_source_pages(path, pdf_dpi=200, detect_perspective=False, deskew=True, crop_margins=True)
+    model = build_page_model(pages[0], subject=Subject.KOREAN, ocr_mode="none", ai_config=build_ai_fallback_config(mode="off"))
+    return model
+
+
+def _ordered_problem_regions(model):
+    """(column, top) of every problem's blocks, in problem order."""
+    by_id = {block.block_id: block for block in model.blocks}
+    split = model.width_px / 2.0
+    regions = []
+    for problem in model.problems:
+        boxes = [by_id[i].bbox for i in _all_ids(problem) if i in by_id]
+        regions.append([("L" if (b.left + b.right) / 2 < split else "R", b) for b in boxes])
+    return regions
+
+
+@unittest.skipIf(FONT is None, "Korean font required for synthetic exam pages")
+class TestTwoColumnReadingOrder(unittest.TestCase):
+    def _assert_no_problem_spans_both_columns(self, model):
+        for regions in _ordered_problem_regions(model):
+            sides = {side for side, box in regions if not _is_full_width(model, box)}
+            self.assertLessEqual(len(sides), 1, regions)
+
+    def test_right_column_without_centre_rule_keeps_its_own_problems(self):
+        for scanned in (False, True):
+            with self.subTest(scanned=scanned), tempfile.TemporaryDirectory() as temp_dir:
+                doc = _reading_order_doc("rightbox", divider=False)
+                model = _first_page_model(_scan_of(doc) if scanned else doc, temp_dir, "rightbox.pdf")
+                regions = _ordered_problem_regions(model)
+                self.assertEqual(7, len(regions))
+                self.assertEqual(["L"] * 4 + ["R"] * 3, [r[0][0] for r in regions])
+                self._assert_no_problem_spans_both_columns(model)
+
+    def test_full_width_header_box_is_read_first_not_after_left_column(self):
+        for scanned in (False, True):
+            with self.subTest(scanned=scanned), tempfile.TemporaryDirectory() as temp_dir:
+                doc = _reading_order_doc("header", divider=True)
+                model = _first_page_model(_scan_of(doc) if scanned else doc, temp_dir, "header.pdf")
+                regions = _ordered_problem_regions(model)
+                if scanned:
+                    # scans keep the band, as one full-width region read first
+                    self.assertEqual(9, len(regions))
+                    header = regions[0]
+                    self.assertEqual(1, len(header))
+                    self.assertTrue(_is_full_width(model, header[0][1]))
+                    regions = regions[1:]
+                else:
+                    # born-digital PDFs treat it as page chrome; it must not
+                    # be glued to the end of the left column (Z order)
+                    self.assertEqual(8, len(regions))
+                for problem_regions in regions:
+                    self.assertTrue(all(box.top > model.height_px * 0.08 for _side, box in problem_regions))
+                self.assertEqual(["L"] * 4 + ["R"] * 4, [r[0][0] for r in regions])
+                self._assert_no_problem_spans_both_columns(model)
+
+    def test_question_above_passage_header_does_not_swallow_the_passage(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            doc = _reading_order_doc("passage_after_question", divider=True)
+            model = _first_page_model(doc, temp_dir, "passage.pdf")
+            passage = next(
+                b for b in model.blocks
+                if b.metadata.get("segmenter") == "pdf-passage-range" and b.metadata.get("marker_kind") == "passage_range"
+            )
+            question_two = next(b for b in model.blocks if b.metadata.get("problem_number") == 2)
+            self.assertLessEqual(question_two.bbox.bottom, passage.bbox.top)
+
+
+def _is_full_width(model, box) -> bool:
+    return box.width >= model.width_px * 0.7
