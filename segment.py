@@ -3528,6 +3528,19 @@ def _dark_numeric_problem_marker_component_offsets(
         if not candidate_digits:
             continue
         digit = max(candidate_digits, key=lambda item: item["right"])
+        # A printed period is followed by a word space.  Jamo pieces of a
+        # Hangul syllable or letters inside a word have ink right after the
+        # "dot" and split prose pages at random line starts.
+        space_px = max(3, int(digit["height"] * 0.2))
+        if any(
+            other is not dot
+            and other is not digit
+            and dot["right"] <= other["x"] + 1 < dot["right"] + space_px
+            and other["y"] < digit["bottom"]
+            and other["bottom"] > digit["y"]
+            for other in components
+        ):
+            continue
         # walk left over the other digits of a multi-digit number ("11.")
         leftmost = digit
         while True:
