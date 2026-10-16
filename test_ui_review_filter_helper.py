@@ -125,6 +125,59 @@ class TestUiReviewFilterHelper(unittest.TestCase):
             """
         )
 
+    def test_review_mode_copy_uses_content_target_before_input_intent(self) -> None:
+        run_node(
+            """
+            const { reviewModeCopy } = require('./ui_prototype/review_filters.js');
+            const copy = reviewModeCopy({
+              content_target: 'shared-passages',
+              input_intent: 'page-as-is',
+              pages: [{}, {}],
+            }, { core: 0, supplemental: 3, total: 3 });
+            if (copy.mode !== 'shared-passages' || copy.title !== '지문 검수') {
+              throw new Error(`unexpected review mode: ${JSON.stringify(copy)}`);
+            }
+            if (copy.countLabel !== '공통 지문 3개') {
+              throw new Error(`unexpected passage count: ${copy.countLabel}`);
+            }
+            """
+        )
+
+    def test_review_mode_copy_labels_page_as_is_without_questions(self) -> None:
+        run_node(
+            """
+            const { formatReviewModeCount, reviewModeCopy } = require('./ui_prototype/review_filters.js');
+            const copy = reviewModeCopy({
+              inputIntent: 'page-as-is',
+              pages: Array.from({ length: 16 }, () => ({})),
+            }, { core: 16, supplemental: 0, total: 16 });
+            if (copy.title !== '페이지 검수' || copy.headerCountLabel !== '16페이지 원본') {
+              throw new Error(`unexpected page-as-is copy: ${JSON.stringify(copy)}`);
+            }
+            const compact = formatReviewModeCount(copy.mode, { total: 1 }, { compact: true, pageCount: 1 });
+            if (compact !== '페이지 원본') {
+              throw new Error(`unexpected compact page label: ${compact}`);
+            }
+            if (JSON.stringify(copy).includes('문항')) {
+              throw new Error(`page-as-is copy should not mention questions: ${JSON.stringify(copy)}`);
+            }
+            """
+        )
+
+    def test_review_mode_copy_keeps_problem_count_semantics(self) -> None:
+        run_node(
+            """
+            const { reviewModeCopy } = require('./ui_prototype/review_filters.js');
+            const copy = reviewModeCopy({
+              input_intent: 'multi-problem',
+              pages: [{}],
+            }, { core: 4, supplemental: 1, total: 5 });
+            if (copy.title !== '문항 검수' || copy.countLabel !== '4문항 + 자료 1') {
+              throw new Error(`unexpected problem copy: ${JSON.stringify(copy)}`);
+            }
+            """
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

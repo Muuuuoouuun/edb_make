@@ -118,6 +118,121 @@ class TestPipelineRouter(unittest.TestCase):
         self.assertFalse(decision.should_use_ai)
         self.assertEqual([], decision.trigger_reasons)
 
+    def test_pdf_text_markers_ignore_supplemental_passage_fragment_in_marker_ratio(self):
+        passage = ProblemUnit(
+            unit_id="passage-1-3",
+            subject=Subject.KOREAN,
+            title="1~3번 공통 지문",
+            metadata={
+                "passage_role": "passage_fragment",
+                "supplemental_item": True,
+            },
+        )
+        page = PageModel(
+            page_id="pdf-page-with-passage",
+            width_px=600,
+            height_px=800,
+            subject=Subject.KOREAN,
+            blocks=[
+                _block(
+                    f"b-{number}",
+                    number * 100,
+                    metadata={
+                        "segmenter": "pdf-text-markers",
+                        "ocr_backend": "pdf_text_marker",
+                        "force_problem_start": True,
+                        "problem_marker": True,
+                        "problem_number": number,
+                        "problem_number_source": "pdf_text_marker",
+                    },
+                )
+                for number in range(1, 4)
+            ]
+            + [
+                ContentBlock(
+                    block_id="passage",
+                    block_type=BlockType.IMAGE,
+                    bbox=Box(left=0, top=450, width=300, height=220),
+                    reading_order=450,
+                    confidence=1.0,
+                    metadata={
+                        "segmenter": "pdf-text-markers",
+                        "large_block": True,
+                        "block_area_ratio": 0.22,
+                    },
+                )
+            ],
+            problems=[
+                _problem(f"p-{number}", number)
+                for number in range(1, 4)
+            ]
+            + [passage],
+            metadata={
+                "segmenter": "pdf-text-markers",
+                "block_count": 4,
+                "large_block_ratio": 1.0,
+                "pdf_text_marker_count": 3,
+                "grouping_diagnostics": {
+                    "marker_counts": {"problem_marker_block_count": 3},
+                    "problem_number_source_counts": {"pdf_text_marker": 3},
+                },
+            },
+        )
+
+        decision = decide_page_route(page, ocr_mode="none", ai_enabled=True, ai_mode="auto")
+
+        self.assertEqual("trusted", decision.quality_status)
+        self.assertEqual("local_only", decision.route)
+        self.assertFalse(decision.should_use_ai)
+        self.assertEqual(3, decision.profile.diagnostics["grouping"]["core_problem_count"])
+        self.assertEqual(1, decision.profile.diagnostics["grouping"]["supplemental_problem_count"])
+
+    def test_pdf_passage_range_only_page_stays_local(self):
+        page = PageModel(
+            page_id="pdf-passage-only",
+            width_px=600,
+            height_px=800,
+            subject=Subject.KOREAN,
+            blocks=[
+                _block(
+                    "passage-left",
+                    100,
+                    metadata={"segmenter": "pdf-passage-ranges"},
+                    text="공통 지문 왼쪽",
+                ),
+                _block(
+                    "passage-right",
+                    400,
+                    metadata={"segmenter": "pdf-passage-ranges"},
+                    text="공통 지문 오른쪽",
+                ),
+            ],
+            problems=[
+                ProblemUnit(
+                    unit_id="passage-10-13",
+                    subject=Subject.KOREAN,
+                    title="10~13번 공통 지문",
+                    metadata={
+                        "passage_role": "passage_fragment",
+                        "supplemental_item": True,
+                    },
+                )
+            ],
+            metadata={
+                "segmenter": "pdf-passage-ranges",
+                "block_count": 2,
+                "large_block_ratio": 1.0,
+                "pdf_passage_range_block_count": 2,
+            },
+        )
+
+        decision = decide_page_route(page, ocr_mode="none", ai_enabled=True, ai_mode="auto")
+
+        self.assertEqual("trusted", decision.quality_status)
+        self.assertEqual("local_only", decision.route)
+        self.assertFalse(decision.should_use_ai)
+        self.assertEqual([], decision.trigger_reasons)
+
     def test_unreliable_pdf_text_markers_are_suspicious_and_route_to_ai_when_enabled(self):
         page = PageModel(
             page_id="unreliable-pdf-page",
@@ -185,6 +300,81 @@ class TestPipelineRouter(unittest.TestCase):
         self.assertFalse(decision.should_use_ai)
         self.assertEqual("ai_repair", decision.next_best_action)
         self.assertIn("merged_problem_block", decision.trigger_reasons)
+
+    def test_ocr_diagnostics_explain_fallback_timing_and_semantic_route(self):
+        page = PageModel(
+            page_id="ocr-backoff-page",
+            width_px=600,
+            height_px=800,
+            subject=Subject.MATH,
+            blocks=[
+                _block(
+                    "fallback-block",
+                    100,
+                    metadata={
+                        "ocr_backend": "gemini",
+                        "ocr_latency_ms": 120,
+                        "ocr_fallback_reason": "network_or_timeout",
+                        "ocr_fallback_message": (
+                            "Gemini OCR is temporarily unavailable. "
+                            "The block remains image-based for review."
+                        ),
+                        "ocr_retry_after_ms": 8000,
+                        "ocr_circuit_open": True,
+                        "ocr_cache_write_skipped": True,
+                    },
+                    text="fallback image",
+                ),
+                _block(
+                    "recognized-block",
+                    400,
+                    metadata={"ocr_backend": "gemini", "ocr_latency_ms": 380},
+                    text="2. recognized",
+                ),
+            ],
+            problems=[_problem("p-2", 2, source="ocr_top_left")],
+            metadata={
+                "segmenter": "document-bands",
+                "block_count": 2,
+                "recognition_timing_ms": {"block_ocr": 510},
+            },
+        )
+
+        decision = decide_page_route(page, ocr_mode="gemini", ai_enabled=False, ai_mode="off")
+        diagnostics = decision.profile.diagnostics["ocr"]
+
+        self.assertEqual({"network_or_timeout": 1}, diagnostics["fallback_reason_counts"])
+        self.assertEqual(1, diagnostics["circuit_open_block_count"])
+        self.assertEqual(1, diagnostics["ocr_cache_write_skipped_count"])
+        self.assertEqual(8000, diagnostics["retry_after_ms_max"])
+        self.assertEqual(250, diagnostics["backend_latency_ms_avg"])
+        self.assertEqual(380, diagnostics["backend_latency_ms_p95"])
+        self.assertEqual(510, diagnostics["processing_time_ms"])
+        self.assertEqual("review_required_image_fallback", diagnostics["semantic_text_route"])
+        self.assertIn("image-based for review", diagnostics["fallback_messages"][0])
+
+    def test_ocr_p95_uses_nearest_rank_for_twenty_samples(self):
+        page = PageModel(
+            page_id="latency-p95",
+            width_px=1000,
+            height_px=1400,
+            subject=Subject.MATH,
+            blocks=[
+                _block(
+                    f"latency-{index}",
+                    index * 20,
+                    metadata={"ocr_backend": "local", "ocr_latency_ms": index},
+                    text=f"{index}. problem",
+                )
+                for index in range(1, 21)
+            ],
+            problems=[],
+            metadata={"segmenter": "document-bands", "block_count": 20},
+        )
+
+        decision = decide_page_route(page, ocr_mode="local", ai_enabled=False, ai_mode="off")
+
+        self.assertEqual(19, decision.profile.diagnostics["ocr"]["backend_latency_ms_p95"])
 
 
 if __name__ == "__main__":

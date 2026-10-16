@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import io
+import json
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from PIL import Image
 
 from build_mvp_export import write_ui_session_bundle as write_mvp_ui_session_bundle
 from build_problem_board_edb import (
+    main as build_problem_board_main,
     resolve_legacy_prototype_data_path,
     write_ui_session_bundle as write_board_ui_session_bundle,
 )
@@ -41,6 +48,35 @@ class TestLegacyUiArtifactPaths(unittest.TestCase):
             allowed = Path(raw_tmp) / "prototype_data.js"
 
             self.assertEqual(allowed, resolve_legacy_prototype_data_path(allowed))
+
+    def test_board_cli_writes_quality_session_bundle(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            source = root / "source.png"
+            output_dir = root / "output"
+            Image.new("RGB", (640, 960), "white").save(source)
+            argv = [
+                "build_problem_board_edb.py",
+                str(source),
+                "--output-dir",
+                str(output_dir),
+                "--input-intent",
+                "page-as-is",
+                "--ocr",
+                "noop",
+                "--skip-deskew",
+                "--skip-crop",
+            ]
+
+            with patch("sys.argv", argv), redirect_stdout(io.StringIO()):
+                exit_code = build_problem_board_main()
+
+            self.assertEqual(0, exit_code)
+            session_path = output_dir / "ui_session.json"
+            self.assertTrue(session_path.is_file())
+            session = json.loads(session_path.read_text(encoding="utf-8"))
+            self.assertIn("classinPreflight", session)
+            self.assertTrue((output_dir / "classin_handoff.json").is_file())
 
 
 if __name__ == "__main__":

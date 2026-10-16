@@ -1,0 +1,578 @@
+{
+  "rubric_version": "ai-capability-v1",
+  "generated_at": "2026-07-27T09:53:50.393952+00:00",
+  "scope": "AI OCR, page repair, image reconstruction, runtime efficiency, cost observability, and user AI controls",
+  "targets": {
+    "weighted_average": 8.0,
+    "minimum_dimension": 6.8
+  },
+  "overall_score": 9.36,
+  "simple_average": 9.42,
+  "minimum_dimension": "economics",
+  "minimum_score": 8.8,
+  "passed": true,
+  "dimensions": {
+    "recognition": {
+      "label": "인식",
+      "weight": 0.3,
+      "score": 9.3,
+      "possible": 10.0,
+      "metrics": [
+        {
+          "metric_id": "rec.exact_schema",
+          "label": "정확 전사 프롬프트와 구조화 응답 스키마",
+          "weight": 1.4,
+          "ratio": 1.0,
+          "evidence": "ocr_backend.py: structured Gemini OCR contract",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.4,
+          "passed": true
+        },
+        {
+          "metric_id": "rec.offline_route",
+          "label": "로컬 OCR이 클라우드로 우회하지 않음",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "test_ai_global_settings.py: hard offline route regression",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "rec.risk_escalation",
+          "label": "경제형 OCR의 고신뢰도 표기 변형을 품질 모델로 재검증",
+          "weight": 1.6,
+          "ratio": 1.0,
+          "evidence": "build_structured_page_json.py + test_recognition_speed_quality.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.6,
+          "passed": true
+        },
+        {
+          "metric_id": "rec.cache_identity",
+          "label": "소스 해시·모델 동작 버전을 포함한 OCR 캐시 식별",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "build_structured_page_json.py: stable OCR cache identity",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "rec.live_balanced_min",
+          "label": "균형형 OCR 실측 최저 유사도 ≥ 0.98",
+          "weight": 2.2,
+          "ratio": 1.0,
+          "evidence": "C:\\Projects\\Class_project\\edb_make\\.audit\\ai-ocr-benchmark-current.json: min_similarity=1.0",
+          "evidence_type": "live_benchmark",
+          "backlog": "균형형 OCR 최저 유사도를 0.98 이상으로 올린다.",
+          "points": 2.2,
+          "passed": true
+        },
+        {
+          "metric_id": "rec.live_economy_min",
+          "label": "경제형+선택 재검증 경로 실측 최저 유사도 ≥ 0.98",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "C:\\Projects\\Class_project\\edb_make\\.audit\\ai-ocr-benchmark-current.json: routed_min_similarity=1.0, escalations=1",
+          "evidence_type": "live_benchmark",
+          "backlog": "경제형+선택 재검증 경로의 최저 유사도를 0.98 이상으로 올린다.",
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "rec.live_errors",
+          "label": "균형형·경제형 실측 API 오류 0건",
+          "weight": 0.7,
+          "ratio": 1.0,
+          "evidence": "C:\\Projects\\Class_project\\edb_make\\.audit\\ai-ocr-benchmark-current.json: calls=8, errors=0",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.7,
+          "passed": true
+        },
+        {
+          "metric_id": "rec.real_corpus",
+          "label": "실제 문서 OCR 코퍼스가 벤치마크에 포함됨",
+          "weight": 0.7,
+          "ratio": 0.0,
+          "evidence": "C:\\Projects\\Class_project\\edb_make\\.audit\\ai-ocr-benchmark-current.json: real_source_count=0",
+          "evidence_type": "code_and_test",
+          "backlog": "개인정보를 제거한 실제 시험지 표본을 정답 전사와 함께 추가한다.",
+          "points": 0.0,
+          "passed": false
+        }
+      ]
+    },
+    "output_quality": {
+      "label": "결과 품질",
+      "weight": 0.25,
+      "score": 9.0,
+      "possible": 10.0,
+      "metrics": [
+        {
+          "metric_id": "quality.safe_auto",
+          "label": "자동 이미지 개선은 비생성 보존 모드",
+          "weight": 1.4,
+          "ratio": 1.0,
+          "evidence": "app_server.py: auto -> deterministic preserve",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.4,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.original_source",
+          "label": "반복 개선도 최초 원본에서 재시작",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "app_server.py: original image provenance",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.pixel_gate",
+          "label": "생성 결과의 누락·구조 변화 콘텐츠 게이트",
+          "weight": 1.3,
+          "ratio": 1.0,
+          "evidence": "image_reconstruction_backend.py: content-preservation analysis",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.3,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.retry_fallback",
+          "label": "게이트 실패 시 1회 재시도 후 결정론적 폴백",
+          "weight": 1.5,
+          "ratio": 1.0,
+          "evidence": "app_server.py: bounded recovery path",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.5,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.semantic_review",
+          "label": "생성형 결과는 의미 동일성 미검증 상태를 사용자 검토로 노출",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "app_server.py: semantic review guardrail",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.formula_guard",
+          "label": "수학·과학 수식 누락 전용 위험 플래그",
+          "weight": 0.9,
+          "ratio": 1.0,
+          "evidence": "app_server.py: subject-aware formula-loss review",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.9,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.exact_copy_prompt",
+          "label": "문자·수식 불변 exact-copy 생성 프롬프트",
+          "weight": 0.9,
+          "ratio": 1.0,
+          "evidence": "image_reconstruction_backend.py: exact-copy prompt",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.9,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.regression_tests",
+          "label": "누락·문자 구조·폴백·의미 검토 회귀 테스트",
+          "weight": 0.8,
+          "ratio": 1.0,
+          "evidence": "test_openai_image_reconstruction.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.8,
+          "passed": true
+        },
+        {
+          "metric_id": "quality.automatic_semantic_diff",
+          "label": "원본/결과 OCR 의미 비교 자동 판정",
+          "weight": 1.0,
+          "ratio": 0.0,
+          "evidence": "not implemented; current code correctly marks it unverified",
+          "evidence_type": "code_and_test",
+          "backlog": "원본과 생성 결과를 독립 OCR로 비교하되 오판 시 원본을 유지하는 게이트를 추가한다.",
+          "points": 0.0,
+          "passed": false
+        }
+      ]
+    },
+    "efficiency": {
+      "label": "효율·신뢰성",
+      "weight": 0.15,
+      "score": 10.0,
+      "possible": 10.0,
+      "metrics": [
+        {
+          "metric_id": "eff.trusted_pdf_skip",
+          "label": "신뢰 가능한 PDF 텍스트 블록 OCR 생략",
+          "weight": 1.3,
+          "ratio": 1.0,
+          "evidence": "build_structured_page_json.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.3,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.cache",
+          "label": "1차·재검증·페이지 보정 캐시",
+          "weight": 1.3,
+          "ratio": 1.0,
+          "evidence": "pipeline cache at OCR and repair stages",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.3,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.concurrency",
+          "label": "페이지/블록 호출 동시성 상한",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "build_structured_page_json.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.lazy_backend",
+          "label": "캐시 적중 시 AI 백엔드 지연 생성",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "build_structured_page_json.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.circuit_breaker",
+          "label": "연속 provider 실패 회로 차단",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "ocr_backend.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.negative_capability",
+          "label": "로컬 OCR 미설치 탐지 결과 단기 캐시",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "ocr_backend.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.payload_compression",
+          "label": "큰 OCR 이미지는 JPEG로 전송량 절감",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "ocr_backend.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.telemetry",
+          "label": "단계별 지연·캐시·호출량 메타데이터",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "build_structured_page_json.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "eff.regression_tests",
+          "label": "속도 경로·캐시·동시성 회귀 테스트",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "test_recognition_speed_quality.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        }
+      ]
+    },
+    "economics": {
+      "label": "경제성·비용",
+      "weight": 0.15,
+      "score": 8.8,
+      "possible": 10.0,
+      "metrics": [
+        {
+          "metric_id": "cost.versioned_prices",
+          "label": "모델별 단가표 버전 고정",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "ai_usage.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.cached_tokens",
+          "label": "캐시 입력·추론 토큰을 구분한 비용 계산",
+          "weight": 0.8,
+          "ratio": 1.0,
+          "evidence": "ai_usage.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.8,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.breakdown",
+          "label": "모델·단계별 USD/KRW 비용 집계",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "ai_usage.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.ui_visibility",
+          "label": "사용자 화면에 실행 비용 표시",
+          "weight": 0.8,
+          "ratio": 1.0,
+          "evidence": "ui_prototype/app.jsx",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.8,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.economy_profile",
+          "label": "저비용 OCR 프로필과 선택적 품질 승격",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "ocr_backend.py + build_structured_page_json.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.non_gen_auto",
+          "label": "자동 이미지 개선의 생성 비용 0원 경로",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "app_server.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.image_cap",
+          "label": "생성 이미지 해상도 비용 상한",
+          "weight": 0.8,
+          "ratio": 1.0,
+          "evidence": "app_server.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.8,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.global_off",
+          "label": "전체 AI 비용을 즉시 차단하는 전역 OFF",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "app_server.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.unpriced_visibility",
+          "label": "가격 미등록 요청을 별도 집계",
+          "weight": 0.8,
+          "ratio": 1.0,
+          "evidence": "ai_usage.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.8,
+          "passed": true
+        },
+        {
+          "metric_id": "cost.hard_budget",
+          "label": "실행 전 사용자 지정 비용 예산 상한",
+          "weight": 1.2,
+          "ratio": 0.0,
+          "evidence": "not implemented; costs are estimated after usage",
+          "evidence_type": "code_and_test",
+          "backlog": "세션별 예상 비용 상한과 초과 전 확인/중단 정책을 추가한다.",
+          "points": 0.0,
+          "passed": false
+        }
+      ]
+    },
+    "user_control": {
+      "label": "사용자 통제",
+      "weight": 0.15,
+      "score": 10.0,
+      "possible": 10.0,
+      "metrics": [
+        {
+          "metric_id": "control.persisted_toggle",
+          "label": "AI ON/OFF 설정 영속 저장",
+          "weight": 1.5,
+          "ratio": 1.0,
+          "evidence": "user_settings.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.5,
+          "passed": true
+        },
+        {
+          "metric_id": "control.server_enforcement",
+          "label": "서버가 재시도·생성·인식에서 OFF 강제",
+          "weight": 2.0,
+          "ratio": 1.0,
+          "evidence": "app_server.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 2.0,
+          "passed": true
+        },
+        {
+          "metric_id": "control.ui_toggle",
+          "label": "설정 화면 ON/OFF 버튼과 상태 표시",
+          "weight": 1.2,
+          "ratio": 1.0,
+          "evidence": "ui_prototype/app.jsx",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.2,
+          "passed": true
+        },
+        {
+          "metric_id": "control.ui_disable",
+          "label": "OFF 상태에서 AI 작업 버튼 비활성화",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "ui_prototype/app.jsx",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "control.keys_preserved",
+          "label": "OFF 전환 시 저장 API 키 유지",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "test_ai_global_settings.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "control.no_secret_echo",
+          "label": "설정 응답에 API 키 원문 미노출",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "test_ai_global_settings.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "control.explicit_generation",
+          "label": "생성형 이미지 개선은 명시적 선택만 허용",
+          "weight": 1.0,
+          "ratio": 1.0,
+          "evidence": "app_server.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 1.0,
+          "passed": true
+        },
+        {
+          "metric_id": "control.session_state",
+          "label": "세션 응답에 실제 적용 AI 상태 기록",
+          "weight": 0.5,
+          "ratio": 1.0,
+          "evidence": "app_server.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.5,
+          "passed": true
+        },
+        {
+          "metric_id": "control.regression_tests",
+          "label": "전역 OFF·로컬 강제·키 보존 회귀 테스트",
+          "weight": 0.8,
+          "ratio": 1.0,
+          "evidence": "test_ai_global_settings.py",
+          "evidence_type": "code_and_test",
+          "backlog": null,
+          "points": 0.8,
+          "passed": true
+        }
+      ]
+    }
+  },
+  "priority_backlog": [
+    {
+      "dimension": "economics",
+      "metric_id": "cost.hard_budget",
+      "priority_loss": 1.2,
+      "action": "세션별 예상 비용 상한과 초과 전 확인/중단 정책을 추가한다."
+    },
+    {
+      "dimension": "output_quality",
+      "metric_id": "quality.automatic_semantic_diff",
+      "priority_loss": 1.0,
+      "action": "원본과 생성 결과를 독립 OCR로 비교하되 오판 시 원본을 유지하는 게이트를 추가한다."
+    },
+    {
+      "dimension": "recognition",
+      "metric_id": "rec.real_corpus",
+      "priority_loss": 0.7,
+      "action": "개인정보를 제거한 실제 시험지 표본을 정답 전사와 함께 추가한다."
+    }
+  ],
+  "guardrails": [
+    "정적 코드·테스트 존재는 실데이터 정확도를 증명하지 않는다.",
+    "인식 정확도 점수에는 제공된 live OCR benchmark만 사용한다.",
+    "실문서 source_count=0이면 real-corpus 항목은 반드시 0점이다.",
+    "생성 이미지의 자동 의미 비교가 없으면 해당 항목은 반드시 0점이다.",
+    "비용은 provider 공개 단가 기반 추정치이며 청구액과 다를 수 있다."
+  ]
+}

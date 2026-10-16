@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 from collections.abc import Mapping
@@ -60,12 +61,14 @@ def _serialize_box(box: Box) -> dict[str, float]:
 
 
 def _deserialize_box(payload: dict[str, Any]) -> Box:
-    return Box(
-        left=float(payload.get("left", 0.0)),
-        top=float(payload.get("top", 0.0)),
-        width=float(payload.get("width", 0.0)),
-        height=float(payload.get("height", 0.0)),
-    )
+    if not isinstance(payload, dict):
+        raise ValueError("invalid cached OCR bounding box")
+    values = {key: float(payload.get(key, 0.0)) for key in ("left", "top", "width", "height")}
+    if not all(math.isfinite(value) for value in values.values()):
+        raise ValueError("nonfinite cached OCR bounding box")
+    if values["width"] < 0 or values["height"] < 0:
+        raise ValueError("negative cached OCR bounding box size")
+    return Box(**values)
 
 
 def _serialize_ocr_result(result: OCRResult) -> dict[str, Any]:
@@ -86,20 +89,36 @@ def _serialize_ocr_result(result: OCRResult) -> dict[str, Any]:
 
 
 def _deserialize_ocr_result(payload: dict[str, Any]) -> OCRResult:
+    if not isinstance(payload, dict) or not isinstance(payload.get("text"), str):
+        raise ValueError("invalid cached OCR result")
+    cached_lines = payload.get("lines", [])
+    cached_metadata = payload.get("metadata", {})
+    if cached_lines is None:
+        cached_lines = []
+    if cached_metadata is None:
+        cached_metadata = {}
+    if not isinstance(cached_lines, list) or not isinstance(cached_metadata, dict):
+        raise ValueError("invalid cached OCR lines or metadata")
+    if any(not isinstance(line, dict) for line in cached_lines):
+        raise ValueError("invalid cached OCR line")
     lines = [
         OCRLine(
             text=str(line.get("text", "")),
             confidence=float(line.get("confidence", 0.0) or 0.0),
-            bbox=_deserialize_box(dict(line.get("bbox") or {})),
+            bbox=_deserialize_box(line.get("bbox", {})),
         )
-        for line in payload.get("lines") or []
-        if isinstance(line, dict)
+        for line in cached_lines
     ]
-    metadata = dict(payload.get("metadata") or {})
+    confidence = float(payload["confidence"]) if payload.get("confidence") is not None else None
+    if (confidence is not None and not math.isfinite(confidence)) or any(
+        not math.isfinite(line.confidence) for line in lines
+    ):
+        raise ValueError("nonfinite cached OCR confidence")
+    metadata = dict(cached_metadata)
     metadata["cache_hit"] = True
     return OCRResult(
         text=str(payload.get("text", "")),
-        confidence=float(payload["confidence"]) if payload.get("confidence") is not None else None,
+        confidence=confidence,
         lines=lines,
         backend_name=str(payload.get("backend_name") or "none"),
         metadata=metadata,
@@ -169,9 +188,9 @@ class PipelineCache:
             return None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+            result = _deserialize_ocr_result(payload)
+        except (ValueError, TypeError, OSError, OverflowError):
             return None
-        result = _deserialize_ocr_result(payload)
         result.metadata["cache_path"] = str(path)
         result.metadata["cache_key_kind"] = cache_key_kind
         return result
@@ -185,7 +204,7 @@ class PipelineCache:
             return None
         try:
             index_payload = json.loads(index_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeError):
             return None
         if not isinstance(index_payload, dict):
             return None
@@ -221,8 +240,7 @@ class PipelineCache:
                 backend_name=backend_name,
                 cache_identity=cache_identity,
             )
-            if result is not None:
-                return result
+            return result
 
         path = self._ocr_cache_path(image, backend_name)
         return self._load_ocr_payload(path, cache_key_kind="image_hash")
@@ -292,7 +310,9 @@ class PipelineCache:
             return None
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError, UnicodeError):
+            return None
+        if not isinstance(payload, dict):
             return None
         repair_payload = payload.get("repair_payload")
         if not isinstance(repair_payload, dict):

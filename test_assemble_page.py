@@ -431,5 +431,50 @@ class TestAssemblePageKoreanEnhancements(unittest.TestCase):
         self.assertEqual("ocr_internal_line", grouped.problems[0].metadata.get("problem_number_source"))
         self.assertEqual(["header-with-q24"], grouped.problems[0].stem_block_ids)
 
+    def test_range_header_inside_started_problem_is_not_shared_passage(self):
+        blocks = [
+            ContentBlock(
+                block_id="q35",
+                block_type=BlockType.STEM,
+                bbox=Box(40, 40, 760, 100),
+                reading_order=0,
+                text="35. 다음 자료를 바탕으로 답하시오.",
+            ),
+            ContentBlock(
+                block_id="q35-internal-range",
+                block_type=BlockType.STEM,
+                bbox=Box(40, 160, 760, 180),
+                reading_order=1,
+                text="[35~37] 다음 글을 읽고 물음에 답하시오.",
+            ),
+            ContentBlock(
+                block_id="q35-choice",
+                block_type=BlockType.CHOICE,
+                bbox=Box(40, 360, 760, 100),
+                reading_order=2,
+                text="① 옳다 ② 옳지 않다",
+            ),
+            ContentBlock(
+                block_id="q36",
+                block_type=BlockType.STEM,
+                bbox=Box(40, 500, 760, 100),
+                reading_order=3,
+                text="36. 다음 물음에 답하시오.",
+            ),
+        ]
+        grouped = group_problem_units(
+            PageModel("page-internal-range", 900, 800, Subject.KOREAN, blocks=blocks)
+        )
+
+        self.assertFalse(any(
+            problem.metadata.get("passage_role") == "passage_fragment"
+            for problem in grouped.problems
+        ))
+        q35 = next(
+            problem for problem in grouped.problems
+            if problem.metadata.get("problem_number") == 35
+        )
+        self.assertIn("q35-internal-range", q35.stem_block_ids)
+
 if __name__ == "__main__":
     unittest.main()

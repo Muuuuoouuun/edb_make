@@ -4,13 +4,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
 
+EXTRA_UI_STYLESHEETS = (
+    "editor-layout.css",
+    "editor-focus.css",
+    "home-redesign.css",
+)
+
 REQUIRED_UI_FILES = (
     "ui_prototype/index.html",
     "ui_prototype/board.html",
+    "ui_prototype/board.css",
+    *(f"ui_prototype/{filename}" for filename in EXTRA_UI_STYLESHEETS),
     "ui_prototype/favicon.png",
     "ui_prototype/reorder.js",
     "ui_prototype/review_filters.js",
@@ -19,11 +29,26 @@ REQUIRED_UI_FILES = (
     "ui_prototype/app.bundle.js",
     "ui_prototype/vendor/react.production.min.js",
     "ui_prototype/vendor/react-dom.production.min.js",
+    "ui_prototype/vendor/fonts/fonts.css",
+    "ui_prototype/vendor/fonts/PretendardVariable.woff2",
+    "ui_prototype/vendor/fonts/JetBrainsMonoVariable.woff2",
+    "ui_prototype/vendor/fonts/CaveatVariable.woff2",
+    "ui_prototype/vendor/fonts/OFL-Pretendard.txt",
+    "ui_prototype/vendor/fonts/OFL-JetBrainsMono.txt",
+    "ui_prototype/vendor/fonts/OFL-Caveat.txt",
 )
 
 REQUIRED_RUNTIME_SOURCE_FILES = (
     "scripts/render_hwp_with_rhwp_core.mjs",
     "assets/app_icon.png",
+)
+
+REMOTE_ASSET_HOSTS = (
+    "https://fonts.googleapis.com",
+    "https://fonts.gstatic.com",
+    "https://cdn.jsdelivr.net",
+    "https://unpkg.com",
+    "https://cdnjs.cloudflare.com",
 )
 
 FORBIDDEN_FRONTEND_FILES = (
@@ -33,6 +58,9 @@ FORBIDDEN_FRONTEND_FILES = (
     "ui_prototype/vendor/babel.min.js",
     "ui_prototype/vendor/babel.min.js.map",
     "build_ui_prototype_data.py",
+    # A second, unreferenced design system (warm paper palette, teal accent)
+    # that conflicted with the shipped theme. Deleted on purpose.
+    "ui_prototype/styles.css",
 )
 
 PACKAGING_MANIFESTS = (
@@ -50,6 +78,7 @@ FRONTEND_BUNDLE_SOURCE_FILES = (
 )
 SOURCE_DIGEST_RE = re.compile(r"Source SHA256:\s*([0-9a-f]{64})")
 BUNDLE_CACHE_BUST_RE = re.compile(r"^app\.bundle\.js\?v=frontend-bundle-([0-9a-f]{64})$")
+STYLE_CACHE_BUST_RE = re.compile(r"^board\.css\?v=board-css-([0-9a-f]{64})$")
 
 
 def _read(path: Path) -> str:
@@ -74,11 +103,80 @@ def frontend_bundle_source_digest(project_root: Path) -> str | None:
     return digest.hexdigest()
 
 
+def style_source_digest(project_root: Path) -> str | None:
+    style_path = project_root.resolve() / "ui_prototype" / "board.css"
+    if not style_path.is_file():
+        return None
+    return hashlib.sha256(style_path.read_bytes()).hexdigest()
+
+
+def style_cache_bust_digest(link_href: str) -> str | None:
+    match = STYLE_CACHE_BUST_RE.fullmatch(link_href)
+    if match is None:
+        return None
+    return match.group(1)
+
+
 def bundle_cache_bust_digest(script_src: str) -> str | None:
     match = BUNDLE_CACHE_BUST_RE.fullmatch(script_src)
     if match is None:
         return None
     return match.group(1)
+
+
+def extra_stylesheet_cache_bust_digest(link_href: str, filename: str) -> str | None:
+    if filename not in EXTRA_UI_STYLESHEETS:
+        return None
+    match = re.fullmatch(re.escape(filename) + r"\?v=([0-9a-f]{64})", link_href)
+    return match.group(1) if match else None
+
+
+def collect_extra_stylesheet_errors(resource_root: Path, board_html: str, *, packaged: bool = False) -> list[str]:
+    """Reject omitted, duplicated, unversioned or stale surface stylesheet links."""
+
+    errors: list[str] = []
+    prefix = "packaged " if packaged else ""
+    hrefs = re.findall(r'<link[^>]*href="([^"]+)"', board_html)
+    for filename in EXTRA_UI_STYLESHEETS:
+        links = [href for href in hrefs if href.split("?", 1)[0] == filename]
+        if len(links) != 1:
+            errors.append(f"{prefix}board.html must load exactly one cache-busted {filename}")
+            continue
+        digest = extra_stylesheet_cache_bust_digest(links[0], filename)
+        if digest is None:
+            errors.append(f"{prefix}board.html {filename} cache bust must use the 64-character stylesheet digest")
+            continue
+        path = resource_root / "ui_prototype" / filename
+        if path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            errors.append(f"{prefix}board.html {filename} cache bust does not match {prefix}{filename}; rebuild the frontend")
+    return errors
+
+
+def collect_deterministic_bundle_errors(project_root: Path) -> list[str]:
+    """Rebuild in memory through Node and reject any tracked bundle drift."""
+
+    root = project_root.resolve()
+    node = shutil.which("node")
+    if node is None:
+        return ["Node.js is required to deterministically verify app.bundle.js"]
+    builder = root / "scripts" / "build_frontend_bundle.mjs"
+    if not builder.is_file():
+        return ["missing deterministic frontend builder: scripts/build_frontend_bundle.mjs"]
+    try:
+        completed = subprocess.run(
+            [node, str(builder), "--check"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return [f"could not run deterministic frontend bundle check: {exc}"]
+    if completed.returncode == 0:
+        return []
+    detail = (completed.stderr or completed.stdout or "unknown Node.js failure").strip()
+    return [f"deterministic frontend bundle check failed: {detail[-2_000:]}"]
 
 
 def collect_errors(project_root: Path) -> list[str]:
@@ -118,6 +216,28 @@ def collect_errors(project_root: Path) -> list[str]:
         for token in forbidden_tokens:
             if token in board_html:
                 errors.append(f"board.html still references legacy runtime token: {token}")
+        style_hrefs = [
+            href
+            for href in re.findall(r"<link[^>]*href=\"([^\"]+)\"", board_html)
+            if href.startswith("board.css")
+        ]
+        expected_style_digest = style_source_digest(root)
+        if len(style_hrefs) != 1:
+            errors.append("board.html must load exactly one cache-busted board.css")
+        elif (style_digest := style_cache_bust_digest(style_hrefs[0])) is None:
+            errors.append("board.html board.css cache bust must use the 64-character source digest")
+        elif expected_style_digest is not None and style_digest != expected_style_digest:
+            errors.append("board.html board.css cache bust is stale; rebuild with scripts/build_frontend_bundle.mjs")
+        errors.extend(collect_extra_stylesheet_errors(root, board_html))
+        if "<style>" in board_html:
+            errors.append("board.html must keep its theme in board.css, not an inline <style> block")
+
+        for remote_host in REMOTE_ASSET_HOSTS:
+            if remote_host in board_html:
+                errors.append(
+                    "board.html must not load remote assets; the packaged app runs offline: "
+                    f"{remote_host}"
+                )
     else:
         errors.append("missing ui_prototype/board.html")
 
@@ -161,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     errors = collect_errors(args.root)
+    errors.extend(collect_deterministic_bundle_errors(args.root))
     if errors:
         for error in errors:
             print(f"[frontend-package] ERROR: {error}", file=sys.stderr)

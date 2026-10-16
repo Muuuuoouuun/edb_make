@@ -960,12 +960,14 @@ class TestPreprocessHwp(unittest.TestCase):
 
             def fake_convert_hwp_to_pdf(src, out_dir):
                 self.assertEqual(source, src)
-                self.assertEqual(tmp_path / "out" / "converted", out_dir)
+                self.assertEqual("converted", out_dir.name)
+                self.assertTrue(out_dir.is_relative_to(tmp_path / "out" / "hwp"))
                 return converted
 
             def fake_render_pdf_pages(src, out_dir, dpi):
                 self.assertEqual(converted, src)
-                self.assertEqual(tmp_path / "out" / "rendered", out_dir)
+                self.assertEqual("rendered", out_dir.name)
+                self.assertTrue(out_dir.is_relative_to(tmp_path / "out" / "hwp"))
                 self.assertEqual(144, dpi)
                 return [
                     preprocess.NormalizedPageImage(
@@ -1139,6 +1141,40 @@ class TestPreprocessHwp(unittest.TestCase):
             self.assertEqual(Path(first[0].normalized_path).resolve(), Path(second[0].normalized_path).resolve())
             self.assertIs(True, second[0].metadata["hwp_normalized_cache_hit"])
             self.assertEqual(str(source), second[0].metadata["source_hwp_path"])
+
+    def test_hwp_normalized_images_remain_bound_to_the_source_content(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "exam.hwp"
+
+            def render(source_path, output_dir, dpi):
+                output_path = Path(output_dir) / "exam-page-001.png"
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                color = "red" if Path(source_path).read_bytes() == b"first" else "blue"
+                Image.new("RGB", (40, 50), color).save(output_path)
+                return [preprocess.NormalizedPageImage(
+                    page_id="exam-page-001", source_path=str(source_path),
+                    normalized_path=str(output_path), page_index=0,
+                    width_px=40, height_px=50,
+                    metadata={"source_type": "hwp", "hwp_renderer": "rhwp-core"},
+                )]
+
+            with (
+                mock.patch.object(preprocess, "inspect_hangul_document", return_value={"hwp_signature": "HWP Document File"}),
+                mock.patch.object(preprocess, "_render_hwp_pages_with_rhwp_core", side_effect=render) as render_mock,
+            ):
+                source.write_bytes(b"first")
+                first = preprocess.prepare_pages(source, root / "out", enable_deskew=False, enable_margin_crop=False)
+                source.write_bytes(b"second")
+                second = preprocess.prepare_pages(source, root / "out", enable_deskew=False, enable_margin_crop=False)
+                source.write_bytes(b"first")
+                restored = preprocess.prepare_pages(source, root / "out", enable_deskew=False, enable_margin_crop=False)
+
+            self.assertEqual(2, render_mock.call_count)
+            self.assertTrue(restored[0].metadata["hwp_normalized_cache_hit"])
+            self.assertEqual((255, 0, 0), first[0].image.getpixel((10, 10)))
+            self.assertEqual((0, 0, 255), second[0].image.getpixel((10, 10)))
+            self.assertEqual((255, 0, 0), restored[0].image.getpixel((10, 10)))
 
     def test_hwp_prepare_pages_reuses_normalized_cache_for_same_content_with_new_name(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2137,7 +2173,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             def fake_run(cmd, check, stdout, stderr, text, timeout, env=None):
                 run_envs.append(dict(env or {}))
-                path_dirs = str((env or {}).get("PATH") or "").split(":")
+                path_dirs = str((env or {}).get("PATH") or "").split(os.pathsep)
                 shim = next((Path(item) / "libreoffice" for item in path_dirs if (Path(item) / "libreoffice").exists()), None)
                 if shim is not None:
                     expected_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -2153,13 +2189,14 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/local/bin/airun-hwp"]], create=True),
+                mock.patch.object(preprocess.sys, "platform", "darwin"),
                 mock.patch.object(preprocess.shutil, "which", side_effect=fake_which),
                 mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
 
             self.assertEqual(1, len(run_envs))
-            self.assertIn(str(output_dir / "_airun_bin"), run_envs[0]["PATH"].split(":"))
+            self.assertIn(str(output_dir / "_airun_bin"), run_envs[0]["PATH"].split(os.pathsep))
 
     def test_convert_hwp_to_pdf_uses_pyhwp_html_chrome_fallback_after_direct_failure(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

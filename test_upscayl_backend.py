@@ -1,6 +1,7 @@
 import os
 import subprocess
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -16,14 +17,14 @@ class TestUpscaylBackend(unittest.TestCase):
     def setUp(self) -> None:
         self._previous_auto = os.environ.get("EDB_AUTO_UPSCAYL")
         os.environ["EDB_AUTO_UPSCAYL"] = "1"
-        upscayl_backend.clear_upscayl_discovery_cache()
+        upscayl_backend.clear_upscayl_runtime_cache()
 
     def tearDown(self) -> None:
         if self._previous_auto is None:
             os.environ.pop("EDB_AUTO_UPSCAYL", None)
         else:
             os.environ["EDB_AUTO_UPSCAYL"] = self._previous_auto
-        upscayl_backend.clear_upscayl_discovery_cache()
+        upscayl_backend.clear_upscayl_runtime_cache()
 
     def _installation(self, root: Path) -> UpscaylInstallation:
         binary = root / ("upscayl-bin.exe" if os.name == "nt" else "upscayl-bin")
@@ -70,6 +71,40 @@ class TestUpscaylBackend(unittest.TestCase):
         discover.assert_not_called()
         run.assert_not_called()
 
+    def test_distorted_or_truncated_output_keeps_original_image(self) -> None:
+        for size in ((1600, 1), (1600, 1600)):
+            with self.subTest(size=size), TemporaryDirectory() as raw_tmp:
+                installation = self._installation(Path(raw_tmp))
+                source = Image.new("RGB", (640, 360), "white")
+
+                def fake_run(command, **_kwargs):
+                    Image.new("RGB", size, "white").save(command[command.index("-o") + 1])
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+                with patch.object(upscayl_backend.subprocess, "run", side_effect=fake_run):
+                    result = upscayl_backend.auto_upscale_image(source, installation=installation)
+
+                self.assertEqual("failed", result.status)
+                self.assertEqual("invalid_output_size", result.reason)
+                self.assertIs(source, result.image)
+
+    def test_rgb_output_preserves_source_cutout_alpha(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            installation = self._installation(Path(raw_tmp))
+            source = Image.new("RGBA", (640, 360), (248, 248, 246, 0))
+            source.paste((248, 248, 246, 255), (240, 120, 400, 240))
+
+            def fake_run(command, **_kwargs):
+                Image.new("RGB", (1600, 900), "white").save(command[command.index("-o") + 1])
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with patch.object(upscayl_backend.subprocess, "run", side_effect=fake_run):
+                result = upscayl_backend.auto_upscale_image(source, installation=installation)
+
+            self.assertTrue(result.applied)
+            self.assertEqual(0, result.image.getpixel((0, 0))[3])
+            self.assertEqual(255, result.image.getpixel((800, 450))[3])
+
     def test_missing_installation_keeps_original_image(self) -> None:
         source = Image.new("RGB", (640, 360), "white")
         with patch.object(upscayl_backend, "discover_upscayl_installation", return_value=None):
@@ -93,6 +128,61 @@ class TestUpscaylBackend(unittest.TestCase):
         self.assertEqual("failed", result.status)
         self.assertEqual("timeout", result.reason)
         self.assertIs(source, result.image)
+        self.assertGreater(result.cooldown_remaining_ms, 0)
+        self.assertIn("original enhancement path", result.to_metadata()["fallback_message"])
+
+    def test_failure_backoff_prevents_repeated_process_launches(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            installation = self._installation(Path(raw_tmp))
+            source = Image.new("RGB", (640, 360), "white")
+            completed = subprocess.CompletedProcess(
+                [str(installation.binary_path)],
+                1,
+                "",
+                "gpu unavailable",
+            )
+            with patch.object(
+                upscayl_backend.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
+                first = upscayl_backend.auto_upscale_image(source, installation=installation)
+                second = upscayl_backend.auto_upscale_image(source, installation=installation)
+
+        self.assertEqual(1, run.call_count)
+        self.assertEqual("failed", first.status)
+        self.assertEqual("backoff", second.status)
+        self.assertEqual("temporary_backoff:process_failed", second.reason)
+        self.assertGreater(second.cooldown_remaining_ms, 0)
+
+    def test_parallel_failures_are_serialized_before_backoff_check(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            installation = self._installation(Path(raw_tmp))
+            source = Image.new("RGB", (640, 360), "white")
+            completed = subprocess.CompletedProcess(
+                [str(installation.binary_path)],
+                1,
+                "",
+                "vulkan initialization failed",
+            )
+            with patch.object(
+                upscayl_backend.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    results = list(
+                        executor.map(
+                            lambda _: upscayl_backend.auto_upscale_image(
+                                source,
+                                installation=installation,
+                            ),
+                            range(2),
+                        )
+                    )
+
+        self.assertEqual(1, run.call_count)
+        self.assertEqual({"failed", "backoff"}, {result.status for result in results})
 
     def test_environment_paths_are_discovered_without_user_ui(self) -> None:
         with TemporaryDirectory() as raw_tmp:
@@ -111,6 +201,61 @@ class TestUpscaylBackend(unittest.TestCase):
         self.assertIsNotNone(discovered)
         self.assertEqual(installation.binary_path.resolve(), discovered.binary_path)
         self.assertEqual(installation.models_dir.resolve(), discovered.models_dir)
+
+    def test_discovery_can_refresh_after_resources_are_installed(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            binary = root / ("upscayl-bin.exe" if os.name == "nt" else "upscayl-bin")
+            models = root / "models"
+            with patch.dict(
+                os.environ,
+                {"UPSCAYL_BIN": str(binary), "UPSCAYL_MODELS_DIR": str(models)},
+                clear=False,
+            ):
+                self.assertIsNone(upscayl_backend.discover_upscayl_installation())
+                binary.write_bytes(b"fake")
+                models.mkdir()
+                (models / "upscayl-lite-4x.bin").write_bytes(b"model")
+                (models / "upscayl-lite-4x.param").write_text("model", encoding="utf-8")
+
+                self.assertIsNone(upscayl_backend.discover_upscayl_installation())
+                refreshed = upscayl_backend.discover_upscayl_installation(refresh=True)
+
+        self.assertIsNotNone(refreshed)
+        self.assertEqual(binary.resolve(), refreshed.binary_path)
+
+    def test_negative_discovery_cache_expires_after_runtime_install(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            binary = root / ("upscayl-bin.exe" if os.name == "nt" else "upscayl-bin")
+            models = root / "models"
+            clock = {"now": 100.0}
+            with (
+                patch.dict(
+                    os.environ,
+                    {
+                        "UPSCAYL_BIN": str(binary),
+                        "UPSCAYL_MODELS_DIR": str(models),
+                        "EDB_UPSCAYL_NEGATIVE_DISCOVERY_TTL_SECONDS": "30",
+                    },
+                    clear=False,
+                ),
+                patch.object(upscayl_backend.time, "monotonic", side_effect=lambda: clock["now"]),
+            ):
+                upscayl_backend.clear_upscayl_discovery_cache()
+                self.assertIsNone(upscayl_backend.discover_upscayl_installation())
+                binary.write_bytes(b"fake")
+                models.mkdir()
+                (models / "upscayl-lite-4x.bin").write_bytes(b"model")
+                (models / "upscayl-lite-4x.param").write_text("model", encoding="utf-8")
+
+                clock["now"] = 110.0
+                self.assertIsNone(upscayl_backend.discover_upscayl_installation())
+                clock["now"] = 131.0
+                discovered = upscayl_backend.discover_upscayl_installation()
+
+        self.assertIsNotNone(discovered)
+        self.assertEqual(binary.resolve(), discovered.binary_path)
 
 
 class TestStage3UpscaylIntegration(unittest.TestCase):

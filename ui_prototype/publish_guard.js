@@ -8,11 +8,16 @@
   const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
   const DEFAULT_HEIGHT_PAGES = 0.8;
   const DEFAULT_SCALE_RATIO = 1.0;
+  const PLACEMENT_EPSILON_PAGES = 1e-9;
+  const PLACEMENT_SCALE_MIN = 0.6;
   const PLACEMENT_SCALE_MAX = 1.6;
+  const PLACEMENT_FIT_WIDTH_SCALE_MAX = 3.0;
+  const AUTO_SCALE_MAX_REDUCTION_RATIO = 0.06;
   const MIN_HEIGHT_PAGES = 0.12;
   const OVERLAP_TOLERANCE_PAGES = 0.01;
   const SOURCE_BBOX_OVERLAP_RATIO = 0.65;
   const PASSAGE_GROUP_SOURCE_REUSE_RATIO = 0.65;
+  const LAYOUT_GAP_MODE_COMPACT = "compact";
 
   function finiteNumber(value, fallback) {
     const number = Number(value);
@@ -35,7 +40,22 @@
   function snapUpPages(value, slotHeightPages = DEFAULT_SLOT_HEIGHT_PAGES) {
     const slot = finiteNumber(slotHeightPages, DEFAULT_SLOT_HEIGHT_PAGES);
     if (slot <= 0 || !Number.isFinite(value) || value <= 0) return 0;
-    return Math.ceil((value - 0.001) / slot) * slot;
+    return Math.ceil((value - PLACEMENT_EPSILON_PAGES) / slot) * slot;
+  }
+
+  function normalizeLayoutGapMode(value) {
+    return String(value || "").trim().toLowerCase() === LAYOUT_GAP_MODE_COMPACT
+      ? LAYOUT_GAP_MODE_COMPACT
+      : "classin-grid";
+  }
+
+  function placementGapAfterPages(item) {
+    const raw = item?.placementGapAfterPages
+      ?? item?.placement_gap_after_pages
+      ?? item?.gapAfterPages;
+    if (raw === null || raw === undefined || raw === "") return null;
+    const number = Number(raw);
+    return Number.isFinite(number) ? Math.max(0, number) : null;
   }
 
   function problemIdFor(item, index) {
@@ -57,6 +77,26 @@
 
   function passageRoleFor(item) {
     return String(item?.passageRole || item?.passage_role || item?.metadata?.passageRole || item?.metadata?.passage_role || "").trim();
+  }
+
+  function riskFlagsFor(item) {
+    const raw = item?.riskFlags
+      || item?.risk_flags
+      || item?.metadata?.riskFlags
+      || item?.metadata?.risk_flags
+      || [];
+    return new Set((Array.isArray(raw) ? raw : []).map(flag => String(flag || "").trim()).filter(Boolean));
+  }
+
+  function isSupplementalProblem(item, index) {
+    if (passageRoleFor(item) === "passage_fragment") return true;
+    if (item?.supplementalItem || item?.supplemental_item || item?.metadata?.supplementalItem || item?.metadata?.supplemental_item) {
+      return true;
+    }
+    if (riskFlagsFor(item).has("marker_document_continuation") || item?.metadata?.marker_document_continuation) {
+      return true;
+    }
+    return problemIdFor(item, index).endsWith("-continuation");
   }
 
   function numberOrNull(value) {
@@ -100,8 +140,70 @@
     return new Set(raw.map(item => String(item || "").trim()).filter(Boolean));
   }
 
+  function usesContinuousPageFlow(item) {
+    const inputIntent = String(item?.inputIntent ?? item?.input_intent ?? "")
+      .trim()
+      .toLowerCase()
+      .replaceAll("_", "-");
+    if (inputIntent) return inputIntent === "page-as-is";
+    const placementMode = String(item?.placementMode ?? item?.placement_mode ?? "")
+      .trim()
+      .toLowerCase()
+      .replaceAll("_", "-");
+    return placementMode === "continuous" || placementMode === "continuous-page-as-is";
+  }
+
+  function imageRecordGeometryFor(item) {
+    const geometry = item?.imageRecordGeometry || item?.image_record_geometry;
+    if (!geometry || typeof geometry !== "object" || Array.isArray(geometry)) return null;
+    const height = numberOrNull(geometry.baseHeightPages);
+    return height !== null && height > 0 ? geometry : null;
+  }
+
+  function imageHeightPagesFor(item) {
+    const geometry = imageRecordGeometryFor(item);
+    return geometry
+      ? Number(geometry.baseHeightPages)
+      : Math.max(
+        MIN_HEIGHT_PAGES,
+        firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
+      );
+  }
+
+  function renderedScaleFor(item, requestedScale) {
+    const geometry = imageRecordGeometryFor(item);
+    const baseWidth = numberOrNull(geometry?.baseDisplayWidthPx);
+    const maxWidth = numberOrNull(geometry?.maxDisplayWidthPx);
+    return baseWidth !== null && baseWidth > 0 && maxWidth !== null && maxWidth > 0
+      ? Math.max(PLACEMENT_SCALE_MIN, Math.min(requestedScale, maxWidth / baseWidth))
+      : requestedScale;
+  }
+
+  function scaleNearPreviousBoundary(startYPages, heightPages, scaleRatio, slotHeightPages) {
+    if (scaleRatio < DEFAULT_SCALE_RATIO || slotHeightPages <= 0) return scaleRatio;
+    const renderedBottomYPages = startYPages + heightPages * scaleRatio;
+    const previousBoundaryYPages = Math.floor(
+      (renderedBottomYPages + PLACEMENT_EPSILON_PAGES) / slotHeightPages
+    ) * slotHeightPages;
+    if (renderedBottomYPages - previousBoundaryYPages <= PLACEMENT_EPSILON_PAGES) {
+      return scaleRatio;
+    }
+    const targetScale = (previousBoundaryYPages - startYPages) / heightPages;
+    const scaleReductionRatio = scaleRatio > 0
+      ? (scaleRatio - targetScale) / scaleRatio
+      : Infinity;
+    return targetScale >= PLACEMENT_SCALE_MIN
+      && targetScale < scaleRatio
+      && scaleReductionRatio <= AUTO_SCALE_MAX_REDUCTION_RATIO + PLACEMENT_EPSILON_PAGES
+      ? targetScale
+      : scaleRatio;
+  }
+
   function simulatedBoardPlacements(items, options = {}) {
     const slotHeightPages = finiteNumber(options.slotHeightPages, DEFAULT_SLOT_HEIGHT_PAGES);
+    const layoutGapMode = normalizeLayoutGapMode(
+      options.layoutGapMode ?? options.layout_gap_mode
+    );
     const problemIds = normalizeIdFilter(options.sessionProblemIds);
     const placements = [];
     let cursorPages = 0;
@@ -111,37 +213,62 @@
       const problemId = problemIdFor(item, index);
       if (!problemId || (problemIds && !problemIds.has(problemId))) return;
 
-      const heightPages = Math.max(
-        MIN_HEIGHT_PAGES,
-        firstNumber(item, ["heightFrac", "actualHeightPages", "actual_height_pages"], DEFAULT_HEIGHT_PAGES)
-      );
-      const startYPages = snapUpPages(cursorPages, slotHeightPages);
-      const requestedScale = Math.max(
+      const heightPages = imageHeightPagesFor(item);
+      const continuous = usesContinuousPageFlow(item);
+      // The previous item already decided whether its trailing edge is snapped,
+      // continuous, or compact. Re-snapping here would re-create a removed gap.
+      const startYPages = rounded(Math.max(0, cursorPages));
+      const persistedScale = numberOrNull(item.placementScaleRatio ?? item.placement_scale_ratio);
+      const preserveLegacyScale = !continuous
+        && persistedScale !== null
+        && persistedScale > PLACEMENT_SCALE_MAX;
+      // Only persisted placement fields opt into the legacy ceiling. Generic
+      // scaleRatio input remains subject to the current 1.6 regular-item limit.
+      const normalizedScale = Math.max(
         0,
         Math.min(
-          PLACEMENT_SCALE_MAX,
+          continuous || preserveLegacyScale ? PLACEMENT_FIT_WIDTH_SCALE_MAX : PLACEMENT_SCALE_MAX,
           firstNumber(item, ["placementScaleRatio", "placement_scale_ratio", "scaleRatio"], DEFAULT_SCALE_RATIO)
         )
       );
-      const renderedHeightPages = heightPages * requestedScale;
-      const savedStartYPages = numberOrNull(item.startYPages ?? item.start_y_pages);
-      const savedSnappedNextYPages = numberOrNull(item.snappedNextStartYPages ?? item.snapped_next_start_y_pages);
-      const savedSpanPages = savedStartYPages !== null
-        && savedSnappedNextYPages !== null
-        && savedSnappedNextYPages > savedStartYPages
-        ? savedSnappedNextYPages - savedStartYPages
-        : 0;
-      const snappedNextStartYPages = snapUpPages(
-        startYPages + Math.max(renderedHeightPages, savedSpanPages),
-        slotHeightPages
+      const autoFitDisabled = Boolean(
+        item.placementAutoFitDisabled || item.placement_auto_fit_disabled
       );
+      const requestedScale = continuous
+        || preserveLegacyScale
+        || autoFitDisabled
+        || Math.abs(normalizedScale - DEFAULT_SCALE_RATIO) > PLACEMENT_EPSILON_PAGES
+        ? normalizedScale
+        : scaleNearPreviousBoundary(startYPages, heightPages, normalizedScale, slotHeightPages);
+      const renderedHeightPages = heightPages * renderedScaleFor(item, requestedScale);
+      const geometry = imageRecordGeometryFor(item);
+      const reservedHeightPages = numberOrNull(geometry?.reservedHeightPages);
+      const flowHeightPages = !continuous && reservedHeightPages !== null && reservedHeightPages > 0
+        ? Math.max(renderedHeightPages, reservedHeightPages * requestedScale)
+        : renderedHeightPages;
+      const gapAfterPages = placementGapAfterPages(item);
+      const compact = layoutGapMode === LAYOUT_GAP_MODE_COMPACT || gapAfterPages !== null;
+      let nextStartYPages;
+      if (continuous) {
+        const defaultGapPages = Math.max(0, finiteNumber(geometry?.continuousGapPages, 0));
+        nextStartYPages = startYPages + renderedHeightPages
+          + (gapAfterPages !== null ? gapAfterPages : compact ? 0 : defaultGapPages);
+      } else if (compact) {
+        nextStartYPages = startYPages + flowHeightPages + (gapAfterPages || 0);
+      } else if (flowHeightPages <= slotHeightPages + PLACEMENT_EPSILON_PAGES) {
+        nextStartYPages = startYPages + snapUpPages(flowHeightPages, slotHeightPages);
+      } else {
+        nextStartYPages = snapUpPages(startYPages + flowHeightPages, slotHeightPages);
+      }
+      const extraSlots = Math.max(0, Math.min(10, Math.round(firstNumber(item, ["placementExtraSlots", "placement_extra_slots"], 0))));
+      const snappedNextStartYPages = rounded(nextStartYPages + extraSlots * slotHeightPages);
       const slotSpanPages = Math.max(renderedHeightPages, snappedNextStartYPages - startYPages);
       const verticalRoomPages = Math.max(0, slotSpanPages - renderedHeightPages);
       const yRatio = verticalRoomPages > 0.001
         ? clamp01(firstNumber(item, ["placementYRatio", "placement_y_ratio", "yRatio"], 0))
         : 0;
-      const renderedTopYPages = startYPages + yRatio * verticalRoomPages;
-      const renderedBottomYPages = renderedTopYPages + renderedHeightPages;
+      const renderedTopYPages = rounded(startYPages + yRatio * verticalRoomPages);
+      const renderedBottomYPages = rounded(renderedTopYPages + renderedHeightPages);
 
       placements.push({
         problemId,
@@ -152,10 +279,67 @@
         snappedNextStartYPages,
         heightPages,
         requestedScale,
+        gapAfterPages,
+        layoutGapMode,
       });
       cursorPages = snappedNextStartYPages;
     });
 
+    return placements;
+  }
+
+  function resolvedBoardPlacements(items, options = {}) {
+    const problemIds = normalizeIdFilter(options.sessionProblemIds);
+    const placements = [];
+    (Array.isArray(items) ? items : []).forEach((item, index) => {
+      if (!item || typeof item !== "object") return;
+      const problemId = problemIdFor(item, index);
+      if (!problemId || (problemIds && !problemIds.has(problemId))) return;
+      const startYPages = numberOrNull(item.startYPages ?? item.start_y_pages);
+      const snappedNextStartYPages = numberOrNull(
+        item.snappedNextStartYPages ?? item.snapped_next_start_y_pages
+      );
+      if (startYPages === null || snappedNextStartYPages === null) return;
+
+      const heightPages = imageHeightPagesFor(item);
+      const continuous = usesContinuousPageFlow(item);
+      const persistedScale = numberOrNull(item.placementScaleRatio ?? item.placement_scale_ratio);
+      const preserveLegacyScale = !continuous
+        && persistedScale !== null
+        && persistedScale > PLACEMENT_SCALE_MAX;
+      const requestedScale = Math.max(
+        0,
+        Math.min(
+          continuous || preserveLegacyScale ? PLACEMENT_FIT_WIDTH_SCALE_MAX : PLACEMENT_SCALE_MAX,
+          firstNumber(item, ["placementScaleRatio", "placement_scale_ratio", "scaleRatio"], DEFAULT_SCALE_RATIO)
+        )
+      );
+      const renderedHeightPages = heightPages * renderedScaleFor(item, requestedScale);
+      const normalizedStartYPages = rounded(Math.max(0, startYPages));
+      const normalizedNextStartYPages = rounded(Math.max(
+        normalizedStartYPages,
+        snappedNextStartYPages
+      ));
+      const verticalRoomPages = Math.max(
+        0,
+        normalizedNextStartYPages - normalizedStartYPages - renderedHeightPages
+      );
+      const yRatio = verticalRoomPages > 0.001
+        ? clamp01(firstNumber(item, ["placementYRatio", "placement_y_ratio", "yRatio"], 0))
+        : 0;
+      const renderedTopYPages = rounded(normalizedStartYPages + yRatio * verticalRoomPages);
+      const renderedBottomYPages = rounded(renderedTopYPages + renderedHeightPages);
+      placements.push({
+        problemId,
+        problemTitle: problemTitleFor(item, problemId),
+        startYPages: normalizedStartYPages,
+        renderedTopYPages,
+        renderedBottomYPages,
+        snappedNextStartYPages: normalizedNextStartYPages,
+        heightPages,
+        requestedScale,
+      });
+    });
     return placements;
   }
 
@@ -164,11 +348,12 @@
     const groups = new Map();
     (Array.isArray(problems) ? problems : []).forEach((problem, index) => {
       if (!problem || typeof problem !== "object") return;
+      if (riskFlagsFor(problem).has("hwp_text_fallback_problem") || isSupplementalProblem(problem, index)) return;
       const sourcePageId = sourcePageIdFor(problem);
       const bbox = bboxFor(problem);
       if (!sourcePageId || !bbox) return;
       const group = groups.get(sourcePageId) || [];
-      group.push({ problem, bbox, index });
+      group.push({ problem, bbox, index, passageGroupId: passageGroupIdFor(problem) });
       groups.set(sourcePageId, group);
     });
 
@@ -185,6 +370,7 @@
         if (currentArea <= 0) continue;
         for (let nextIndex = index + 1; nextIndex < group.length; nextIndex += 1) {
           const next = group[nextIndex];
+          if (current.passageGroupId && current.passageGroupId === next.passageGroupId) continue;
           const nextArea = next.bbox.width * next.bbox.height;
           if (nextArea <= 0) continue;
           const intersectionWidth = Math.max(0, Math.min(current.bbox.right, next.bbox.right) - Math.max(current.bbox.left, next.bbox.left));
@@ -229,10 +415,8 @@
       const passageGroupId = passageGroupIdFor(problem);
       const sourcePageId = sourcePageIdFor(problem);
       const bbox = bboxFor(problem);
-      const role = passageRoleFor(problem);
-      const problemId = problemIdFor(problem, index);
       if (!passageGroupId || !sourcePageId || !bbox) return;
-      if (role === "passage_fragment" || problemId.endsWith("-continuation")) return;
+      if (riskFlagsFor(problem).has("hwp_text_fallback_problem") || isSupplementalProblem(problem, index)) return;
       const key = `${passageGroupId}\\n${sourcePageId}`;
       const group = groups.get(key) || [];
       group.push({ problem, bbox, index, passageGroupId, sourcePageId });
@@ -292,7 +476,9 @@
 
   function findBoardPlacementOverlaps(items, options = {}) {
     const tolerancePages = finiteNumber(options.tolerancePages, OVERLAP_TOLERANCE_PAGES);
-    const placements = simulatedBoardPlacements(items, options);
+    const placements = options.resolvedPlacements === true
+      ? resolvedBoardPlacements(items, options)
+      : simulatedBoardPlacements(items, options);
     const issues = [];
     for (let index = 0; index < placements.length - 1; index += 1) {
       const current = placements[index];
@@ -318,6 +504,7 @@
     findBoardPlacementOverlaps,
     findPassageGroupSourceReuse,
     findSourceProblemOverlaps,
+    resolvedBoardPlacements,
     simulatedBoardPlacements,
   };
 });

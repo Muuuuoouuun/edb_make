@@ -32,12 +32,15 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from build_problem_board_edb import (
+    PASSAGE_CENTER_DIVIDER_EXCLUSION_PX,
     PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX,
     PASSAGE_FRAGMENT_STITCH_GAP_PX,
     _annotate_cross_page_passage_groups,
+    _erase_passage_outer_margin_page_guides,
     _prepare_passage_segments_for_stitch,
     _trim_source_page_chrome,
     build_pages,
+    detect_pdf_visual_column_divider_x,
     resolve_subject,
 )
 from scripts.work3_pdf_probe import profile_page
@@ -52,6 +55,7 @@ class PassageFragment:
     bbox_px: tuple[float, float, float, float]
     page_width_px: int
     page_height_px: int
+    column_index: int = 0
     segmenter: str = ""
     cross_page_passage_inferred: bool = False
 
@@ -106,6 +110,7 @@ def _collect_fragments(prepared_pages: Sequence[Any], pages: Sequence[Any]) -> l
                         ),
                         page_width_px=int(page.width_px),
                         page_height_px=int(page.height_px),
+                        column_index=int(block.metadata.get("column_index") or 0),
                         segmenter=str(block.metadata.get("segmenter") or ""),
                         cross_page_passage_inferred=bool(
                             block.metadata.get("cross_page_passage_inferred")
@@ -115,34 +120,82 @@ def _collect_fragments(prepared_pages: Sequence[Any], pages: Sequence[Any]) -> l
     return fragments
 
 
-def _expanded_bbox_px(fragment: PassageFragment) -> tuple[float, float, float, float]:
+def _expanded_bbox_px(
+    fragment: PassageFragment,
+    *,
+    divider_x_px: float | None = None,
+) -> tuple[float, float, float, float]:
     left, top, right, bottom = fragment.bbox_px
-    midpoint = fragment.page_width_px * 0.5
+    midpoint = (
+        float(divider_x_px)
+        if divider_x_px is not None
+        else fragment.page_width_px * 0.5
+    )
+    divider_exclusion = float(PASSAGE_CENTER_DIVIDER_EXCLUSION_PX)
     outer_padding = float(PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX)
     inner_recovery = 64.0
-    vertical_recovery = 8.0
-    if right <= midpoint:
+    if fragment.column_index == 1 or right <= midpoint:
         left -= outer_padding
-        right = min(midpoint, right + inner_recovery)
-    elif left >= midpoint:
-        left = max(midpoint, left - inner_recovery)
+        right = min(midpoint - divider_exclusion, right + inner_recovery)
+    elif fragment.column_index == 2 or left >= midpoint:
+        left = max(midpoint + divider_exclusion, left - inner_recovery)
         right += outer_padding
     else:
         left -= outer_padding
         right += outer_padding
     return (
         max(0.0, left),
-        max(0.0, top - vertical_recovery),
+        max(0.0, top),
         min(float(fragment.page_width_px), right),
-        min(float(fragment.page_height_px), bottom + vertical_recovery),
+        min(float(fragment.page_height_px), bottom),
     )
 
 
-def _clip_points(fragment: PassageFragment, page_rect: fitz.Rect) -> fitz.Rect:
-    left, top, right, bottom = _expanded_bbox_px(fragment)
+def _clip_points(
+    fragment: PassageFragment,
+    page_rect: fitz.Rect,
+    *,
+    divider_x_px: float | None = None,
+) -> fitz.Rect:
+    left, top, right, bottom = _expanded_bbox_px(
+        fragment,
+        divider_x_px=divider_x_px,
+    )
     scale_x = fragment.page_width_px / max(1.0, page_rect.width)
     scale_y = fragment.page_height_px / max(1.0, page_rect.height)
     return fitz.Rect(left / scale_x, top / scale_y, right / scale_x, bottom / scale_y) & page_rect
+
+
+def _problem_marker_intrusions(
+    prepared_page: Any,
+    expanded_bbox_px: tuple[float, float, float, float],
+) -> list[int]:
+    """Return numbered question markers crossed by a passage crop."""
+    left, top, right, bottom = expanded_bbox_px
+    intrusions: list[int] = []
+    for marker in prepared_page.metadata.get("pdf_problem_markers") or []:
+        if not isinstance(marker, dict) or not isinstance(marker.get("number"), int):
+            continue
+        bbox = marker.get("bbox")
+        if not isinstance(bbox, dict):
+            continue
+        marker_left = float(bbox.get("left") or 0.0)
+        marker_top = float(bbox.get("top") or 0.0)
+        marker_right = float(
+            bbox.get("right")
+            if bbox.get("right") is not None
+            else marker_left + float(bbox.get("width") or 0.0)
+        )
+        marker_bottom = float(
+            bbox.get("bottom")
+            if bbox.get("bottom") is not None
+            else marker_top + float(bbox.get("height") or 0.0)
+        )
+        overlap_width = min(right, marker_right) - max(left, marker_left)
+        overlap_height = min(bottom, marker_bottom) - max(top, marker_top)
+        if overlap_width > 1.0 and overlap_height > 1.0:
+            intrusions.append(int(marker["number"]))
+    return intrusions
 
 
 def _iter_page_chars(page: fitz.Page) -> Iterable[dict[str, Any]]:
@@ -317,6 +370,23 @@ def _image_metrics(reference: Image.Image, candidate: Image.Image) -> dict[str, 
     }
 
 
+def _outer_guide_cleanup_metrics(image: Image.Image) -> dict[str, Any]:
+    """Measure how much source ink the same-size guide cleanup removes."""
+    cleaned = _erase_passage_outer_margin_page_guides(image)
+    source_ink = np.asarray(image.convert("L"), dtype=np.uint8) < 240
+    cleaned_ink = np.asarray(cleaned.convert("L"), dtype=np.uint8) < 240
+    source_count = int(source_ink.sum())
+    retained_count = int(np.logical_and(source_ink, cleaned_ink).sum())
+    removed_count = max(0, source_count - retained_count)
+    return {
+        "outer_guide_cleanup_ink_recall": round(
+            retained_count / max(1, source_count),
+            6,
+        ),
+        "outer_guide_cleanup_removed_ink_px": removed_count,
+    }
+
+
 def _median(values: Iterable[float]) -> float:
     materialized = list(values)
     return round(statistics.median(materialized), 6) if materialized else 0.0
@@ -365,7 +435,12 @@ def compare_pdf_paths(
         fragments_by_group[fragment.group_id].append(fragment)
 
     matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
+    prepared_by_page_number = {
+        int(prepared.page_number): prepared
+        for prepared in prepared_pages
+    }
     full_page_images: dict[int, Image.Image] = {}
+    page_dividers_px: dict[int, float | None] = {}
     page_routes: dict[int, str] = {}
     v0_full_render_seconds = 0.0
     with fitz.open(source_path) as document:
@@ -374,6 +449,9 @@ def compare_pdf_paths(
             page_routes[page_number] = str(profile_page(page, render_dpis=())["route"])
             started = time.perf_counter()
             full_page_images[page_number] = _pixmap_image(page.get_pixmap(matrix=matrix, alpha=False))
+            page_dividers_px[page_number] = detect_pdf_visual_column_divider_x(
+                full_page_images[page_number]
+            )
             v0_full_render_seconds += time.perf_counter() - started
 
         v0_fragments: dict[tuple[str, int, int], Image.Image] = {}
@@ -383,7 +461,30 @@ def compare_pdf_paths(
         v1_clip_render_seconds = 0.0
         for fragment in fragments:
             page = document[fragment.page_number - 1]
-            clip = _clip_points(fragment, page.rect)
+            divider_x_px = page_dividers_px.get(fragment.page_number)
+            expanded_bbox_px = _expanded_bbox_px(
+                fragment,
+                divider_x_px=divider_x_px,
+            )
+            clip = _clip_points(
+                fragment,
+                page.rect,
+                divider_x_px=divider_x_px,
+            )
+            marker_intrusions = _problem_marker_intrusions(
+                prepared_by_page_number[fragment.page_number],
+                expanded_bbox_px,
+            )
+            divider_points = (
+                float(divider_x_px) / (fragment.page_width_px / max(1.0, page.rect.width))
+                if divider_x_px is not None
+                else None
+            )
+            center_divider_excluded = (
+                divider_points is None
+                or clip.x1 < divider_points - 0.25
+                or clip.x0 > divider_points + 0.25
+            )
             key = (fragment.group_id, fragment.page_number, fragment.fragment_index)
 
             started = time.perf_counter()
@@ -409,14 +510,22 @@ def compare_pdf_paths(
                     "label": fragment.label,
                     "page_number": fragment.page_number,
                     "fragment_index": fragment.fragment_index,
+                    "column_index": fragment.column_index,
                     "segmenter": fragment.segmenter,
                     "cross_page_passage_inferred": fragment.cross_page_passage_inferred,
                     "page_route": page_routes[fragment.page_number],
                     "clip_points": [round(value, 3) for value in (clip.x0, clip.y0, clip.x1, clip.y1)],
+                    "page_column_divider_points": (
+                        round(divider_points, 3) if divider_points is not None else None
+                    ),
+                    "center_divider_excluded": center_divider_excluded,
+                    "problem_marker_intrusion_count": len(marker_intrusions),
+                    "problem_marker_intrusion_numbers": marker_intrusions,
                     "clip_text_char_count": sum(not char.isspace() for char in clip_text),
                     "clip_page_chrome_tokens": page_chrome_tokens,
                     "v0_size": list(v0_image.size),
                     "v1_size": list(v1_image.size),
+                    **_outer_guide_cleanup_metrics(v1_image),
                     **_char_bbox_audit(page, fragment, clip, dpi=dpi),
                 }
             )
@@ -546,6 +655,23 @@ def compare_pdf_paths(
             "page_chrome_fragment_count": sum(
                 bool(row["clip_page_chrome_tokens"])
                 for row in fragment_rows
+            ),
+            "center_divider_checked_fragment_count": sum(
+                row["page_column_divider_points"] is not None
+                for row in fragment_rows
+            ),
+            "center_divider_violation_count": sum(
+                row["page_column_divider_points"] is not None
+                and not bool(row["center_divider_excluded"])
+                for row in fragment_rows
+            ),
+            "problem_marker_intrusion_count": sum(
+                int(row["problem_marker_intrusion_count"])
+                for row in fragment_rows
+            ),
+            "minimum_outer_guide_cleanup_ink_recall": round(
+                min(float(row["outer_guide_cleanup_ink_recall"]) for row in fragment_rows),
+                6,
             ),
         },
         "groups": group_rows,

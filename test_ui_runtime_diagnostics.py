@@ -8,16 +8,164 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
+def board_document() -> str:
+    """board.html plus the stylesheet it links.
+
+    The editor theme used to be an inline <style> block; it now lives in
+    ui_prototype/board.css. These assertions cover both halves of the document.
+    """
+
+    ui_root = PROJECT_ROOT / "ui_prototype"
+    return (
+        (ui_root / "board.html").read_text(encoding="utf-8")
+        + "\n"
+        + (ui_root / "board.css").read_text(encoding="utf-8")
+    )
+
+
 
 def run_node(script: str) -> None:
     subprocess.run(["node", "-e", script], cwd=PROJECT_ROOT, check=True)
 
 
 class TestUiRuntimeDiagnostics(unittest.TestCase):
+    def test_review_target_queue_keeps_empty_page_progress_stable(self) -> None:
+        run_node(
+            r"""
+            const fs = require('fs');
+            const vm = require('vm');
+            const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+            const start = source.indexOf('const REVIEW_STATUS_META =');
+            const end = source.indexOf('function normalizePublishSummary');
+            if (start < 0 || end < 0) throw new Error('review helper bounds not found');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(source.slice(start, end), sandbox);
+
+            const session = {
+              problems: [
+                { id: 'p1', sourcePageId: 'page-1', reviewStatus: 'normal', bbox: { width: 10, height: 10 } },
+                { id: 'p2', sourcePageId: 'page-2', reviewStatus: 'normal', bbox: { width: 10, height: 10 } },
+              ],
+              pages: [
+                { id: 'page-1', problemIds: ['p1'], reviewStatus: 'normal' },
+                { id: 'page-2', problemIds: ['p2'], reviewStatus: 'normal' },
+                { id: 'page-3', problemIds: [], reviewStatus: 'failed', riskFlags: [] },
+                { id: 'page-4', problemIds: [], reviewStatus: 'failed', riskFlags: [] },
+              ],
+            };
+            const before = sandbox.sessionReviewSummary(session);
+            const beforeFlow = sandbox.reviewFlowState(before);
+            if (beforeFlow.total !== 4 || beforeFlow.reviewed !== 2 || beforeFlow.remaining !== 2) {
+              throw new Error(`unexpected initial flow: ${JSON.stringify(beforeFlow)}`);
+            }
+            if (before.reviewTargetStatusCounts.check_needed !== 2 || before.reviewTargetStatusCounts.failed !== 0) {
+              throw new Error(`unexpected target counts: ${JSON.stringify(before.reviewTargetStatusCounts)}`);
+            }
+            if (before.unresolvedReviewTargets.map(target => target.id).join(',') !== 'page:page-3,page:page-4') {
+              throw new Error(`unexpected queue: ${JSON.stringify(before.unresolvedReviewTargets)}`);
+            }
+
+            session.pages[2] = {
+              ...session.pages[2],
+              reviewStatus: 'normal',
+              pageReviewConfirmed: true,
+              pageReviewDecision: 'no_passage',
+            };
+            const afterFlow = sandbox.reviewFlowState(sandbox.sessionReviewSummary(session));
+            if (afterFlow.total !== 4 || afterFlow.reviewed !== 3 || afterFlow.remaining !== 1) {
+              throw new Error(`progress denominator changed after confirmation: ${JSON.stringify(afterFlow)}`);
+            }
+            """
+        )
+
+    def test_keyboard_help_uses_native_platform_modifiers(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        platform_block = "const RUNTIME_PLATFORM" + source.split(
+            "const RUNTIME_PLATFORM", 1
+        )[1].split("function reportRuntimeDiagnostic", 1)[0]
+        run_node(
+            """
+            const vm = require('vm');
+            function labels(platform) {
+              const sandbox = { navigator: { platform } };
+              sandbox.globalThis = sandbox;
+              vm.runInNewContext(process.env.PLATFORM_BLOCK + `
+                globalThis.labels = {
+                  primary: PRIMARY_MODIFIER_LABEL,
+                  primaryName: PRIMARY_MODIFIER_NAME,
+                  alternate: ALTERNATE_MODIFIER_LABEL,
+                  alternateName: ALTERNATE_MODIFIER_NAME,
+                };
+              `, sandbox);
+              return sandbox.labels;
+            }
+            const mac = labels('MacIntel');
+            if (JSON.stringify(mac) !== JSON.stringify({
+              primary: '⌘', primaryName: 'Command', alternate: 'Option', alternateName: 'Option'
+            })) throw new Error(`unexpected mac labels: ${JSON.stringify(mac)}`);
+            const windows = labels('Win32');
+            if (JSON.stringify(windows) !== JSON.stringify({
+              primary: 'Ctrl', primaryName: 'Control', alternate: 'Alt', alternateName: 'Alt'
+            })) throw new Error(`unexpected windows labels: ${JSON.stringify(windows)}`);
+            """.replace("process.env.PLATFORM_BLOCK", repr(platform_block))
+        )
+
+        self.assertIn('className="problem-order-copy"', source)
+        self.assertIn("{PRIMARY_MODIFIER_LABEL}/Shift 선택", source)
+        self.assertIn("${ALTERNATE_MODIFIER_NAME}+↑↓ 이동", source)
+        self.assertNotIn("<kbd>Ctrl/Cmd</kbd>", source)
+
+    def test_session_revision_never_regresses_from_late_preview_response(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        revision_block = "let latestServerSessionRevision" + source.split(
+            "let latestServerSessionRevision", 1
+        )[1].split("function withExpectedSessionRevision", 1)[0]
+        run_node(
+            revision_block
+            + """
+            const epoch1 = '00000000000000000001-epoch-1';
+            const epoch2 = '00000000000000000002-epoch-2';
+            captureSessionRevision({ session: { problems: [] }, sessionRevision: 7, sessionEpoch: epoch1 });
+            const stalePayload = { session: { problems: [{ id: 'old' }] }, sessionRevision: 5, sessionEpoch: epoch1 };
+            if (!sessionResponseRevisionIsStale(stalePayload)) throw new Error('late session was not rejected');
+            captureSessionRevision(stalePayload);
+            if (latestServerSessionRevision !== 7) throw new Error(`revision regressed to ${latestServerSessionRevision}`);
+            if (sessionResponseRevisionIsStale({ session: { problems: [] }, sessionRevision: 8, sessionEpoch: epoch1 })) throw new Error('new session was rejected');
+            captureSessionRevision({ session: { problems: [] }, sessionRevision: 1, sessionEpoch: epoch2 });
+            if (latestServerSessionRevision !== 1 || latestServerSessionEpoch !== epoch2) throw new Error('new server epoch was not accepted');
+            const retiredPayload = { session: { problems: [{ id: 'retired' }] }, sessionRevision: 9, sessionEpoch: epoch1 };
+            if (!sessionResponseRevisionIsStale(retiredPayload)) throw new Error('retired server epoch was accepted');
+            const unseenOldEpoch = '00000000000000000000-unseen-old';
+            if (!sessionResponseRevisionIsStale({ session: { problems: [] }, sessionRevision: 99, sessionEpoch: unseenOldEpoch })) {
+              throw new Error('unseen older server epoch was accepted');
+            }
+            captureSessionRevision({ session: { problems: [] }, sessionRevision: 99, sessionEpoch: unseenOldEpoch });
+            if (latestServerSessionEpoch !== epoch2 || latestServerSessionRevision !== 1) {
+              throw new Error('unseen older server epoch replaced the current server');
+            }
+            """
+        )
+
+    def test_upload_processing_waits_for_initial_session_hydration(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        app = source.split("function App()", 1)[1]
+
+        self.assertIn("const [initialSessionLoaded, setInitialSessionLoaded] = useState(false)", app)
+        self.assertIn("if (!cancelled) setInitialSessionLoaded(true)", app)
+        process_queue = app.split("const processQueuedFiles = useCallback", 1)[1].split(
+            "const cancelRecognitionReview", 1
+        )[0]
+        self.assertIn("if (!initialSessionLoaded)", process_queue)
+        self.assertIn(
+            "queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}",
+            app,
+        )
+
     def test_side_panel_exposes_four_edge_manual_crop_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
-        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        side_panel = side_panel.split("function BugReportDialog", 1)[0]
 
         self.assertIn("여백 자르기", side_panel)
         self.assertIn("mutateSession?.('crop'", side_panel)
@@ -25,22 +173,30 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("cropDraft.rightRatio", side_panel)
         self.assertIn("cropDraft.topRatio", side_panel)
         self.assertIn("cropDraft.bottomRatio", side_panel)
+        self.assertIn("manual-crop-state", side_panel)
+        self.assertIn("변경한 여백을 적용할 수 있어요", side_panel)
+        self.assertIn("여백 변경 없음", side_panel)
 
     def test_side_panel_splits_material_details_from_placement_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
-        preview_block = side_panel.split("<div className=\"item-preview\" ref={wrapRef}>", 1)[1]
-        preview_block = preview_block.split("<div className=\"panel-section-hd\">", 1)[0]
+        preview_block = side_panel.split("className={`item-preview ${previewExpanded ? 'is-expanded' : 'is-collapsed'}`}", 1)[1]
+        preview_block = preview_block.split("className={`detail-settings material-detail-disclosure", 1)[0]
         detail_block = side_panel.split("detail-settings-toggle", 1)[1]
 
-        self.assertIn("const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)", side_panel)
+        # Collapsed on first use; afterwards the last open/closed choice is remembered.
+        self.assertIn(
+            "const [advancedSettingsOpen, setAdvancedSettingsOpen] = "
+            "useStoredPreference(ADVANCED_SETTINGS_OPEN_KEY, false, isStoredBoolean)",
+            side_panel,
+        )
         self.assertIn("setAdvancedSettingsOpen(true)", side_panel)
         self.assertIn("aria-expanded={advancedSettingsOpen}", side_panel)
-        self.assertIn("상세 설정", side_panel)
+        self.assertIn("자료 상세", side_panel)
         self.assertNotIn("className=\"ptools\"", preview_block)
         self.assertIn("className=\"ptools detail-tools\"", detail_block)
-        self.assertIn("자르기 · 업스케일", detail_block)
+        self.assertIn("분류 · 번호 정정 · 추가 고화질", detail_block)
         self.assertIn("tab === 'placement'", side_panel)
         self.assertIn("placement-position-control", side_panel)
         self.assertIn("const [cropPresetsOpen, setCropPresetsOpen] = useState(false)", side_panel)
@@ -48,55 +204,207 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("showItemConfirmBar", side_panel)
         self.assertIn("view === 'review'", side_panel)
 
-    def test_side_panel_exposes_three_tabs_and_group_placement_rules(self) -> None:
+    def test_side_panel_image_preview_is_optional_by_default_and_accessible(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn("const [previewExpanded, setPreviewExpanded] = useState(false)", side_panel)
+        self.assertIn('className="item-preview-toggle"', side_panel)
+        self.assertIn("aria-expanded={previewExpanded}", side_panel)
+        self.assertIn('aria-controls="item-image-preview-content"', side_panel)
+        self.assertIn("{previewExpanded && (", side_panel)
+        self.assertIn('id="item-image-preview-content"', side_panel)
+        self.assertIn("setPreviewExpanded(true)", side_panel)
+        self.assertIn(".item-preview-toggle{", html)
+        self.assertIn(".item-preview.is-expanded .item-preview-toggle{", html)
+
+    def test_side_panel_exposes_three_tabs_and_real_placement_rules(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = board_document()
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
         self.assertIn('role="tablist"', side_panel)
         self.assertEqual(side_panel.count('role="tab"'), 3)
-        self.assertIn("자료 <span", side_panel)
+        self.assertIn('title="자료 편집"', side_panel)
+        self.assertNotIn('자료 편집 <span className="badge"', side_panel)
         self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
-        self.assertIn("레이아웃, 색상, AI 인식 설정", side_panel)
-        self.assertIn("지문 한 번만 배치", side_panel)
-        self.assertIn("문항 함께 이동", side_panel)
-        self.assertIn("공간 부족 시 다음 칠판", side_panel)
+        self.assertIn("AI, 칠판 배경, 문서 변환, 앱 정보", side_panel)
+        rules = side_panel.split('className="placement-section placement-rules"', 1)[1]
+        rules = rules.split('className={`placement-diagnostic', 1)[0]
+        self.assertIn("자동 배치 안내", rules)
+        self.assertIn("placementTargetLabel", rules)
+        self.assertIn("normalizeLayoutGapMode(layoutGapMode)", rules)
+        self.assertIn("개별 여백 설정을 우선합니다", rules)
+        self.assertIn("50페이지를 넘으면 여러 파일로 나누어 제작합니다", rules)
+        self.assertNotIn('type="checkbox"', rules)
+        self.assertNotIn("placePassageOnce", side_panel)
+        self.assertNotIn("movePassageGroupTogether", side_panel)
+        self.assertNotIn("breakGroupOnOverflow", side_panel)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", html)
+
+    def test_side_panel_tabs_support_keyboard_and_collapsible_settings(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = board_document()
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+
+        self.assertIn("RIGHT_PANEL_TAB_KEY", side_panel)
+        self.assertIn("event.key === 'ArrowRight'", side_panel)
+        self.assertIn('aria-controls="side-panel-placement"', side_panel)
+        self.assertIn('role="tabpanel"', side_panel)
+        self.assertIn("function SettingsSection", source)
+        self.assertEqual(side_panel.count("<SettingsSection"), 3)
+        self.assertIn('<SidebarDisclosure', side_panel)
+        self.assertIn("aria-label={BOARD_COLOR_LABELS[c] || c}", side_panel)
+        self.assertIn("onClick={() => goToItem(1)}", side_panel)
+        self.assertIn("setActive={selectBoardItem}", source.split("<SidePanel", 1)[1])
+        self.assertIn('<SplitModePicker', rail)
+        self.assertIn(".settings-section-hd", html)
+        self.assertIn(".split-mode-control", html)
+
+    def test_left_rail_collapses_to_thumbnails_and_board_shows_page_bands(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = board_document()
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+        board_stage = source.split("function BoardStage", 1)[1].split("function downloadPublishSummary", 1)[0]
+
+        self.assertIn("LEFT_RAIL_COLLAPSED_KEY", source)
+        self.assertIn("${effectiveRailCollapsed && !reviewEditorActive ? 'left-collapsed' : ''}", source)
+        self.assertIn("collapsed={reviewEditorActive ? false : effectiveRailCollapsed}", source)
+        self.assertIn("const effectiveRailCollapsed = focusEditorActive ? !focusRailExpanded : leftRailCollapsed;", source)
+        self.assertIn("if (collapsed) {", rail)
+        self.assertIn("rail-mini-item", rail)
+        self.assertIn("<TileImage item={it} forceMode=\"raw\" />", rail.split("if (collapsed) {", 1)[1])
+        self.assertIn("자료 목록 접기", rail)
+        self.assertIn("pageBands", board_stage)
+        self.assertIn("className={`page-head", board_stage)
+        self.assertIn("goToPage(visibleCurrentPage + 1)", board_stage)
+        self.assertIn("페이지 구분", board_stage)
+        self.assertNotIn("page-divider", board_stage)
+        self.assertIn(".main.left-collapsed", html)
+        self.assertIn(".page-head-chip", html)
 
     def test_main_controls_are_compact_by_default(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         topbar = source.split("function TopBar", 1)[1]
         topbar = topbar.split("function ReviewStage", 1)[0]
         rail = source.split("function ItemsRail", 1)[1]
         rail = rail.split("function BoardStage", 1)[0]
         board_stage = source.split("function BoardStage", 1)[1]
         board_stage = board_stage.split("function downloadPublishSummary", 1)[0]
+        layout_controls = source.split("function BoardLayoutControls", 1)[1]
+        layout_controls = layout_controls.split("function SidePanel", 1)[0]
         side_panel = source.split("function SidePanel", 1)[1]
-        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        side_panel = side_panel.split("function BugReportDialog", 1)[0]
 
         self.assertIn("topbar-actions", topbar)
-        self.assertIn("topbar-more-menu", topbar)
+        self.assertIn('<ToolbarActionMenu', topbar)
+        self.assertIn('id="topbar-more"', topbar)
         self.assertIn("더보기", topbar)
         self.assertIn("파일 추가", rail)
         self.assertIn("hasSessionItems ? 'is-compact'", rail)
         self.assertIn("stage-fit-btn", board_stage)
+        self.assertIn("stage-preview-controls", board_stage)
+        self.assertIn("{Math.round(previewZoom * 100)}%", board_stage)
+        self.assertIn("선택 문항 맞춤", board_stage)
+        self.assertIn("boardPreviewZoomForRenderedHeight", board_stage)
+        self.assertIn("aria-pressed={previewFitActive}", board_stage)
+        self.assertIn("stage-estimate-diagnostics", board_stage)
+        self.assertIn("공백 방지", board_stage)
+        self.assertIn("자동 축소", board_stage)
+        self.assertIn(".stage-preview-controls", html)
         self.assertNotIn("title=\"자동 정렬\"", board_stage)
         self.assertIn("한 줄 ${columnCount}개", board_stage)
         self.assertIn("연속 이어붙임", board_stage)
         self.assertIn("칸 {p.columnIndex + 1}", board_stage)
-        self.assertIn("한 줄 자료 수", side_panel)
-        self.assertIn("너비 맞춤 아님 · 한 줄 배치 개수", side_panel)
-        self.assertIn("배치 칸 가이드에 자동 정렬", side_panel)
+        self.assertIn('className="placement-column-warning"', layout_controls)
+        self.assertIn("기존 {columns}칸 배치를 유지합니다.", layout_controls)
+        # Existing multi-column work remains editable/saveable, but the sequential
+        # export engine cannot preserve its geometry. Do not suggest migration.
+        self.assertNotIn("[1,2,3].map", layout_controls)
+        self.assertIn("2·3칸 배치의 EDB 제작은 아직 지원하지 않습니다", layout_controls)
+        self.assertNotIn("setBoardColumns?.(BOARD_COLUMN_MIN)", layout_controls)
+        self.assertIn("기존 다중 칸 배치는 그대로 저장할 수 있습니다", source)
+        self.assertIn("현재 EDB 제작은 1칸 배치만 지원", source)
+        # The drag magnet is always on; it lives in the board stage code, not
+        # as a hard-coded "ON" badge dressed up as a setting.
+        self.assertIn("function resolveBoardDragMagnet", source)
+        self.assertNotIn("드래그 마그넷", side_panel)
         self.assertNotIn("열 수", side_panel)
         self.assertNotIn("열 가이드 자동 정렬", side_panel)
         self.assertIn(".drop-zone.is-compact", html)
         self.assertIn(".topbar-more-menu", html)
 
+    def test_focus_rail_toggle_does_not_overwrite_basic_mode_preference(self) -> None:
+        run_node(r"""
+        const assert = require('node:assert/strict');
+        const fs = require('node:fs');
+        const vm = require('node:vm');
+        const source = fs.readFileSync('./ui_prototype/app.jsx', 'utf8');
+        const expression = source.match(/const effectiveRailCollapsed = ([^;]+);/)[1];
+        const toggle = source.match(/onToggleCollapsed=\{(focusEditorActive[^\n]+)\}/)[1];
+        for (const focusEditorActive of [false, true]) {
+          for (const initiallyCollapsed of [false, true]) {
+            const state = { focusEditorActive,
+              leftRailCollapsed: initiallyCollapsed, focusRailExpanded: !initiallyCollapsed };
+            state.setFocusRailExpanded = update => { state.focusRailExpanded = update(state.focusRailExpanded); };
+            state.toggleLeftRailCollapsed = () => { state.leftRailCollapsed = !state.leftRailCollapsed; };
+            vm.createContext(state);
+            const readCollapsed = () => vm.runInContext(expression, state);
+            const basicBefore = state.leftRailCollapsed;
+            const focusBefore = state.focusRailExpanded;
+            assert.equal(readCollapsed(), initiallyCollapsed);
+            vm.runInContext(`(${toggle})()`, state);
+            assert.equal(readCollapsed(), !initiallyCollapsed);
+            if (focusEditorActive) assert.equal(state.leftRailCollapsed, basicBefore,
+              'focus mode must preserve the saved basic-mode rail state');
+            else assert.equal(state.focusRailExpanded, focusBefore,
+              'basic mode must not change the separate focus-mode rail state');
+          }
+        }
+        """)
+
+    def test_board_preview_zoom_uses_usable_classin_page_height(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        start = source.index("const FIXED_LEFT_ZONE_RATIO")
+        end = source.index("function normalizePlacementXRatio")
+        self.assertGreaterEqual(start, 0)
+        self.assertGreater(end, start)
+        helper_block = source[start:end]
+
+        run_node(
+            """
+            const vm = require('vm');
+            const sandbox = {};
+            sandbox.globalThis = sandbox;
+            vm.runInNewContext(process.env.HELPER_BLOCK + `
+              globalThis.previewResult = {
+                base: boardPreviewBasePageHeight(362, 26, 70),
+                fit: boardPreviewZoomForRenderedHeight(2.72),
+                min: normalizeBoardPreviewZoom(0.01),
+                max: normalizeBoardPreviewZoom(9),
+              };
+            `, sandbox);
+            const result = sandbox.previewResult;
+            if (Math.abs(result.base - (266 / 1.2)) > 0.001) {
+              throw new Error(`usable ClassIn height mismatch: ${JSON.stringify(result)}`);
+            }
+            if (Math.abs(result.fit - (1.08 / 2.72)) > 0.001) {
+              throw new Error(`selected fit zoom mismatch: ${JSON.stringify(result)}`);
+            }
+            if (result.min !== 0.12 || result.max !== 1.4) {
+              throw new Error(`preview zoom clamp mismatch: ${JSON.stringify(result)}`);
+            }
+            """.replace("process.env.HELPER_BLOCK", repr(helper_block))
+        )
     def test_compact_controls_expose_hover_tooltips(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         topbar = source.split("function TopBar", 1)[1]
         topbar = topbar.split("function ReviewStage", 1)[0]
         side_panel = source.split("function SidePanel", 1)[1]
@@ -108,17 +416,17 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("document.addEventListener('pointermove'", source)
         self.assertIn("document.addEventListener('focusin'", source)
         self.assertIn("data-tooltip", topbar)
-        self.assertIn("보드 배치 화면으로 이동", topbar)
+        self.assertIn("칠판으로 돌아가기", topbar)
         self.assertIn("현재 배치로 EDB 파일 제작", topbar)
         self.assertIn("선택한 자료의 처리 방식과 세부 편집", side_panel)
-        self.assertIn("여백 자르기와 업스케일 상세 설정", side_panel)
+        self.assertIn("지문 분류, 여백 자르기, 추가 고화질 처리", side_panel)
         self.assertIn("자료 위치, 크기, 지문 묶음 배치", side_panel)
         self.assertIn(".ui-tooltip", html)
         self.assertIn("position: fixed", html)
 
     def test_review_zoom_only_scales_problem_canvas(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("function ItemsRail", 1)[0]
 
@@ -134,7 +442,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_placement_tab_exposes_scoped_dynamic_scale_controls(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        html = board_document()
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
         publish_panel = source.split("function PublishResultPanel", 1)[1]
@@ -147,8 +455,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("placementScope", side_panel)
         self.assertIn("--range-progress", side_panel)
         self.assertIn("너비 맞춤 이어붙임", side_panel)
-        fit_width_flow = source.split("if (wantsFitWidth) {", 1)[1]
-        fit_width_flow = fit_width_flow.split("} else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio'))", 1)[0]
+        fit_width_flow = source.split("if (patch.fitWidth) {", 1)[1]
+        fit_width_flow = fit_width_flow.split("if (Object.prototype.hasOwnProperty.call(patch, 'scaleRatio'))", 1)[0]
         fit_width_helper = source.split("function fitWidthContinuousPageItem", 1)[1]
         fit_width_helper = fit_width_helper.split("function isContinuousPlacementItem", 1)[0]
         self.assertIn("return fitWidthContinuousPageItem(next, patch);", fit_width_flow)
@@ -159,7 +467,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("next.inputIntent = 'page-as-is';", fit_width_helper)
         self.assertIn("next.placementMode = 'continuous-page-as-is';", fit_width_helper)
         self.assertIn("PLACEMENT_FIT_WIDTH_SCALE_RATIO", fit_width_helper)
-        self.assertIn("heightPages * targetScale", fit_width_helper)
+        self.assertIn("itemRenderedHeightPages(next, targetScale)", fit_width_helper)
         self.assertIn("next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));", fit_width_helper)
         self.assertNotIn("snapUpPages(startPages + slotSpanPages)", fit_width_helper)
         self.assertIn("publish-result-panel ${open ? 'open' : 'is-collapsed'}", publish_panel)
@@ -169,10 +477,275 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn(".placement-position-control", html)
         self.assertIn(".publish-result-panel.is-collapsed", html)
 
+    def test_passage_only_preset_targets_fragments_and_applies_reading_width(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        item_mapper = source.split("function mapProblemToItem(problem, idx, rawSession = null){", 1)[1]
+        item_mapper = item_mapper.split("async function fetchLatestSession", 1)[0]
+        preset = side_panel.split("const applyPlacementPreset = (preset) => {", 1)[1]
+        preset = preset.split("const updateCropDraft", 1)[0]
+
+        self.assertIn("passageGroupId:", item_mapper)
+        self.assertIn("passageRole:", item_mapper)
+        self.assertIn("passageRange:", item_mapper)
+        self.assertIn("supplementalItem:", item_mapper)
+        self.assertIn("const selectedPassageFragments = selectedGroupItems.filter(isPassageFragmentProblem);", side_panel)
+        self.assertIn("placementPreset === 'passage-only'", side_panel)
+        self.assertIn("setPlacements?.(selectedPassageFragments.map(target => ({", preset)
+        self.assertIn("scaleRatio: maxPlacementScaleRatio(target)", preset)
+        self.assertIn("fitWidth: true", preset)
+        self.assertIn("setBoardColumns?.(1)", preset)
+        self.assertIn("value === 'passage-only' && passageFragmentCount === 0", side_panel)
+        self.assertIn("['passage-only', '지문 전체 너비']", side_panel)
+        self.assertIn("전체 칠판을 1열로 바꾸고, 이미 추출된 지문 본문만 최대 읽기 폭으로 맞춥니다", side_panel)
+
+    def test_placement_apply_persists_preview_adjustments(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        save_flow = source.split("const savePlacement = async () => {", 1)[1]
+        save_flow = save_flow.split("const reorder = (fromId, toId", 1)[0]
+
+        self.assertIn("setPlacement, setPlacements, savePlacement, mutateSession, mutating", side_panel)
+        self.assertIn("await savePlacement?.();", side_panel)
+        self.assertIn("derivePlacementSaveState(session, items, boardColumns, layoutGapMode)", side_panel)
+        self.assertNotIn("placementApplied", side_panel)
+        self.assertIn("onClick={() => { void commitPlacement(); }}", side_panel)
+        self.assertIn("sessionEditState?.canSave ?? placementSaveState.canSave", side_panel)
+        self.assertIn("|| panelBusy}", side_panel)
+        self.assertIn("layoutGapMode", save_flow)
+        self.assertIn("materializeSessionForItems(", save_flow)
+        self.assertIn("sessionEditorDraftSignature(candidate) === sessionEditorDraftSignature(session)", save_flow)
+        self.assertIn("postRestoreBoardLayoutWithConflictRetry(candidate, boardColumns)", save_flow)
+        self.assertIn("if (result.conflictBase) snapshotBefore = result.conflictBase;", save_flow)
+        self.assertIn("setSession(restored);", save_flow)
+        self.assertIn("setActiveId(currentId => (", save_flow)
+        self.assertIn("appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT)", save_flow)
+        self.assertIn("savePlacement={savePlacement}", source)
+        self.assertIn("placementScaleRatio: initialScale,", source)
+
+    def test_placement_updates_are_batched_and_conflict_safe(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        batch_flow = source.split("const setPlacements = (updates) => {", 1)[1]
+        batch_flow = batch_flow.split("const savePlacement = async () => {", 1)[0]
+        retry_flow = source.split("async function postRestoreBoardLayoutWithConflictRetry", 1)[1]
+        retry_flow = retry_flow.split("async function postClassinReviewResult", 1)[0]
+
+        self.assertIn("const patchById = new Map", batch_flow)
+        self.assertIn("return applyPlacementPatchToItem(x, patch);", batch_flow)
+        self.assertIn("setPlacements={setPlacements}", source)
+        self.assertIn("if (setPlacements) setPlacements(updates);", side_panel)
+        self.assertIn("selectedPassageFragments.map(target => ({", side_panel)
+        preset_flow = side_panel.split("const applyPlacementPreset", 1)[1].split("const commitPlacement", 1)[0]
+        self.assertNotIn("setPlacementApplied(true)", preset_flow)
+
+        self.assertIn("assertPlacementSaveSession(await postRestore(candidate))", retry_flow)
+        self.assertIn("error?.code !== 'session_conflict'", retry_flow)
+        self.assertIn("captureSessionRevision(conflictPayload);", retry_flow)
+        self.assertIn("rebaseSessionBoardLayout(latestSession, candidate, boardColumns)", retry_flow)
+        self.assertIn("conflictBase: cloneSession(latestSession)", retry_flow)
+        self.assertIn("invalid_placement_save_response", source)
+
+    def test_board_dividers_and_page_indicator_use_true_classin_12_grid(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = board_document()
+        board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
+
+        self.assertIn("function classinBoardPageNumberAtOffset(offsetPages)", source)
+        self.assertIn("offsetPages: index * DEFAULT_SLOT_HEIGHT_PAGES", source)
+        self.assertIn("top: index * DEFAULT_SLOT_HEIGHT_PAGES * pageH", source)
+        self.assertIn("className={`page-head", board_stage)
+        self.assertIn("ClassIn {band.page}쪽", board_stage)
+        self.assertIn("Math.max(1, previewEstimate.classinPageCount)", board_stage)
+        self.assertIn(">ClassIn</span>", board_stage)
+        self.assertIn("C{tileClassinStartPage}–C{tileClassinEndPage}", board_stage)
+        self.assertIn("`예상 C${previewEstimate.classinPageCount}`", board_stage)
+        self.assertIn(".page-divider .label .classin-page", board)
+
+    def test_board_preview_exposes_estimate_and_active_gap_guides(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board_stage = source.split("function BoardStage({", 1)[1].split("function downloadPublishSummary", 1)[0]
+
+        estimate = board_stage.split('className="stage-toolbar stage-unified-toolbar"', 1)[1].split('className="stage-board"', 1)[0]
+        summary = estimate.split('className="stage-estimate-summary stage-estimate-details-toggle"', 1)[1].split('className="stage-unified-actions"', 1)[0]
+        self.assertNotIn('role="status"', summary)
+        self.assertNotIn('aria-live=', summary)
+        self.assertIn("전체 {previewEstimate.classinPageCount}쪽", summary)
+        self.assertNotIn("EDB", summary)
+        self.assertNotIn("다음", summary)
+        self.assertNotIn("stage-estimate-action", estimate)
+        self.assertIn("ReactDOM.createPortal", estimate)
+        self.assertIn('role="dialog"', estimate)
+        self.assertIn('className="active-slot-gap"', board_stage)
+        self.assertIn('className="active-next-boundary"', board_stage)
+        self.assertIn("previewEstimate.active?.nextStartPages != null", board_stage)
+        self.assertIn("여백 {formatClassinPageAmount(activeTrailingGapPages)}", board_stage)
+        side_panel = source.split("function SidePanel", 1)[1].split("function LoadingOverlay", 1)[0]
+        self.assertIn('className="placement-gap-control"', side_panel)
+        self.assertIn("reducePlacementGap?.(item.id)", side_panel)
+        self.assertIn("undoPlacementGap?.()", side_panel)
+        self.assertIn("이미지 안의 흰 배경과 선택한 줄의 문항 위치는 유지하고", side_panel)
+        self.assertIn("뒤따르는 줄을 위로 당깁니다", side_panel)
+
+    def test_board_settings_supports_compact_layout_and_gap_override_reset(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        layout_controls = source.split("function BoardLayoutControls", 1)[1]
+        layout_controls = layout_controls.split("function SidePanel", 1)[0]
+        item_tab = side_panel.split("{tab === 'item' && (", 1)[1]
+        item_tab = item_tab.split("{tab === 'placement' && (", 1)[0]
+        placement_tab = side_panel.split("{tab === 'placement' && (", 1)[1]
+        placement_tab = placement_tab.split("{tab === 'board' && (", 1)[0]
+        settings_tab = side_panel.split("{tab === 'board' && (", 1)[1]
+        materialize = source.split("function materializeSessionForItems", 1)[1]
+        materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
+
+        self.assertIn("문항 사이 여백", layout_controls)
+        self.assertIn("1.2 맞춤", layout_controls)
+        self.assertIn("빈틈 없이", layout_controls)
+        self.assertIn("1.2p는 ClassIn 한 페이지입니다", layout_controls)
+        self.assertIn("최대 6% 이내", layout_controls)
+        self.assertIn("사용자가 조절한 배율은 유지", layout_controls)
+        self.assertIn("ClassIn 화면 경계를 걸칠 수", layout_controls)
+        self.assertIn("개별 여백 삭제", layout_controls)
+        self.assertIn("resetPlacementGaps", layout_controls)
+        # Session-wide layout sits with placement, not on top of one problem's options.
+        self.assertIn("<BoardLayoutControls", placement_tab)
+        self.assertNotIn("forcedOpen=", placement_tab)
+        self.assertIn('title="배치 규칙 및 개별 여백"', layout_controls)
+        self.assertNotIn("<BoardLayoutControls", item_tab)
+        self.assertNotIn("<BoardLayoutControls", settings_tab)
+        self.assertNotIn("칠판 동작", settings_tab)
+        self.assertIn("window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요?", source)
+        self.assertIn("snapshot.layoutGapMode = normalizedGapMode", materialize)
+        self.assertIn("snapshot.layout_gap_mode = normalizedGapMode", materialize)
+        self.assertIn("const strandedProblems = snapshot.problems.filter", materialize)
+        self.assertIn("const mergedProblems = orderedProblems.concat(strandedProblems)", materialize)
+        self.assertIn("placementGapAfterPages", source)
+        self.assertIn("placementAutoFitDisabled", source)
+        self.assertIn("layoutGapMode: normalizeLayoutGapMode", source)
+
+    def test_admin_pin_update_is_only_offered_for_a_new_version(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+
+        self.assertIn('{updateInfo?.updateAvailable && <div className="update-install-card">', side_panel)
+        self.assertIn("관리자 PIN 업데이트", side_panel)
+        self.assertIn("관리자 PIN 확인 후 업데이트", side_panel)
+        self.assertIn("const requestUpdateInstall = () =>", side_panel)
+        self.assertIn("window.confirm(", side_panel)
+
+    def test_left_sidebar_filters_recognized_material_without_destructive_recognition_target(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = board_document()
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        export_request = source.split("async function postExport(files", 1)[1]
+        export_request = export_request.split("function formatApiError", 1)[0]
+        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
+        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+
+        self.assertIn('role="group" aria-label="자료 모아보기"', items_rail)
+        self.assertIn("['all', '전체', materialCounts.all]", items_rail)
+        self.assertIn("['questions', '문항', materialCounts.questions]", items_rail)
+        self.assertIn("['passages', '공통 지문', materialCounts.passages]", items_rail)
+        self.assertIn("items.filter(item => !isPassageFragmentProblem(item)).length", items_rail)
+        self.assertIn("items.filter(isPassageFragmentProblem).length", items_rail)
+        self.assertIn("모아보기 중 · 순서 변경은 전체 보기에서", items_rail)
+        self.assertNotIn('aria-label="인식 대상"', side_panel)
+        self.assertIn("contentTarget: resolvedContentTarget", export_request)
+        self.assertIn("content_target: resolvedContentTarget", export_request)
+        self.assertIn("contentTarget: DEFAULT_CONTENT_TARGET", queue_source)
+        self.assertEqual(1, items_rail.count("processQueuedFiles("))
+        self.assertIn("normalizeSplitMode(splitMode)", items_rail)
+        self.assertIn("const isPassageOnly = mode === 'passage-only';", queue_source)
+        self.assertIn("const isRecognition = mode === 'recognize' || isPassageOnly;", queue_source)
+        self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", queue_source)
+        self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", source)
+        self.assertIn("const CONTENT_TARGETS = new Set(['all', 'questions', 'shared-passages']);", source)
+        self.assertIn("return CONTENT_TARGETS.has(normalized) ? normalized : DEFAULT_CONTENT_TARGET;", source)
+        self.assertIn("review.kind === 'session-passage-reextract'", source)
+        self.assertIn("공통 지문 ${summary.problems}개", source)
+        self.assertIn(".material-filter", board)
+
+    def test_left_sidebar_supports_modifier_multiselect_group_move_and_bulk_delete(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = board_document()
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+        reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
+        remove_flow = source.split("const removeItem = async (id, options = {}) =>", 1)[1]
+        remove_flow = remove_flow.split("const addMockSample", 1)[0]
+        selected_step_flow = source.split("const applySelectedStep = (problemIds, step) =>", 1)[1]
+        selected_step_flow = selected_step_flow.split("const classifySelected", 1)[0]
+
+        self.assertIn("selectedItemIds, setSelectedItemIds", items_rail)
+        self.assertIn("applySelectionClick(", items_rail)
+        self.assertIn("selectionKeyboardCommand(", items_rail)
+        self.assertIn("Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape", items_rail)
+        self.assertIn("sourceIds: drag.ids", items_rail)
+        self.assertIn("adjacentGroupReorderCommand(items, sourceIds, direction)", items_rail)
+        self.assertIn("removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });", items_rail)
+        self.assertIn("선택 문제 일괄 작업", items_rail)
+        self.assertNotIn("onClassifySelected?.(orderedSelectedIds, 'shared-passage')", items_rail)
+        self.assertIn("onClassifySelected?.(orderedSelectedIds, 'question')", items_rail)
+        self.assertIn("onDownloadSelected?.(orderedSelectedIds)", items_rail)
+        self.assertIn("reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)", reorder_flow)
+        self.assertIn("await mutateSession('exclude', { problemIds });", remove_flow)
+        self.assertIn("showActionToast(", remove_flow)
+        self.assertIn("stepLabel(nextStep)", selected_step_flow)
+        self.assertNotIn("processingStepLabel", selected_step_flow)
+        self.assertIn(".item.is-selected", board)
+        self.assertIn(".problem-order-status.is-selection", board)
+        self.assertIn("updatePointerDragVisual(event.clientX, event.clientY)", items_rail)
+        self.assertIn("resetPointerDragVisual()", items_rail)
+        self.assertIn("pressedItemId === itemId ? 'is-pressed' : ''", items_rail)
+        self.assertIn(".item.is-pressed:not(.dragging)", board)
+        self.assertIn("ReactDOM.createPortal(", items_rail)
+        self.assertIn("className=\"rail-drag-overlay editor-basic-mode\"", items_rail)
+        self.assertIn("{dragPreview.count}개 이동", items_rail)
+        self.assertIn("displayedItemRows.map", items_rail)
+        self.assertIn("rail.setPointerCapture?.(event.pointerId)", items_rail)
+        self.assertIn("translate3d(", board)
+        self.assertIn("var(--drag-preview-x, 0)", board)
+        self.assertIn(".rail-drag-overlay .item.rail-drag-overlay-card", board)
+        self.assertIn("String(dropTarget?.id || '') === itemId", items_rail)
+        self.assertIn("dropTargetLayoutSignature", items_rail)
+        self.assertIn("className=\"rail-drop-slot\"", items_rail)
+        self.assertIn("data-drop-position=\"before\"", items_rail)
+        self.assertIn("data-drop-position=\"after\"", items_rail)
+        self.assertIn(".item.drop-before", board)
+        self.assertIn("@keyframes rail-drop-slot-open", board)
+        self.assertIn("@keyframes rail-drop-slot-line", board)
+        self.assertNotIn("@keyframes rail-drop-slot-marker", board)
+        self.assertNotIn(".rail-drop-slot::after", board)
+        self.assertIn("animation: rail-drop-slot-open", board)
+
+    def test_item_editor_can_correct_question_and_shared_passage_classification(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1].split("function LoadingOverlay", 1)[0]
+        mutation = source.split("const mutateSession = useCallback(", 1)[1]
+        mutation = mutation.split("const retryAiSession", 1)[0]
+
+        self.assertIn('className="item-classification"', side_panel)
+        self.assertIn('role="radiogroup" aria-label="선택 자료 분류"', side_panel)
+        self.assertIn("classification: 'question'", side_panel)
+        self.assertIn("classification: 'shared-passage'", side_panel)
+        self.assertIn("선택 즉시 저장 · 이미 잘라진 독립 지문 이미지에만 사용", side_panel)
+        self.assertIn("수업의 미저장 변경도 함께 저장", side_panel)
+        self.assertIn(">독립 지문 이미지</button>", side_panel)
+        self.assertIn("action === 'classify' ? '자료 분류를 저장하는 중…'", mutation)
+        self.assertIn("action === 'classify' ? '자료 분류를 변경했어요'", mutation)
+
     def test_page_png_queue_register_applies_fit_width_page_flow(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
+        queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
         session_helper = source.split("function fitWidthPageAsIsSession", 1)[1]
         session_helper = session_helper.split("function mergeSessions", 1)[0]
 
@@ -192,20 +765,23 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         apply_state = apply_state.split("function confirmedItemState", 1)[0]
         reorder_flow = source.split("const reorder = (fromId, toId", 1)[1]
         reorder_flow = reorder_flow.split("const removeItem", 1)[0]
-        remove_flow = source.split("const removeItem = (id) =>", 1)[1]
+        remove_flow = source.split("const removeItem = async (id, options = {}) =>", 1)[1]
         remove_flow = remove_flow.split("const addMockSample", 1)[0]
 
-        self.assertIn("const reflowedItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);", materialize)
+        self.assertIn("const reflowedItems = reflowItemsForBoardOrder(", materialize)
+        self.assertIn("normalizedGapMode", materialize)
         self.assertIn("next.startYPages", apply_state)
         self.assertIn("next.snappedNextStartYPages", apply_state)
-        self.assertIn("const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);", reorder_flow)
-        self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns)", reorder_flow)
+        self.assertIn("options?.resetPlacement ? resetItems : reordered", reorder_flow)
+        self.assertIn("layoutGapMode", reorder_flow)
+        self.assertIn("materializeSessionForItems(session, nextItems, fileName, boardColumns, layoutGapMode)", reorder_flow)
         self.assertIn("setSession(nextSession)", reorder_flow)
         self.assertIn("postRestore(nextSession)", reorder_flow)
         self.assertIn("appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT)", reorder_flow)
         self.assertIn("setActiveId(fromId)", reorder_flow)
         self.assertIn("if (session)", remove_flow)
-        self.assertIn("void mutateSession('exclude', { problemId: id });", remove_flow)
+        self.assertIn("await mutateSession('exclude', { problemId: id })", remove_flow)
+        self.assertIn("() => { void undoMutation(); }", remove_flow)
         self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
 
     def test_undo_keeps_the_current_workspace_and_active_problem(self) -> None:
@@ -222,14 +798,75 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
         board_stage = source.split("function BoardStage({", 1)[1].split("// ─── RIGHT:", 1)[0]
 
-        self.assertIn("}, [itemOrderSignature]);", items_rail)
-        self.assertIn("}, [boardOrderSignature, pageH, contentW, columnCount]);", board_stage)
+        self.assertIn(
+            "}, [itemOrderSignature, draggingLayoutSignature, dropTargetLayoutSignature]);",
+            items_rail,
+        )
+        self.assertIn("}, [boardOrderSignature, pageH, contentW, columnCount, previewFitActive]);", board_stage)
         self.assertIn("setCurrentPage(prev => prev === nextPage ? prev : nextPage);", board_stage)
         self.assertIn("nearestPlacementIndex(layout.positions, c.scrollTop + 24)", board_stage)
         self.assertNotIn("setScrollTop(scroll.scrollTop)", board_stage)
         self.assertNotIn("layout.positions\n      .map", board_stage)
-        self.assertIn("top: el.offsetTop, height: el.offsetHeight", items_rail)
+        self.assertIn("for (const { item } of visibleItemRows)", items_rail)
+        self.assertIn("const rect = el.getBoundingClientRect();", items_rail)
+        self.assertIn("drag.lastClientY", items_rail)
+        self.assertIn("sourceIdSet: new Set(sourceIds)", items_rail)
+        self.assertIn("activeDrag.sourceIdSet", items_rail)
+        self.assertIn("window.addEventListener('pointermove', drag.windowPointerMove", items_rail)
+        self.assertIn("window.addEventListener('blur', drag.windowBlur)", items_rail)
+        self.assertIn("removeRailDragWindowListeners(drag)", items_rail)
+        self.assertIn("scrollContainerContentTop(itemRect, railRect, rail.scrollTop)", items_rail)
+        self.assertIn("Math.max(18, railRect.height * 0.35)", items_rail)
+        self.assertNotIn("|| dropTargetRef.current", items_rail)
+        self.assertIn("itemLayoutAnimationsRef.current.get(it.id)", items_rail)
+        self.assertIn("duration: isMovedItem ? 480 : 380", items_rail)
+        self.assertIn("|| event.shiftKey", items_rail)
+        self.assertIn("|| event.ctrlKey", items_rail)
+        self.assertIn("|| event.metaKey", items_rail)
+        self.assertIn('className="grip"', items_rail)
+        self.assertIn("onPointerDown={e => startPointerDrag(e, it.id)}", items_rail)
+        self.assertIn("dragVisualFrameRef.current = window.requestAnimationFrame", items_rail)
         self.assertNotIn("rail.querySelectorAll('.item[data-item-id]')", items_rail)
+
+    def test_sidebar_selection_anchor_tracks_external_selection_changes(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+
+        self.assertIn("const railSelectionSnapshotRef = useRef('')", items_rail)
+        self.assertIn("const railOwnsAnchor =", items_rail)
+        self.assertIn("railSelectionSnapshotRef.current === currentSelectionKey", items_rail)
+        self.assertIn("railSelectionSnapshotRef.current = selection.selectedIds.join('|')", items_rail)
+
+    def test_board_drag_uses_whole_tile_and_exposes_selection_state(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board_stage = source.split("function BoardStage({", 1)[1].split("// ─── RIGHT:", 1)[0]
+
+        self.assertIn('className="tile-hd"', board_stage)
+        self.assertIn("onPointerDown={e => beginPositionDrag(e, it, p)}", board_stage)
+        tile = board_stage.split('className={`stage-tile ', 1)[1].split('<div', 1)[0]
+        self.assertIn("onPointerDown={e => beginPositionDrag(e, it, p)}", tile)
+        self.assertIn("aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}", board_stage)
+
+    def test_reorder_has_keyboard_accessibility_and_failed_save_rollback(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        board = board_document()
+        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
+        reorder_flow = source.split("const reorder = (fromId, toId", 1)[1].split("const removeItem", 1)[0]
+
+        self.assertIn("e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')", items_rail)
+        self.assertIn('aria-describedby={editScope ? undefined : "problem-order-help"}', items_rail)
+        self.assertIn("filterActive ? '필터된 문제' : '순서 변경 가능한 문제'", items_rail)
+        self.assertIn("Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape", items_rail)
+        self.assertIn('role="status" aria-live="polite"', items_rail)
+        self.assertIn("pendingKeyboardFocusRef.current = item.id", items_rail)
+        self.assertIn("setItems(rollbackItems)", reorder_flow)
+        self.assertIn("setSession(snapshotBefore)", reorder_flow)
+        self.assertIn("순서 저장 실패 · 이전 순서로 복구했습니다", reorder_flow)
+        self.assertIn("return true", reorder_flow)
+        self.assertIn(".item:focus-visible", board)
+        self.assertIn(".problem-order-status", board)
+        self.assertIn("@media (min-width: 701px) and (max-width: 920px)", board)
+        self.assertIn(".item .actions .item-download-action", board)
 
     def test_hangul_runtime_helpers_include_hwp_renderer(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -254,7 +891,14 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || ''", side_panel)
         self.assertIn("updateStatus === 'invalid_feed'", side_panel)
         self.assertIn("피드 오류", side_panel)
-        self.assertIn("disabled={updateBusy || !updateDownloadUrl}", side_panel)
+        self.assertIn("isUpdateArchitectureMismatch(updateInfo)", side_panel)
+        self.assertIn("이 기기용 업데이트 파일 없음", side_panel)
+        self.assertIn("현재 아키텍처용 설치 파일을 선택해 주세요", source)
+        self.assertIn("updateArchitectureSteps.map", side_panel)
+        self.assertIn("unsupported_architecture", source)
+        self.assertIn("update_architecture_mismatch", source)
+        self.assertIn("updateArchitectureNotice(info)", source)
+        self.assertIn("disabled={updateActionBusy || !updateDownloadUrl}", side_panel)
         self.assertIn("if (updateBusy)", source)
         self.assertIn("fetch('/api/app/update')", source)
         self.assertIn("fetch('/api/system/open-url'", source)
@@ -263,7 +907,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         bundle = (PROJECT_ROOT / "ui_prototype" / "app.bundle.js").read_text(encoding="utf-8")
         compact_bundle = re.sub(r"\s+", "", bundle)
 
-        self.assertIn("updateBusy||!updateDownloadUrl", compact_bundle)
+        self.assertIn("updateActionBusy||!updateDownloadUrl", compact_bundle)
         self.assertIn("invalid_feed", bundle)
         self.assertIn("피드 오류", bundle)
         self.assertIn("fetch('/api/app/update')", bundle)
@@ -428,7 +1072,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_review_summary_surfaces_passage_groups(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board_html = board_document()
         review_stage = source.split("function ReviewStage", 1)[1]
         review_stage = review_stage.split("// ─── LEFT:", 1)[0]
         passage_id_helper = source.split("function passageGroupIdFor(problem)", 1)[1]
@@ -438,7 +1082,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         summary_helper = source.split("function sessionReviewSummary(session)", 1)[1]
         summary_helper = summary_helper.split("function normalizePublishSummary", 1)[0]
 
-        self.assertIn("'passage', '지문'", review_stage)
+        self.assertIn("prev === 'passage' ? 'all' : 'passage'", review_stage)
         self.assertIn("지문 묶음", review_stage)
         self.assertIn("이어짐", review_stage)
         self.assertIn("passageGroupCount", review_stage)
@@ -464,7 +1108,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_board_uses_prebuilt_bundle_without_browser_babel(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board_html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        board_html = board_document()
 
         self.assertIn("app.bundle.js?v=frontend-bundle-", board_html)
         self.assertNotIn("app.js?v=", board_html)

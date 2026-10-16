@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "corpus_id": "synthetic-smoke-v1",
+  "description": "CI harness smoke data only; this is not a production quality claim.",
+  "case_thresholds": {
+    "missing_question_count_max": 0,
+    "duplicate_question_count_max": 0,
+    "extra_question_count_max": 0,
+    "question_recall_min": 1.0,
+    "question_precision_min": 1.0,
+    "missing_passage_range_count_max": 0,
+    "extra_passage_range_count_max": 0,
+    "passage_range_recall_min": 1.0,
+    "passage_range_precision_min": 1.0,
+    "preflight_issue_count_max": 0,
+    "manual_review_rate_max": 0.25,
+    "processing_ms_max": 2000,
+    "problem_signature_mismatch_count_max": 0,
+    "artifact_invalid_count_max": 0
+  },
+  "aggregate_thresholds": {
+    "missing_question_count_max": 0,
+    "duplicate_question_count_max": 0,
+    "extra_question_count_max": 0,
+    "question_recall_min": 1.0,
+    "question_precision_min": 1.0,
+    "passage_range_recall_min": 1.0,
+    "passage_range_precision_min": 1.0,
+    "preflight_issue_count_max": 0,
+    "manual_review_rate_max": 0.20,
+    "processing_ms_p95_max": 2000,
+    "case_failure_count_max": 0,
+    "problem_signature_mismatch_count_max": 0,
+    "artifact_invalid_count_max": 0
+  },
+  "cases": [
+    {
+      "id": "synthetic-korean-range",
+      "description": "Anonymized observation that exercises range and review metrics.",
+      "tags": ["synthetic", "korean", "passage"],
+      "source": {"format": "synthetic", "subject": "korean"},
+      "result": "observations/synthetic-korean-range.json",
+      "expected": {
+        "question_numbers": [18, 19, 20, 21],
+        "passage_ranges": [[18, 21]]
+      }
+    },
+    {
+      "id": "synthetic-math-no-passage",
+      "description": "Anonymized observation for a question-only document.",
+      "tags": ["synthetic", "math"],
+      "source": {"format": "synthetic", "subject": "math"},
+      "result": "observations/synthetic-math-no-passage.json",
+      "expected": {
+        "question_numbers": [1, 2],
+        "passage_ranges": []
+      }
+    }
+  ]
+}

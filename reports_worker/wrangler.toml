@@ -1,0 +1,22 @@
+name = "classin-edb-reports"
+main = "src/index.js"
+compatibility_date = "2026-07-27"
+workers_dev = false
+
+[[ratelimits]]
+name = "REPORT_RATE_LIMITER"
+namespace_id = "2026082401"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+[[routes]]
+pattern = "reports.classin.cloud"
+custom_domain = true
+
+[[d1_databases]]
+binding = "REPORTS_DB"
+database_name = "classin-edb-reports"
+database_id = "de4913d5-9f19-433b-abfa-763694429549"
+migrations_dir = "migrations"

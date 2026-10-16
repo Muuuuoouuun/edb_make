@@ -10,6 +10,31 @@ import preprocess
 
 
 class TestImagePreprocessCache(unittest.TestCase):
+    def test_prepare_pages_applies_camera_exif_orientation_before_segmentation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "camera.jpg"
+            image = Image.new("RGB", (80, 120), "white")
+            for x in range(20):
+                for y in range(30):
+                    image.putpixel((x, y), (0, 0, 0))
+            exif = Image.Exif()
+            exif[274] = 6
+            image.save(source, exif=exif)
+            for crop_margins in (False, True):
+                with self.subTest(crop_margins=crop_margins):
+                    pages = preprocess.prepare_pages(
+                        source, root / str(crop_margins),
+                        enable_perspective=False, enable_deskew=False,
+                        enable_margin_crop=crop_margins,
+                    )
+                    prepared = pages[0].image
+                    self.assertGreater(prepared.width, prepared.height)
+                    self.assertEqual((prepared.width, prepared.height), (pages[0].width_px, pages[0].height_px))
+                    self.assertNotEqual(source.resolve(), Path(pages[0].normalized_path).resolve())
+                    self.assertLess(prepared.convert("L").getpixel((prepared.width - 5, 5)), 40)
+                    self.assertFalse(prepared.getexif().get(274))
+
     def test_prepare_pages_passthroughs_image_when_no_transform_is_needed(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

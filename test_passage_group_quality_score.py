@@ -168,20 +168,31 @@ class TestPassageGroupQualityScore(unittest.TestCase):
                 ),
             ]
 
-            page_1 = group_problem_units(
-                PageModel(
-                    page_id="korean-cross-001",
-                    width_px=900,
-                    height_px=1400,
-                    subject=Subject.KOREAN,
-                    source_path=str(page_1_path),
-                    blocks=[
-                        _block("range-18-21", BlockType.STEM, 40, "[18~21] 다음 글을 읽고 물음에 답하시오."),
-                        _block("shared-passage-a", BlockType.STEM, 140, "긴 지문의 첫 페이지 내용이다.", height=520),
-                        _block("q18", BlockType.STEM, 760, "18. 윗글의 내용으로 적절한 것은?"),
-                        _block("q19", BlockType.STEM, 920, "19. 윗글의 서술 방식으로 적절한 것은?"),
-                    ],
-                )
+            page_1 = PageModel(
+                page_id="korean-cross-001",
+                width_px=900,
+                height_px=1400,
+                subject=Subject.KOREAN,
+                source_path=str(page_1_path),
+                blocks=[
+                    _block("range-18-21", BlockType.STEM, 40, "[18~21] 다음 글을 읽고 물음에 답하시오."),
+                    _block("shared-passage-a", BlockType.STEM, 140, "긴 지문의 첫 페이지 내용이다.", height=520),
+                ],
+                problems=[
+                    ProblemUnit(
+                        unit_id="korean-cross-001-passage-fragment",
+                        subject=Subject.KOREAN,
+                        title="지문 18~21",
+                        stem_block_ids=["range-18-21", "shared-passage-a"],
+                        metadata={
+                            "passage_group_id": "korean-cross-001-passage-18-21",
+                            "passage_range": {"start": 18, "end": 21},
+                            "passage_role": "passage_fragment",
+                            "passage_child_problem_numbers": [18, 19, 20, 21],
+                            "supplemental_item": True,
+                        },
+                    )
+                ],
             )
             page_2 = group_problem_units(
                 PageModel(
@@ -192,8 +203,10 @@ class TestPassageGroupQualityScore(unittest.TestCase):
                     source_path=str(page_2_path),
                     blocks=[
                         _block("shared-passage-b", BlockType.STEM, 40, "앞 페이지에서 이어지는 긴 지문 내용이다.", height=420),
-                        _block("q20", BlockType.STEM, 560, "20. 윗글을 바탕으로 추론한 내용은?"),
-                        _block("q21", BlockType.STEM, 720, "21. 윗글의 핵심 내용은?"),
+                        _block("q18", BlockType.STEM, 520, "18. 윗글의 내용으로 적절한 것은?"),
+                        _block("q19", BlockType.STEM, 680, "19. 윗글의 서술 방식으로 적절한 것은?"),
+                        _block("q20", BlockType.STEM, 840, "20. 윗글을 바탕으로 추론한 내용은?"),
+                        _block("q21", BlockType.STEM, 1000, "21. 윗글의 핵심 내용은?"),
                     ],
                 )
             )

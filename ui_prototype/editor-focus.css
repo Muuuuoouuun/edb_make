@@ -1,0 +1,240 @@
+/* 5b: the existing editor in a spacious, desktop-focused board shell.
+   Load after editor-layout.css. The inspector has its own reserved gutter:
+   it never covers the board's pointer/drag surface. All controls still use
+   the existing application state and action handlers. */
+.app > .main.editor-basic-mode.editor-focus-mode:not(.home-mode) {
+  --focus-rail-width: 96px;
+  --focus-panel-width: 330px;
+  --focus-panel-gutter: calc(var(--focus-panel-width) + 32px);
+  position: relative;
+  isolation: isolate;
+  grid-template-columns: var(--focus-rail-width) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  padding: 0 22px 22px;
+  overflow: hidden;
+}
+
+.app > .main.editor-basic-mode.editor-focus-mode.focus-panel-collapsed:not(.home-mode) {
+  --focus-panel-gutter: 0px;
+}
+
+.app > .main.editor-basic-mode.editor-focus-mode:not(.left-collapsed) {
+  --focus-rail-width: 220px;
+}
+
+.main.editor-focus-mode > .col.left {
+  grid-column: 1;
+  grid-row: 1;
+  border: 0;
+  border-radius: 28px;
+  min-height: 0;
+  background: var(--surface-2);
+}
+
+.main.editor-focus-mode .col.left.is-collapsed .rail-mini-hd {
+  min-height: 44px;
+  padding: 8px;
+  border-bottom: 0;
+}
+
+.main.editor-focus-mode .rail-mini-tools {
+  gap: 8px;
+  padding: 0 12px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.main.editor-focus-mode .rail-mini-tools > .icon-btn {
+  width: 48px;
+  height: 40px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.main.editor-focus-mode .rail-mini-count {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: 650;
+}
+
+.main.editor-focus-mode .items.rail-mini-list {
+  padding: 12px 12px 24px;
+  gap: 10px;
+  scrollbar-gutter: stable;
+}
+
+.main.editor-focus-mode .rail-mini-item {
+  gap: 6px;
+  padding: 4px;
+  border-radius: 14px;
+}
+
+.main.editor-focus-mode .rail-mini-item .thumb {
+  aspect-ratio: 3 / 4;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.main.editor-focus-mode .rail-mini-item.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.main.editor-focus-mode > .col.center {
+  position: relative;
+  /* A named view-transition creates a stacking context even at rest. Let the
+     toolbar menu sit above the sibling floating inspector without lifting the
+     entire opaque board over that inspector. */
+  view-transition-name: none;
+  grid-column: 2;
+  grid-row: 1;
+  border: 0;
+  border-radius: 28px;
+  background: transparent;
+  min-height: 0;
+}
+
+.main.editor-focus-mode > .col.center > .stage {
+  position: relative;
+  background: transparent;
+}
+
+.main.editor-focus-mode .stage-wrap,
+body.dark .main.editor-focus-mode .stage-wrap {
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  gap: 12px;
+  padding: 12px calc(var(--focus-panel-gutter) + 20px) 20px 20px;
+  background: transparent;
+}
+
+.main.editor-focus-mode .stage-board {
+  /* Inherit the full-height scrolling viewport from the basic board. */
+  border-radius: 18px;
+  box-shadow: none;
+}
+
+.main.editor-focus-mode .stage > .stage-unified-toolbar {
+  margin: 12px 16px 0;
+  width: auto;
+  border-radius: 16px;
+}
+
+.main.editor-focus-mode > .col.right {
+  position: absolute;
+  z-index: 16;
+  top: 76px;
+  right: 38px;
+  bottom: 42px;
+  width: var(--focus-panel-width);
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 26px;
+  background: var(--surface);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+
+.main.editor-focus-mode.focus-panel-collapsed > .col.right {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.main.editor-basic-mode:not(.editor-focus-mode) .focus-panel-heading {
+  display: none;
+}
+
+.main.editor-focus-mode .focus-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 40px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.main.editor-focus-mode .focus-panel-heading > div {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.main.editor-focus-mode .focus-panel-heading > div > span {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+}
+
+.main.editor-focus-mode .focus-panel-heading strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+
+.main.editor-focus-mode .focus-panel-toggle {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--ink-2);
+}
+
+.main.editor-focus-mode .focus-panel-reopen {
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  padding-left: 12px;
+}
+
+.main.editor-focus-mode :is(.focus-panel-toggle, .focus-panel-reopen):focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+.main.editor-focus-mode :is(.focus-panel-toggle, .focus-panel-reopen):hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.main.editor-focus-mode :is(.focus-panel-toggle, .focus-panel-reopen):disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+/* Small laptops retain the same desktop model; there is no mobile redesign. */
+@media (max-width: 1200px) {
+  .app > .main.editor-basic-mode.editor-focus-mode:not(.home-mode) {
+    --focus-rail-width: 80px;
+    --focus-panel-width: 300px;
+    gap: 12px;
+    padding: 0 16px 16px;
+  }
+
+  .main.editor-focus-mode > .col.right {
+    right: 32px;
+  }
+
+  .app > .main.editor-basic-mode.editor-focus-mode:not(.left-collapsed) {
+    --focus-rail-width: 208px;
+  }
+
+  .main.editor-focus-mode .items.rail-mini-list {
+    padding-inline: 8px;
+  }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .main.editor-focus-mode :is(.stage-toolbar, .col.right, .focus-panel-reopen, .rail-mini-item) {
+    transition: none;
+  }
+}

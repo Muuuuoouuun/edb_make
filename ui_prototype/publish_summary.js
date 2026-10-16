@@ -12,8 +12,10 @@
 
   const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     board_placement_overlap: "판서 배치 겹침",
+    duplicate_problem_id: "문항 ID 중복",
     duplicate_problem_number: "중복 번호",
     low_ink_problem_image: "이미지 내용 부족",
+    missing_problem_id: "문항 ID 누락",
     missing_problem_image: "문항 이미지 없음",
     passage_missing_child_questions: "문항 누락",
     passage_group_source_reuse: "지문 겹침",
@@ -328,6 +330,10 @@
           edb_file_exists: exists === undefined ? true : exists !== false,
           recordCount: positiveNumber(part.recordCount ?? part.record_count),
           record_count: positiveNumber(part.recordCount ?? part.record_count),
+          placementCount: positiveNumber(part.placementCount ?? part.placement_count),
+          placement_count: positiveNumber(part.placementCount ?? part.placement_count),
+          flowEndPages: positiveNumber(part.flowEndPages ?? part.flow_end_pages),
+          flow_end_pages: positiveNumber(part.flowEndPages ?? part.flow_end_pages),
           pageCountHint: positiveNumber(part.pageCountHint ?? part.page_count_hint),
           page_count_hint: positiveNumber(part.pageCountHint ?? part.page_count_hint),
         };
@@ -350,6 +356,10 @@
         edb_file_exists: fallbackExists === undefined ? true : fallbackExists !== false,
         recordCount: positiveNumber(fallback.recordCount),
         record_count: positiveNumber(fallback.recordCount),
+        placementCount: positiveNumber(fallback.placementCount),
+        placement_count: positiveNumber(fallback.placementCount),
+        flowEndPages: positiveNumber(fallback.flowEndPages),
+        flow_end_pages: positiveNumber(fallback.flowEndPages),
         pageCountHint: positiveNumber(fallback.pageCountHint),
         page_count_hint: positiveNumber(fallback.pageCountHint),
       });
@@ -651,6 +661,7 @@
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return "";
     return date.toLocaleString("ko-KR", {
+      timeZone: "Asia/Seoul",
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",

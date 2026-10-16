@@ -70,6 +70,33 @@ class TestPdfPreprocessCache(unittest.TestCase):
             self.assertIs(True, second[0].metadata["pdf_normalized_cache_hit"])
             self.assertEqual(str(source), second[0].metadata["source_pdf_path"])
 
+    def test_prepare_source_pages_preserves_full_200_dpi_pdf_master_without_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "a4.pdf"
+            source.write_bytes(b"%PDF-1.4 full page master")
+            rendered_size = (1654, 2339)
+
+            def fake_render_pdf_pages(src: Path, output_dir: Path, dpi: int) -> list[preprocess.NormalizedPageImage]:
+                self.assertEqual(200, dpi)
+                page = self._rendered_pdf_page(src, output_dir, size=rendered_size)
+                page.metadata["dpi"] = dpi
+                return [page]
+
+            with mock.patch.object(preprocess, "render_pdf_pages", side_effect=fake_render_pdf_pages):
+                prepared = preprocess.prepare_source_pages(
+                    source,
+                    pdf_dpi=200,
+                    deskew=False,
+                    crop_margins=False,
+                    max_dimension=None,
+                )
+
+            self.assertEqual(rendered_size, prepared[0].image.size)
+            self.assertEqual(rendered_size, prepared[0].original_size)
+            self.assertEqual(200, prepared[0].metadata["dpi"])
+            self.assertNotIn("resized_to_max_dimension", prepared[0].metadata)
+
     def test_prepare_pages_pdf_cache_is_content_keyed_and_updates_source_pdf_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

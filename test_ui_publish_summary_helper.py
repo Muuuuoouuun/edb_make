@@ -125,6 +125,8 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
                   edb_file_uri: '/api/file?path=part2',
                   edb_file_exists: true,
                   record_count: 1,
+                  placement_count: 1,
+                  flow_end_pages: 1.2,
                   page_count_hint: 50,
                 },
               ],
@@ -139,6 +141,9 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             }
             if (summary.edbParts[1].partIndex !== 2 || summary.edbParts[1].edbFileName !== 'lesson_part02.edb') {
               throw new Error('snake_case split part payload was not normalized');
+            }
+            if (summary.edbParts[1].placementCount !== 1 || summary.edbParts[1].flowEndPages !== 1.2) {
+              throw new Error('rendered part usage was not normalized');
             }
             if (summary.edbParts.some(part => part.pageCountHint > 50)) {
               throw new Error('test fixture should model ClassIn-safe 50-page parts');
@@ -281,6 +286,27 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             }
             if (summary.classinPreflightIssueSummaryLabel !== '문항 영역 겹침 2 · 판서 배치 겹침 1 · 검수 플래그 남음 1 · 문항 누락 1') {
               throw new Error(`unexpected issue summary: ${summary.classinPreflightIssueSummaryLabel}`);
+            }
+            """
+        )
+
+    def test_normalize_publish_preflight_block_labels_problem_id_issues(self) -> None:
+        run_node(
+            """
+            const { normalizePublishPreflightBlock } = require('./ui_prototype/publish_summary.js');
+            const block = normalizePublishPreflightBlock({
+              errorKind: 'publish_preflight_blocked',
+              classinPreflight: {
+                status: 'blocked',
+                issueCount: 2,
+                issues: [
+                  { type: 'missing_problem_id' },
+                  { type: 'duplicate_problem_id' },
+                ],
+              },
+            });
+            if (block.issueSummaryLabel !== '문항 ID 누락 1 · 문항 ID 중복 1') {
+              throw new Error(`unexpected problem ID labels: ${block.issueSummaryLabel}`);
             }
             """
         )

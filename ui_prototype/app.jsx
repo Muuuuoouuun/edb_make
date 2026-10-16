@@ -1,6 +1,15 @@
 // 칠판 자료 편집기 — main app
 const { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } = React;
 
+const RUNTIME_PLATFORM = typeof navigator === 'undefined'
+  ? ''
+  : String(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '');
+const IS_MAC_PLATFORM = /Mac|iPhone|iPad|iPod/i.test(RUNTIME_PLATFORM);
+const PRIMARY_MODIFIER_LABEL = IS_MAC_PLATFORM ? '⌘' : 'Ctrl';
+const PRIMARY_MODIFIER_NAME = IS_MAC_PLATFORM ? 'Command' : 'Control';
+const ALTERNATE_MODIFIER_LABEL = IS_MAC_PLATFORM ? 'Option' : 'Alt';
+const ALTERNATE_MODIFIER_NAME = IS_MAC_PLATFORM ? 'Option' : 'Alt';
+
 function reportRuntimeDiagnostic(error, detail = {}) {
   const payload = {
     type: detail.type || 'runtime',
@@ -19,6 +28,29 @@ function reportRuntimeDiagnostic(error, detail = {}) {
   return payload;
 }
 
+function captureRecoverableDiagnostic(error, detail = {}) {
+  const payload = {
+    type: detail.type || 'operation',
+    message: error?.message || String(error || '알 수 없는 오류'),
+    timestamp: detail.timestamp || new Date().toISOString(),
+    ...detail,
+  };
+  try {
+    console.warn('[board-operation]', payload.message, payload);
+  } catch (_err) {
+    // Console logging is best-effort.
+  }
+  if (typeof window.EDB_CAPTURE_RUNTIME_DIAGNOSTIC === 'function') {
+    window.EDB_CAPTURE_RUNTIME_DIAGNOSTIC(payload);
+  } else if (Array.isArray(window.EDB_RUNTIME_DIAGNOSTICS)) {
+    window.EDB_RUNTIME_DIAGNOSTICS.push(payload);
+    if (window.EDB_RUNTIME_DIAGNOSTICS.length > 50) {
+      window.EDB_RUNTIME_DIAGNOSTICS.splice(0, window.EDB_RUNTIME_DIAGNOSTICS.length - 50);
+    }
+  }
+  return payload;
+}
+
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
@@ -33,6 +65,7 @@ class AppErrorBoundary extends React.Component {
     reportRuntimeDiagnostic(error, {
       type: 'react-render',
       componentStack: info?.componentStack || '',
+      skipGlobalPanel: true,
     });
   }
 
@@ -78,6 +111,21 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 
 const BOARD_COLORS = ['#1d3a2c', '#101418', '#264653', '#3a2f24'];
 const ACCENTS = ['#2f6fed', '#6d3df0', '#1f7a4a', '#d97757'];
+const BOARD_COLOR_LABELS = {
+  '#1d3a2c': '초록 칠판',
+  '#101418': '검정 칠판',
+  '#264653': '청록 칠판',
+  '#3a2f24': '갈색 칠판',
+};
+
+function initialTweakValues(){
+  return {
+    ...TWEAK_DEFAULTS,
+    dark: readStoredPreference(DARK_MODE_KEY, TWEAK_DEFAULTS.dark, isStoredBoolean),
+    boardColor: readStoredPreference(BOARD_COLOR_KEY, TWEAK_DEFAULTS.boardColor, value => BOARD_COLORS.includes(value)),
+  };
+}
+const ACCENT_LABELS = { '#2f6fed': '파랑', '#6d3df0': '보라', '#1f7a4a': '초록', '#d97757': '주황' };
 
 const SAMPLE_NAMES = [
   '원과 접선의 성질', '근의 공식 유도', '삼각비 특수각 표', '이차함수 그래프', '닮음 도형 예제',
@@ -109,8 +157,23 @@ const reorderItemsForDrop = REORDER_HELPERS.reorderItemsForDrop || ((items, from
   next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, moved);
   return next;
 });
+const reorderItemGroupForDrop = REORDER_HELPERS.reorderItemGroupForDrop || ((items, fromIds, toId, position = 'before') => {
+  const sourceIdSet = new Set((fromIds || []).map(String));
+  const targetId = String(toId || '');
+  if (!Array.isArray(items) || !sourceIdSet.size || !targetId || sourceIdSet.has(targetId)) return items;
+  const moved = items.filter(item => sourceIdSet.has(String(item.id)));
+  const remaining = items.filter(item => !sourceIdSet.has(String(item.id)));
+  const targetIndex = remaining.findIndex(item => String(item.id) === targetId);
+  if (!moved.length || targetIndex < 0) return items;
+  const next = remaining.slice();
+  next.splice(targetIndex + (position === 'after' ? 1 : 0), 0, ...moved);
+  return next.every((item, index) => String(item.id) === String(items[index]?.id)) ? items : next;
+});
 const dropPositionFromClientY = REORDER_HELPERS.dropPositionFromClientY || ((rect, clientY) => (
   clientY > rect.top + rect.height / 2 ? 'after' : 'before'
+));
+const scrollContainerContentTop = REORDER_HELPERS.scrollContainerContentTop || ((itemRect, containerRect, scrollTop = 0) => (
+  (Number(itemRect?.top) || 0) - (Number(containerRect?.top) || 0) + (Number(scrollTop) || 0)
 ));
 const edgeAutoScrollDelta = REORDER_HELPERS.edgeAutoScrollDelta || ((rect, clientY, edgePx = 64, maxPx = 22) => {
   const topStrength = clientY < rect.top + edgePx ? 1 - Math.max(0, clientY - rect.top) / edgePx : 0;
@@ -119,12 +182,97 @@ const edgeAutoScrollDelta = REORDER_HELPERS.edgeAutoScrollDelta || ((rect, clien
   if (bottomStrength > 0) return Math.max(1, Math.ceil((bottomStrength ** 2) * maxPx));
   return 0;
 });
+const acceleratedEdgeAutoScrollDelta = REORDER_HELPERS.acceleratedEdgeAutoScrollDelta || ((
+  rect,
+  clientY,
+  edgePx = 64,
+  maxPx = 22,
+  holdDurationMs = 0,
+  frameDurationMs = 1000 / 60
+) => {
+  const baseDelta = edgeAutoScrollDelta(rect, clientY, edgePx, maxPx);
+  if (!baseDelta) return 0;
+  const holdMultiplier = 1 + Math.min(1, Math.max(0, Number(holdDurationMs) || 0) / 900);
+  const frameMultiplier = Math.max(4, Math.min(42, Number(frameDurationMs) || (1000 / 60))) / (1000 / 60);
+  return Math.sign(baseDelta) * Math.max(1, Math.round(Math.abs(baseDelta) * holdMultiplier * frameMultiplier));
+});
 const appendBoundedHistory = REORDER_HELPERS.appendBoundedHistory || ((history, entry, limit = 20) => {
   if (!entry) return history;
   const next = [...history, entry];
   return next.length > limit ? next.slice(next.length - limit) : next;
 });
 const UNDO_HISTORY_LIMIT = 20;
+const adjacentReorderCommand = REORDER_HELPERS.adjacentReorderCommand || ((items, itemId, direction) => {
+  const sourceIndex = items.findIndex(item => String(item.id) === String(itemId));
+  const targetIndex = sourceIndex + (direction === 'up' ? -1 : direction === 'down' ? 1 : 0);
+  if (sourceIndex < 0 || targetIndex < 0 || targetIndex >= items.length || targetIndex === sourceIndex) return null;
+  return {
+    sourceId: String(itemId),
+    targetId: String(items[targetIndex].id),
+    position: targetIndex < sourceIndex ? 'before' : 'after',
+    nextIndex: targetIndex,
+  };
+});
+const adjacentGroupReorderCommand = REORDER_HELPERS.adjacentGroupReorderCommand || ((items, itemIds, direction) => {
+  const sourceIdSet = new Set((itemIds || []).map(String));
+  const sourceIds = items.map(item => String(item.id)).filter(id => sourceIdSet.has(id));
+  if (!sourceIds.length) return null;
+  const indexes = items
+    .map((item, index) => sourceIdSet.has(String(item.id)) ? index : -1)
+    .filter(index => index >= 0);
+  const delta = direction === 'up' ? -1 : direction === 'down' ? 1 : 0;
+  const edgeIndex = delta < 0 ? Math.min(...indexes) : Math.max(...indexes);
+  const targetIndex = edgeIndex + delta;
+  if (!delta || targetIndex < 0 || targetIndex >= items.length) return null;
+  const targetId = String(items[targetIndex].id);
+  if (sourceIdSet.has(targetId)) return null;
+  const position = delta < 0 ? 'before' : 'after';
+  const reordered = reorderItemGroupForDrop(items, sourceIds, targetId, position);
+  if (reordered === items) return null;
+  return {
+    sourceId: sourceIds[0],
+    sourceIds,
+    targetId,
+    position,
+    nextIndex: reordered.findIndex(item => String(item.id) === sourceIds[0]),
+  };
+});
+const applySelectionClick = REORDER_HELPERS.applySelectionClick || ((orderedIds, selectedIds, anchorId, targetId, modifiers = {}) => {
+  const ids = (orderedIds || []).map(String);
+  const id = String(targetId || '');
+  if (!id || !ids.includes(id)) return { selectedIds: selectedIds || [], anchorId: anchorId || null };
+  if (modifiers.shiftKey) {
+    const anchor = ids.includes(String(anchorId || '')) ? String(anchorId) : id;
+    const start = ids.indexOf(anchor);
+    const end = ids.indexOf(id);
+    const range = ids.slice(Math.min(start, end), Math.max(start, end) + 1);
+    const selected = modifiers.ctrlKey || modifiers.metaKey
+      ? Array.from(new Set([...(selectedIds || []).map(String), ...range]))
+      : range;
+    return { selectedIds: ids.filter(value => selected.includes(value)), anchorId: anchor };
+  }
+  if (modifiers.ctrlKey || modifiers.metaKey) {
+    const selected = new Set((selectedIds || []).map(String));
+    if (selected.has(id)) selected.delete(id);
+    else selected.add(id);
+    return { selectedIds: ids.filter(value => selected.has(value)), anchorId: id };
+  }
+  return { selectedIds: [id], anchorId: id };
+});
+const selectAllItems = REORDER_HELPERS.selectAllItems || (orderedIds => (orderedIds || []).map(String));
+const clearItemSelection = REORDER_HELPERS.clearItemSelection || (() => []);
+const selectionKeyboardCommand = REORDER_HELPERS.selectionKeyboardCommand || ((orderedIds, selectedIds, anchorId, focusId, key, modifiers = {}) => {
+  const ids = (orderedIds || []).map(String);
+  if ((modifiers.ctrlKey || modifiers.metaKey) && String(key).toLowerCase() === 'a') {
+    return {
+      selectedIds: modifiers.shiftKey ? [] : ids,
+      anchorId: modifiers.shiftKey ? null : (anchorId || focusId || ids[0] || null),
+      focusId: focusId || ids[0] || null,
+    };
+  }
+  if (key === 'Escape') return { selectedIds: [], anchorId: null, focusId: focusId || null };
+  return applySelectionClick(ids, selectedIds, anchorId, focusId, modifiers);
+});
 const nearestPlacementIndex = REORDER_HELPERS.nearestPlacementIndex || ((positions, targetTop) => {
   if (!positions.length) return -1;
   let nearestIndex = 0;
@@ -140,6 +288,9 @@ const nearestPlacementIndex = REORDER_HELPERS.nearestPlacementIndex || ((positio
 });
 const problemDisplayName = REORDER_HELPERS.problemDisplayName || ((item, index) => item?.name || `문제 ${index + 1}`);
 const problemSourceLabel = REORDER_HELPERS.problemSourceLabel || (item => item?.source || '업로드 원본');
+const originalProblemNumberInfo = REORDER_HELPERS.originalProblemNumberInfo || (() => ({
+  number: null, source: '', status: 'unknown', label: '번호 미확인', description: '원문 문제 번호를 확인할 수 없습니다.',
+}));
 
 // 자료별 자연 높이 (1.0 = 한 페이지)
 const HEIGHT_BY_KIND = {
@@ -154,15 +305,32 @@ const heightForKind = k => HEIGHT_BY_KIND[k] || 0.8;
 const FIXED_LEFT_ZONE_RATIO = 1 / 3;
 const BOARD_COLUMN_MIN = 1;
 const BOARD_COLUMN_MAX = 3;
+const PLACEMENT_EPSILON_PAGES = 1e-9;
 const BOARD_COLUMN_MAGNET_THRESHOLD_PX = 34;
 const BOARD_COLUMN_UNSNAP_THRESHOLD_PX = 8;
 const DEFAULT_SLOT_HEIGHT_PAGES = 1.2;
+const LAYOUT_GAP_MODE_GRID = 'classin-grid';
+const LAYOUT_GAP_MODE_COMPACT = 'compact';
 const DEFAULT_PLACEMENT_X_RATIO = 0;
 const DEFAULT_PLACEMENT_Y_RATIO = 0;
+const PLACEMENT_EXTRA_SLOTS_MAX = 10;
 const DEFAULT_PLACEMENT_SCALE_RATIO = 1;
 const PLACEMENT_SCALE_MIN = 0.6;
 const PLACEMENT_SCALE_MAX = 1.6;
 const PLACEMENT_FIT_WIDTH_SCALE_RATIO = 3.0;
+const EDB_CANVAS_WIDTH_PX = 1280;
+const EDB_CANVAS_PAGE_HEIGHT_PX = 590;
+// A displayed ClassIn page spans 1.2 internal EDB height units, not a guessed 16:9 frame.
+const EDB_LEFT_MARGIN_PX = 84;
+const EDB_RIGHT_PADDING_PX = 54;
+const EDB_V1_DISPLAY_WIDTH_PX = 540;
+const EDB_V2_DISPLAY_WIDTH_PX = 301;
+const EDB_CONTINUOUS_GAP_PX = 20;
+const AUTO_SCALE_MAX_REDUCTION_RATIO = 0.06;
+const BOARD_PREVIEW_ZOOM_MIN = 0.12;
+const BOARD_PREVIEW_ZOOM_MAX = 1.4;
+const BOARD_PREVIEW_ZOOM_STEP = 0.1;
+const BOARD_PREVIEW_FIT_FILL_RATIO = 0.9;
 const PLACEMENT_NUDGE_STEP = 0.04;
 const PLACEMENT_SCALE_STEP = 0.05;
 const ADJACENT_RETRY_PADDING_RATIO = 0.16;
@@ -183,12 +351,99 @@ const REVIEW_ZOOM_MIN = 0.72;
 const REVIEW_ZOOM_MAX = 1.65;
 const REVIEW_ZOOM_STEP = 0.08;
 const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
+const RECENT_SESSIONS_PAGE_SIZE = 5;
+const RIGHT_PANEL_TAB_KEY = 'edb.rightPanel.tab';
+const ADVANCED_SETTINGS_OPEN_KEY = 'edb.rightPanel.advancedSettingsOpen';
+const BOARD_LAYOUT_OPEN_KEY = 'edb.rightPanel.boardLayoutOpen';
+const BOARD_COLOR_KEY = 'edb.boardColor';
+const DARK_MODE_KEY = 'edb.darkMode';
+const RIGHT_PANEL_TABS = ['item', 'placement', 'board'];
+const RIGHT_PANEL_TAB_SHORTCUTS = { Digit1: 'item', Digit2: 'placement', Digit3: 'board' };
+const isStoredBoolean = value => typeof value === 'boolean';
+
+// UI-only preferences (last tab, open sections, board colour) are per-browser.
+// Storage can be missing or blocked, so every access falls back silently.
+function readStoredPreference(key, fallback, isValid = () => true){
+  try {
+    const raw = window.localStorage?.getItem(key);
+    if (raw == null) return fallback;
+    const value = JSON.parse(raw);
+    return isValid(value) ? value : fallback;
+  } catch (_error) {
+    return fallback;
+  }
+}
+
+function writeStoredPreference(key, value){
+  try {
+    window.localStorage?.setItem(key, JSON.stringify(value));
+  } catch (_error) {
+    // Private windows and locked-down profiles refuse storage; the UI still works.
+  }
+}
+
+function useStoredPreference(key, fallback, isValid){
+  const [value, setValue] = useState(() => readStoredPreference(key, fallback, isValid));
+  useEffect(() => { writeStoredPreference(key, value); }, [key, value]);
+  return [value, setValue];
+}
+const SIDE_PANEL_TAB_KEY = 'edb.sidePanelTab';
+const LEFT_RAIL_COLLAPSED_KEY = 'edb.leftRailCollapsed';
+const BOARD_PAGE_GUIDES_KEY = 'edb.boardPageGuides';
+// .stage-scroll has 26px top padding; keep ~8px of the previous page visible.
+const BOARD_PAGE_SCROLL_OFFSET_PX = 18;
+const BOARD_PAGE_PROBE_PX = 48;
+const SIDE_PANEL_TABS = ['item', 'placement', 'board'];
+const SETTINGS_SECTIONS_OPEN_KEY = 'edb.settingsSectionsOpen';
+const SETTINGS_SECTIONS_DEFAULT_OPEN = { layout: true, color: true, batch: true, upload: false, keys: false, update: false };
 const EMPTY_MANUAL_CROP = Object.freeze({
   leftRatio: 0,
   rightRatio: 0,
   topRatio: 0,
   bottomRatio: 0,
 });
+
+function classinBoardPageNumberAtOffset(offsetPages){
+  const numericOffset = Number(offsetPages);
+  const offset = Number.isFinite(numericOffset) ? Math.max(0, numericOffset) : 0;
+  return Math.floor((offset + PLACEMENT_EPSILON_PAGES) / DEFAULT_SLOT_HEIGHT_PAGES) + 1;
+}
+
+function normalizeBoardPreviewZoom(value){
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(BOARD_PREVIEW_ZOOM_MIN, Math.min(BOARD_PREVIEW_ZOOM_MAX, numeric));
+}
+
+function boardPreviewBasePageHeight(
+  viewportHeight,
+  paddingTop = 0,
+  paddingBottom = 0,
+  slotHeight = DEFAULT_SLOT_HEIGHT_PAGES
+){
+  const resolvedSlotHeight = Number.isFinite(Number(slotHeight)) && Number(slotHeight) > 0
+    ? Number(slotHeight)
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  const usableHeight = Math.max(
+    1,
+    (Number(viewportHeight) || 0) - (Number(paddingTop) || 0) - (Number(paddingBottom) || 0)
+  );
+  return usableHeight / resolvedSlotHeight;
+}
+
+function boardPreviewZoomForRenderedHeight(
+  renderedHeightPages,
+  slotHeight = DEFAULT_SLOT_HEIGHT_PAGES
+){
+  const heightPages = Math.max(0.12, Number(renderedHeightPages) || 0.12);
+  const resolvedSlotHeight = Number.isFinite(Number(slotHeight)) && Number(slotHeight) > 0
+    ? Number(slotHeight)
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  return Math.max(Number.EPSILON, Math.min(
+    BOARD_PREVIEW_ZOOM_MAX,
+    (resolvedSlotHeight * BOARD_PREVIEW_FIT_FILL_RATIO) / heightPages
+  ));
+}
 
 function normalizePlacementXRatio(value){
   const n = Number(value);
@@ -198,6 +453,15 @@ function normalizePlacementXRatio(value){
 function normalizePlacementYRatio(value){
   const n = Number(value);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : DEFAULT_PLACEMENT_Y_RATIO;
+}
+
+function normalizePlacementExtraSlots(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(0, Math.min(PLACEMENT_EXTRA_SLOTS_MAX, Math.round(n))) : 0;
+}
+
+function placementExtraSlots(item){
+  return normalizePlacementExtraSlots(item?.placementExtraSlots ?? item?.placement_extra_slots);
 }
 
 function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
@@ -210,10 +474,43 @@ function normalizePlacementScaleRatio(value, maxRatio = PLACEMENT_SCALE_MAX){
     : Math.min(DEFAULT_PLACEMENT_SCALE_RATIO, resolvedMax);
 }
 
+function normalizeLayoutGapMode(value){
+  return String(value || '').trim().toLowerCase() === LAYOUT_GAP_MODE_COMPACT
+    ? LAYOUT_GAP_MODE_COMPACT
+    : LAYOUT_GAP_MODE_GRID;
+}
+
+function normalizePlacementGapAfterPages(value){
+  if (value === null || value === undefined || value === '') return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.max(0, numeric) : null;
+}
+
 function normalizeBoardColumns(value){
   const n = Math.round(Number(value));
   if (!Number.isFinite(n)) return BOARD_COLUMN_MIN;
   return Math.max(BOARD_COLUMN_MIN, Math.min(BOARD_COLUMN_MAX, n));
+}
+
+function sessionBoardColumns(rawSession){
+  const explicit = rawSession?.boardColumns ?? rawSession?.board_columns;
+  if (Number(explicit) >= BOARD_COLUMN_MIN) return normalizeBoardColumns(explicit);
+  return (rawSession?.problems || []).reduce((maximum, problem) => Math.max(maximum,
+    normalizeBoardColumns(problem.boardColumnCount ?? problem.board_column_count ?? problem.boardColumns ?? problem.board_columns)
+  ), BOARD_COLUMN_MIN);
+}
+
+function normalizePlacementMagnetColumnIndex(value, columnCount){
+  if (value && typeof value === 'object') {
+    // An explicit camel value, including a cleared null, takes precedence.
+    value = Object.prototype.hasOwnProperty.call(value, 'placementMagnetColumnIndex')
+      ? value.placementMagnetColumnIndex : value.placement_magnet_column_index;
+  }
+  if (value === null || value === undefined || (typeof value === 'string' && value.trim() === '')) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const index = Math.max(0, Math.round(numeric));
+  return columnCount === undefined ? index : Math.min(normalizeBoardColumns(columnCount) - 1, index);
 }
 
 function boardColumnXRatio(columnIndex, columnCount){
@@ -405,6 +702,26 @@ function manualSplitHasOverlaps(regions){
   return false;
 }
 
+function translateManualSplitBoxes(boxes, page, dx, dy){
+  if (!boxes.size) return boxes;
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const box of boxes.values()) {
+    left = Math.min(left, box.left);
+    top = Math.min(top, box.top);
+    right = Math.max(right, box.left + box.width);
+    bottom = Math.max(bottom, box.top + box.height);
+  }
+  // Clamp the translation of the whole selection, preserving crop sizes and
+  // spacing when a pointer or repeated arrow key reaches the page edge.
+  const shiftX = Math.max(-left, Math.min(page.width - right, finiteNumber(dx, 0)));
+  const shiftY = Math.max(-top, Math.min(page.height - bottom, finiteNumber(dy, 0)));
+  return new Map(Array.from(boxes, ([id, box]) => [id, {
+    ...box,
+    left: box.left + shiftX,
+    top: box.top + shiftY,
+  }]));
+}
+
 function replacementSourceIdFor(problem){
   const retry = problem?.aiRetry || problem?.ai_retry || {};
   return String(
@@ -427,17 +744,38 @@ function resetItemPlacement(item){
     placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
     placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
     placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
+    placementAutoFitDisabled: false,
+    placement_auto_fit_disabled: false,
     placementXEdited: false,
   };
 }
 
 function snapUpPages(value, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.ceil((value - 0.001) / slotHeight) * slotHeight;
+  return Math.ceil((value - PLACEMENT_EPSILON_PAGES) / slotHeight) * slotHeight;
+}
+
+function firstPositiveFiniteNumber(...values){
+  for (const value of values) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  }
+  return null;
 }
 
 function itemHeightPages(item){
-  return Math.max(0.12, item?.heightFrac || item?.actualHeightPages || item?.actual_height_pages || 0.8);
+  const imageHeightPages = Number(item?.imageRecordGeometry?.baseHeightPages);
+  if (Number.isFinite(imageHeightPages) && imageHeightPages > 0) return imageHeightPages;
+  const candidates = [
+    item?.heightFrac,
+    item?.actualHeightPages,
+    item?.actual_height_pages,
+    item?.actualContentHeightPages,
+    item?.actual_content_height_pages,
+  ]
+    .map(value => Number(value))
+    .filter(value => Number.isFinite(value) && value > 0);
+  return candidates.length ? Math.max(0.12, ...candidates) : 0.8;
 }
 
 function itemUsesContinuousPageFlow(item){
@@ -448,25 +786,309 @@ function itemUsesContinuousPageFlow(item){
 }
 
 function placementScaleLimitForItem(item){
-  return itemUsesContinuousPageFlow(item) ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX;
+  if (itemUsesContinuousPageFlow(item)) return PLACEMENT_FIT_WIDTH_SCALE_RATIO;
+  const persistedScale = Number(item?.placementScaleRatio ?? item?.placement_scale_ratio);
+  if (Number.isFinite(persistedScale) && persistedScale > PLACEMENT_SCALE_MAX) {
+    // Older sessions could persist a regular item above today's editor limit.
+    // Preserve that value until the user explicitly changes it instead of
+    // silently rewriting the session while it is merely being loaded.
+    return Math.min(PLACEMENT_FIT_WIDTH_SCALE_RATIO, persistedScale);
+  }
+  return PLACEMENT_SCALE_MAX;
+}
+
+function initialPlacementScaleRatio(problem, usesContinuousFlow = false){
+  const rawScale = problem?.placementScaleRatio ?? problem?.placement_scale_ratio;
+  const numericScale = Number(rawScale);
+  const preserveLegacyScale = !usesContinuousFlow
+    && Number.isFinite(numericScale)
+    && numericScale > PLACEMENT_SCALE_MAX;
+  return normalizePlacementScaleRatio(
+    rawScale,
+    usesContinuousFlow || preserveLegacyScale
+      ? PLACEMENT_FIT_WIDTH_SCALE_RATIO
+      : PLACEMENT_SCALE_MAX
+  );
+}
+
+function itemRenderedScaleRatio(item, scaleRatio = item?.placementScaleRatio){
+  const rawScale = Number.isFinite(Number(scaleRatio)) ? Number(scaleRatio) : DEFAULT_PLACEMENT_SCALE_RATIO;
+  const scale = Math.max(PLACEMENT_SCALE_MIN, Math.min(placementScaleLimitForItem(item), rawScale));
+  const baseWidth = Number(item?.imageRecordGeometry?.baseDisplayWidthPx);
+  const maxWidth = Number(item?.imageRecordGeometry?.maxDisplayWidthPx);
+  return Number.isFinite(baseWidth) && baseWidth > 0 && Number.isFinite(maxWidth) && maxWidth > 0
+    ? Math.max(PLACEMENT_SCALE_MIN, Math.min(scale, maxWidth / baseWidth))
+    : scale;
 }
 
 function itemRenderedHeightPages(item, scaleRatio = item?.placementScaleRatio){
+  return itemHeightPages(item) * itemRenderedScaleRatio(item, scaleRatio);
+}
+
+function itemFlowHeightPages(item){
+  const reservedHeight = Number(item?.imageRecordGeometry?.reservedHeightPages);
+  if (!itemUsesContinuousPageFlow(item) && Number.isFinite(reservedHeight) && reservedHeight > 0) {
+    const requestedScale = normalizePlacementScaleRatio(item?.placementScaleRatio, placementScaleLimitForItem(item));
+    return Math.max(itemRenderedHeightPages(item), reservedHeight * requestedScale);
+  }
+  return itemRenderedHeightPages(item);
+}
+
+function scaleNearPreviousSlotBoundary(item, startPages, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  const currentScale = normalizePlacementScaleRatio(
+    item?.placementScaleRatio ?? item?.placement_scale_ratio,
+    placementScaleLimitForItem(item)
+  );
+  if (
+    !item
+    || itemUsesContinuousPageFlow(item)
+    || Boolean(item.placementAutoFitDisabled || item.placement_auto_fit_disabled)
+    || Math.abs(currentScale - DEFAULT_PLACEMENT_SCALE_RATIO) > PLACEMENT_EPSILON_PAGES
+    || !Number.isFinite(slotHeight)
+    || slotHeight <= 0
+  ) {
+    return currentScale;
+  }
   const heightPages = itemHeightPages(item);
-  const rawScale = Number.isFinite(Number(scaleRatio)) ? Number(scaleRatio) : DEFAULT_PLACEMENT_SCALE_RATIO;
-  const scale = Math.max(PLACEMENT_SCALE_MIN, Math.min(placementScaleLimitForItem(item), rawScale));
-  return heightPages * scale;
+  const rowStartPages = Number.isFinite(startPages) ? Math.max(0, startPages) : 0;
+  const renderedBottomPages = rowStartPages + heightPages * currentScale;
+  const previousBoundaryPages = Math.floor(
+    (renderedBottomPages + PLACEMENT_EPSILON_PAGES) / slotHeight
+  ) * slotHeight;
+  if (renderedBottomPages - previousBoundaryPages <= PLACEMENT_EPSILON_PAGES) {
+    return currentScale;
+  }
+  const targetScale = (previousBoundaryPages - rowStartPages) / heightPages;
+  const scaleReductionRatio = currentScale > 0
+    ? (currentScale - targetScale) / currentScale
+    : Infinity;
+  return targetScale >= PLACEMENT_SCALE_MIN
+    && targetScale < currentScale
+    && scaleReductionRatio <= AUTO_SCALE_MAX_REDUCTION_RATIO + PLACEMENT_EPSILON_PAGES
+    ? targetScale
+    : currentScale;
+}
+
+function autoScaleItemNearPreviousSlotBoundary(item, startPages, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  if (!item) return item;
+  // Automatic fit belongs to the current row position. Recompute it from the
+  // original scale when gaps/order change; explicit edits clear these markers.
+  if (item._previewAutoScaleAdjusted === true && Number.isFinite(item._previewOriginalScaleRatio)) {
+    item = {
+      ...item,
+      placementScaleRatio: item._previewOriginalScaleRatio,
+      placement_scale_ratio: item._previewOriginalScaleRatio,
+    };
+    delete item._previewAutoScaleAdjusted;
+    delete item._previewOriginalScaleRatio;
+  }
+  const currentScale = normalizePlacementScaleRatio(
+    item.placementScaleRatio ?? item.placement_scale_ratio,
+    placementScaleLimitForItem(item)
+  );
+  const resolvedScale = scaleNearPreviousSlotBoundary(item, startPages, slotHeight);
+  if (Math.abs(resolvedScale - currentScale) <= PLACEMENT_EPSILON_PAGES) return item;
+  return {
+    ...item,
+    placementScaleRatio: resolvedScale,
+    placement_scale_ratio: resolvedScale,
+    _previewAutoScaleAdjusted: true,
+    _previewOriginalScaleRatio: currentScale,
+  };
+}
+
+function classinPageNumberForRenderedEnd(endPages, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  const normalizedSlotHeight = Number.isFinite(slotHeight) && slotHeight > 0
+    ? slotHeight
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  const normalizedEndPages = Number.isFinite(endPages) ? Math.max(0, endPages) : 0;
+  return Math.max(
+    1,
+    Math.ceil((normalizedEndPages - PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight)
+  );
+}
+
+function formatClassinPageAmount(heightPages){
+  const pages = Math.max(0, Number(heightPages) || 0) / DEFAULT_SLOT_HEIGHT_PAGES;
+  return pages < PLACEMENT_EPSILON_PAGES ? '0쪽' : `약 ${Number(pages.toFixed(2))}쪽`;
+}
+
+function boardItemVisualBounds(item){
+  const rowStart = Math.max(0, Number(item?.startYPages) || 0);
+  const height = itemRenderedHeightPages(item);
+  const rowNext = Math.max(rowStart + height, Number(item?.snappedNextStartYPages) || 0);
+  const start = rowStart + normalizePlacementYRatio(item?.placementYRatio) * Math.max(0, rowNext - rowStart - height);
+  return { start, bottom: start + height, rowNext };
+}
+
+// Hit-test the pointer against stationary cards, never the translated drag ghost.
+// A neighbouring card wins over its side gutter; distant blank space is a move.
+function resolveSmartBoardDropTarget(candidates, clientX, clientY, sourceId){
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
+  const rows = candidates.filter(candidate => candidate?.rect?.height > 0);
+  const overlap = rows.find(({ id, rect }) => String(id) !== String(sourceId)
+    && clientX >= rect.left && clientX <= rect.right
+    && clientY >= rect.top && clientY <= rect.bottom);
+  if (overlap) return {
+    id: overlap.id, mode: 'reorder',
+    position: clientY < (overlap.rect.top + overlap.rect.bottom) / 2 ? 'before' : 'after',
+  };
+  // Do not interpret a click inside the source's original position as a gutter.
+  if (rows.some(({ rect }) => clientX >= rect.left && clientX <= rect.right
+    && clientY >= rect.top && clientY <= rect.bottom)) return null;
+  const neighbours = rows.filter(({ rect }) => clientY >= rect.top && clientY <= rect.bottom)
+    .map(candidate => ({ ...candidate, distance: Math.min(
+      Math.abs(clientX - candidate.rect.left), Math.abs(clientX - candidate.rect.right)
+    ) }))
+    .filter(candidate => candidate.distance <= 96)
+    .sort((a, b) => a.distance - b.distance);
+  return neighbours.length ? { id: neighbours[0].id, mode: 'gap', position: 'gap' } : null;
+}
+
+function derivePlacementGapActionFromLayout(layoutItems, activeId){
+  const layout = Array.isArray(layoutItems) ? layoutItems : [];
+  const selected = layout.find(item => String(item.id) === String(activeId));
+  const empty = { ids: [], removableGapPages: 0, restoreUpdates: [] };
+  if (!selected) return empty;
+  const row = layout.filter(item => (
+    Math.abs(item.startYPages - selected.startYPages) < 0.000001
+    && Math.abs(item.snappedNextStartYPages - selected.snappedNextStartYPages) < 0.000001
+  ));
+  const compactEnd = selected.startYPages + Math.max(...row.map(item =>
+    itemFlowHeightPages(item) + placementExtraSlots(item) * DEFAULT_SLOT_HEIGHT_PAGES));
+  const visualEnd = Math.max(...row.map(item => boardItemVisualBounds(item).bottom));
+  const nextRowStart = Math.max(compactEnd, visualEnd);
+  const removableGapPages = Math.max(0, selected.snappedNextStartYPages - nextRowStart);
+  if (removableGapPages <= 0.000001) return empty;
+  const patches = row.map(item => {
+    const oldYRatio = normalizePlacementYRatio(item.placementYRatio);
+    const visualOffset = boardItemVisualBounds(item).start - item.startYPages;
+    const remainingRoom = Math.max(0, nextRowStart - item.startYPages - itemRenderedHeightPages(item));
+    const nextYRatio = remainingRoom > 0.000001 ? normalizePlacementYRatio(visualOffset / remainingRoom) : 0;
+    const yChanged = Math.abs(nextYRatio - oldYRatio) > 0.000001;
+    return {
+      apply: { id: item.id, patch: { gapAfterPages: Math.max(0, nextRowStart - compactEnd), ...(yChanged ? { yRatio: nextYRatio } : {}) } },
+      restore: { id: item.id, patch: {
+        gapAfterPages: normalizePlacementGapAfterPages(item.placementGapAfterPages ?? item.placement_gap_after_pages),
+        ...(yChanged ? { yRatio: oldYRatio } : {}),
+      } },
+    };
+  });
+  return {
+    ids: row.map(item => item.id),
+    removableGapPages,
+    applyUpdates: patches.map(patch => patch.apply),
+    restoreUpdates: patches.map(patch => patch.restore),
+  };
+}
+
+function derivePlacementGapAction(items, activeId, boardColumns, layoutGapMode){
+  return derivePlacementGapActionFromLayout(
+    reflowItemsForBoardOrder(items || [], DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode),
+    activeId
+  );
+}
+
+function deriveBoardPreviewEstimate(layoutItems, activeId, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
+  const items = Array.isArray(layoutItems) ? layoutItems : [];
+  const normalizedSlotHeight = Number.isFinite(slotHeight) && slotHeight > 0
+    ? slotHeight
+    : DEFAULT_SLOT_HEIGHT_PAGES;
+  const rows = new Map();
+  let reservedEndPages = 0;
+  let autoScaleAdjustedCount = 0;
+
+  items.forEach(item => {
+    const startPages = Number.isFinite(Number(item?.startYPages))
+      ? Math.max(0, Number(item.startYPages))
+      : 0;
+    const renderedHeightPages = itemRenderedHeightPages(item);
+    const renderedBottomPages = Number.isFinite(Number(item?.renderedBottomYPages))
+      ? Math.max(startPages, Number(item.renderedBottomYPages))
+      : startPages + renderedHeightPages;
+    const nextStartPages = Number.isFinite(Number(item?.snappedNextStartYPages))
+      ? Math.max(renderedBottomPages, Number(item.snappedNextStartYPages))
+      : renderedBottomPages;
+    const rowKey = startPages.toFixed(6);
+    rows.set(rowKey, Math.max(rows.get(rowKey) || 0, renderedBottomPages - startPages));
+    reservedEndPages = Math.max(reservedEndPages, nextStartPages);
+    if (item?._previewAutoScaleAdjusted === true) autoScaleAdjustedCount += 1;
+  });
+
+  const usedHeightPages = [...rows.values()].reduce((sum, heightPages) => sum + heightPages, 0);
+  const blankHeightPages = Math.max(0, reservedEndPages - usedHeightPages);
+  const classinPageCount = items.length
+    ? Math.max(1, Math.ceil((reservedEndPages - PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight))
+    : 0;
+  const displayPageCount = items.length
+    ? Math.max(1, Math.ceil(reservedEndPages - PLACEMENT_EPSILON_PAGES))
+    : 1;
+  const activeItem = activeId == null
+    ? null
+    : items.find(item => String(item?.id) === String(activeId)) || null;
+  let active = null;
+  if (activeItem) {
+    const bounds = boardItemVisualBounds(activeItem);
+    const startPages = bounds.start;
+    const renderedBottomPages = bounds.bottom;
+    const nextItem = items[items.indexOf(activeItem) + 1];
+    const nextStartPages = nextItem ? boardItemVisualBounds(nextItem).start : null;
+    const scaleRatio = normalizePlacementScaleRatio(
+      activeItem.placementScaleRatio ?? activeItem.placement_scale_ratio,
+      placementScaleLimitForItem(activeItem)
+    );
+    const originalScaleRatio = activeItem._previewAutoScaleAdjusted === true
+      && Number.isFinite(Number(activeItem._previewOriginalScaleRatio))
+      ? Number(activeItem._previewOriginalScaleRatio)
+      : null;
+    active = {
+      startPages,
+      renderedBottomPages,
+      nextStartPages,
+      rowNextStartPages: bounds.rowNext,
+      blankHeightPages: Math.max(0, bounds.rowNext - renderedBottomPages),
+      scaleRatio,
+      classinStartPage: Math.floor((startPages + PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight) + 1,
+      classinEndPage: classinPageNumberForRenderedEnd(renderedBottomPages, normalizedSlotHeight),
+      classinNextPage: nextStartPages === null ? null : Math.floor((nextStartPages + PLACEMENT_EPSILON_PAGES) / normalizedSlotHeight) + 1,
+      autoScaleAdjusted: originalScaleRatio !== null && originalScaleRatio > scaleRatio + PLACEMENT_EPSILON_PAGES,
+      autoScaleReductionRatio: originalScaleRatio !== null && originalScaleRatio > 0
+        ? Math.max(0, (originalScaleRatio - scaleRatio) / originalScaleRatio)
+        : 0,
+    };
+  }
+
+  return {
+    classinPageCount,
+    displayPageCount,
+    reservedEndPages,
+    usedHeightPages,
+    blankHeightPages,
+    utilizationRatio: reservedEndPages > 0 ? Math.min(1, usedHeightPages / reservedEndPages) : 0,
+    autoScaleAdjustedCount,
+    active,
+  };
 }
 
 function placementSlotHeightPages(item){
   if (!item) return 0;
   const heightPages = itemHeightPages(item);
   const renderedHeightPages = itemRenderedHeightPages(item);
+  const gapAfterPages = normalizePlacementGapAfterPages(item.placementGapAfterPages ?? item.placement_gap_after_pages);
+  const compact = normalizeLayoutGapMode(item.layoutGapMode) === LAYOUT_GAP_MODE_COMPACT || gapAfterPages !== null;
+  if (compact) {
+    const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : 0;
+    const savedSpan = Number.isFinite(item.snappedNextStartYPages) ? item.snappedNextStartYPages - startPages : 0;
+    return Math.max(renderedHeightPages, savedSpan,
+      Number(item.boardRowHeightPages) || 0,
+      itemFlowHeightPages(item) + placementExtraSlots(item) * DEFAULT_SLOT_HEIGHT_PAGES + (gapAfterPages || 0));
+  }
+  if (itemUsesContinuousPageFlow(item)) return renderedHeightPages + placementExtraSlots(item) * DEFAULT_SLOT_HEIGHT_PAGES;
   const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : 0;
   const snappedNext = Number.isFinite(item.snappedNextStartYPages)
     ? Math.max(startPages + renderedHeightPages, item.snappedNextStartYPages)
     : snapUpPages(startPages + renderedHeightPages);
-  return Math.max(heightPages, renderedHeightPages, snappedNext - startPages);
+  return Math.max(heightPages, renderedHeightPages, snappedNext - startPages, itemSlotSpanPages(item));
 }
 
 function maxPlacementScaleRatio(item){
@@ -474,27 +1096,80 @@ function maxPlacementScaleRatio(item){
   if (itemUsesContinuousPageFlow(item)) return PLACEMENT_FIT_WIDTH_SCALE_RATIO;
   const heightPages = itemHeightPages(item);
   const slotHeightPages = placementSlotHeightPages(item);
-  return Math.max(PLACEMENT_SCALE_MIN, Math.min(PLACEMENT_SCALE_MAX, slotHeightPages / heightPages));
+  return Math.max(
+    PLACEMENT_SCALE_MIN,
+    Math.min(placementScaleLimitForItem(item), slotHeightPages / heightPages)
+  );
 }
 
 function verticalPlacementRoomPages(item, scaleRatio = item?.placementScaleRatio){
   if (!item) return 0;
-  const heightPages = itemHeightPages(item);
   const scale = normalizePlacementScaleRatio(scaleRatio, maxPlacementScaleRatio(item));
-  return Math.max(0, placementSlotHeightPages(item) - (heightPages * scale));
+  return Math.max(0, placementSlotHeightPages(item) - itemRenderedHeightPages(item, scale));
+}
+
+function applyPlacementPatchToItem(item, patch){
+  if (!item || !patch) return item;
+  const next = { ...item };
+  if (Object.prototype.hasOwnProperty.call(patch, 'extraSlots')) {
+    next.placementExtraSlots = normalizePlacementExtraSlots(patch.extraSlots);
+    next.placement_extra_slots = next.placementExtraSlots;
+    // Drop the previous reservation before recomputing a reduced movement area.
+    if (next.placementExtraSlots < placementExtraSlots(item)) {
+      next.snappedNextStartYPages = null;
+      next.boardRowHeightPages = null;
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'xRatio')) {
+    next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
+    next.placementXEdited = patch.xEdited === false ? false : true;
+    next.placement_x_edited = next.placementXEdited;
+    if (Object.prototype.hasOwnProperty.call(patch, 'magnetColumnIndex')) {
+      next.placementMagnetColumnIndex = normalizePlacementMagnetColumnIndex(patch.magnetColumnIndex);
+      next.placement_magnet_column_index = next.placementMagnetColumnIndex;
+    }
+  }
+  if (patch.fitWidth) {
+    delete next._previewAutoScaleAdjusted;
+    delete next._previewOriginalScaleRatio;
+    return fitWidthContinuousPageItem(next, patch);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'scaleRatio')) {
+    delete next._previewAutoScaleAdjusted;
+    delete next._previewOriginalScaleRatio;
+    next.placementAutoFitDisabled = true;
+    next.placement_auto_fit_disabled = true;
+    next.placementScaleRatio = normalizePlacementScaleRatio(
+      patch.scaleRatio,
+      maxPlacementScaleRatio(next)
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'yRatio')) {
+    next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
+      ? normalizePlacementYRatio(patch.yRatio)
+      : DEFAULT_PLACEMENT_Y_RATIO;
+  } else if (
+    Object.prototype.hasOwnProperty.call(patch, 'scaleRatio')
+    && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001
+  ) {
+    next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'gapAfterPages')) {
+    next.placementGapAfterPages = normalizePlacementGapAfterPages(patch.gapAfterPages);
+    next.placement_gap_after_pages = next.placementGapAfterPages;
+  }
+  return next;
 }
 
 function fitWidthContinuousPageItem(item, options = {}){
   if (!item) return item;
   const next = { ...item };
   const hasOption = key => Object.prototype.hasOwnProperty.call(options || {}, key);
-  const heightPages = itemHeightPages(next);
   const startPages = Number.isFinite(next.startYPages) ? Math.max(0, next.startYPages) : 0;
   const targetScale = normalizePlacementScaleRatio(
     hasOption('scaleRatio') ? options.scaleRatio : PLACEMENT_FIT_WIDTH_SCALE_RATIO,
     PLACEMENT_FIT_WIDTH_SCALE_RATIO
   );
-  const slotSpanPages = heightPages * targetScale;
   next.inputIntent = 'page-as-is';
   next.input_intent = 'page-as-is';
   next.placementMode = 'continuous-page-as-is';
@@ -510,6 +1185,7 @@ function fitWidthContinuousPageItem(item, options = {}){
   next.placement_y_ratio = next.placementYRatio;
   next.placementScaleRatio = targetScale;
   next.placement_scale_ratio = targetScale;
+  const slotSpanPages = itemRenderedHeightPages(next, targetScale);
   next.snappedNextStartYPages = Number((startPages + slotSpanPages).toFixed(6));
   next.snapped_next_start_y_pages = next.snappedNextStartYPages;
   next.slotSpanCount = Math.max(1, Math.ceil(slotSpanPages / DEFAULT_SLOT_HEIGHT_PAGES));
@@ -523,73 +1199,131 @@ function isContinuousPlacementItem(item){
 
 function itemSlotSpanPages(item, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES){
   if (!item) return slotHeight;
-  const heightPages = itemHeightPages(item);
-  const renderedHeightPages = itemRenderedHeightPages(item);
-  const startPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
-  const snappedNext = Number.isFinite(item.snappedNextStartYPages) ? Math.max(0, item.snappedNextStartYPages) : null;
-  const savedSpan = startPages !== null && snappedNext !== null && snappedNext > startPages
-    ? snappedNext - startPages
-    : 0;
+  const renderedHeightPages = itemFlowHeightPages(item);
+  const extraHeight = placementExtraSlots(item) * slotHeight;
   if (isContinuousPlacementItem(item)) {
-    return Math.max(heightPages, renderedHeightPages, savedSpan);
+    // Continuous page-as-is flow follows the current rendered height. A span
+    // saved at a previous scale must not survive scale-down as blank space.
+    return renderedHeightPages + extraHeight;
   }
-  return Math.max(heightPages, renderedHeightPages, savedSpan || snapUpPages(renderedHeightPages, slotHeight));
+  if (renderedHeightPages > slotHeight + PLACEMENT_EPSILON_PAGES) {
+    return renderedHeightPages + extraHeight;
+  }
+  return Math.max(renderedHeightPages, snapUpPages(renderedHeightPages, slotHeight)) + extraHeight;
 }
 
-function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES, boardColumns = BOARD_COLUMN_MIN){
+// Keep the drop position and its reserved space in the same coordinate system.
+// Extra space is explicit, bounded and persisted; moving back up never changes order.
+function verticalBoardDragPatch(item, rowSpanPages, startOffsetPages, deltaPages){
+  const desired = Math.max(0, startOffsetPages + deltaPages);
+  const rendered = itemRenderedHeightPages(item);
+  const start = Math.max(0, Number(item.startYPages) || 0);
+  const continuous = isContinuousPlacementItem(item);
+  const compact = normalizeLayoutGapMode(item.layoutGapMode) === LAYOUT_GAP_MODE_COMPACT
+    || normalizePlacementGapAfterPages(item.placementGapAfterPages ?? item.placement_gap_after_pages) !== null;
+  let extraSlots = placementExtraSlots(item);
+  const baseSpan = (compact ? rowSpanPages : itemSlotSpanPages(item)) - extraSlots * DEFAULT_SLOT_HEIGHT_PAGES;
+  let room = 0;
+  for (; extraSlots <= PLACEMENT_EXTRA_SLOTS_MAX; extraSlots += 1) {
+    const span = Math.max(rowSpanPages, baseSpan + extraSlots * DEFAULT_SLOT_HEIGHT_PAGES);
+    const reserved = continuous || compact ? span : rendered > DEFAULT_SLOT_HEIGHT_PAGES + PLACEMENT_EPSILON_PAGES
+      ? snapUpPages(start + span) - start : snapUpPages(span);
+    room = Math.max(0, reserved - rendered);
+    if (desired <= room + PLACEMENT_EPSILON_PAGES || extraSlots === PLACEMENT_EXTRA_SLOTS_MAX) break;
+  }
+  const offsetPages = Math.min(desired, room);
+  return { extraSlots, yRatio: room > 0.001 ? offsetPages / room : 0, offsetPages };
+}
+
+function reflowItemsForBoardOrder(
+  items,
+  slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
+  boardColumns = BOARD_COLUMN_MIN,
+  layoutGapMode = LAYOUT_GAP_MODE_GRID
+){
   if (!Array.isArray(items)) return items;
   const columnCount = normalizeBoardColumns(boardColumns);
+  const normalizedGapMode = normalizeLayoutGapMode(layoutGapMode);
   let cursorPages = 0;
   const reflowed = [];
   let index = 0;
 
   while (index < items.length) {
-    const first = items[index];
+    const first = autoScaleItemNearPreviousSlotBoundary(items[index], cursorPages, slotHeight);
     const firstContinuous = isContinuousPlacementItem(first);
+    const firstLong = !firstContinuous
+      && itemFlowHeightPages(first) > slotHeight + PLACEMENT_EPSILON_PAGES;
     const rowItems = [];
-    if (firstContinuous) {
+    if (firstContinuous || firstLong) {
       rowItems.push(first);
       index += 1;
     } else {
       while (index < items.length && rowItems.length < columnCount) {
-        const candidate = items[index];
-        if (rowItems.length > 0 && isContinuousPlacementItem(candidate)) break;
+        const candidate = autoScaleItemNearPreviousSlotBoundary(items[index], cursorPages, slotHeight);
+        const candidateContinuous = isContinuousPlacementItem(candidate);
+        const candidateLong = !candidateContinuous
+          && itemFlowHeightPages(candidate) > slotHeight + PLACEMENT_EPSILON_PAGES;
+        if (rowItems.length > 0 && (candidateContinuous || candidateLong)) break;
         rowItems.push(candidate);
         index += 1;
       }
     }
 
     const rowContinuous = rowItems.length === 1 && isContinuousPlacementItem(rowItems[0]);
-    const rowStartPages = rowContinuous ? cursorPages : snapUpPages(cursorPages, slotHeight);
+    const rowLong = !rowContinuous
+      && rowItems.some(item => itemFlowHeightPages(item) > slotHeight + PLACEMENT_EPSILON_PAGES);
+    const rowStartPages = cursorPages;
     const rowMetrics = rowItems.map(item => {
       const heightPages = itemHeightPages(item);
       const renderedHeightPages = itemRenderedHeightPages(item);
+      const flowHeightPages = itemFlowHeightPages(item);
       const slotSpanPages = itemSlotSpanPages(item, slotHeight);
-      return { heightPages, renderedHeightPages, slotSpanPages };
+      return { heightPages, renderedHeightPages, flowHeightPages, slotSpanPages };
     });
     const rowFlowSpanPages = Math.max(
       0,
       ...rowMetrics.map(metric => Math.max(metric.renderedHeightPages, metric.slotSpanPages))
     );
     const flowEndPages = rowStartPages + rowFlowSpanPages;
-    const snappedNextStartYPages = rowContinuous ? flowEndPages : snapUpPages(flowEndPages, slotHeight);
+    const compactFlowEndPages = rowStartPages + Math.max(0, ...rowMetrics.map((metric, rowIndex) =>
+      metric.flowHeightPages + placementExtraSlots(rowItems[rowIndex]) * slotHeight));
+    const rowGapOverridePages = rowItems
+      .map(item => normalizePlacementGapAfterPages(
+        item.placementGapAfterPages ?? item.placement_gap_after_pages
+      ))
+      .find(value => value !== null);
+    const usesCompactGap = normalizedGapMode === LAYOUT_GAP_MODE_COMPACT
+      || rowGapOverridePages !== undefined;
+    const continuousGapPages = rowContinuous
+      ? Math.max(0, Number(rowItems[0]?.imageRecordGeometry?.continuousGapPages) || 0)
+      : 0;
+    const snappedNextStartYPages = usesCompactGap
+      ? compactFlowEndPages + (rowGapOverridePages || 0)
+      : rowContinuous
+        ? flowEndPages + continuousGapPages
+        : rowLong
+          ? Math.max(flowEndPages, snapUpPages(flowEndPages, slotHeight))
+          : Math.max(flowEndPages, rowStartPages + snapUpPages(rowFlowSpanPages, slotHeight));
     const boardRowHeightPages = Math.max(0, snappedNextStartYPages - rowStartPages);
-    const rowColumnCount = rowContinuous ? BOARD_COLUMN_MIN : columnCount;
+    const rowColumnCount = rowContinuous || rowLong ? BOARD_COLUMN_MIN : columnCount;
 
     rowItems.forEach((item, rowColumnIndex) => {
       const metric = rowMetrics[rowColumnIndex];
       const actualBottomPages = rowStartPages + metric.heightPages;
       const renderedBottomPages = rowStartPages + metric.renderedHeightPages;
-      const slotSpanCount = Math.max(1, Math.ceil((snappedNextStartYPages - rowStartPages - 0.001) / slotHeight));
+      const slotSpanCount = Math.max(
+        1,
+        Math.ceil((snappedNextStartYPages - rowStartPages - PLACEMENT_EPSILON_PAGES) / slotHeight)
+      );
       const autoXRatio = boardColumnXRatio(rowColumnIndex, rowColumnCount);
       const xEdited = Boolean(item.placementXEdited || item.placement_x_edited);
-      const rawMagnetColumnIndex = Number(item.placementMagnetColumnIndex ?? item.placement_magnet_column_index);
-      const magnetColumnIndex = Number.isFinite(rawMagnetColumnIndex)
-        ? Math.max(0, Math.min(rowColumnCount - 1, Math.round(rawMagnetColumnIndex)))
-        : null;
+      const magnetColumnIndex = normalizePlacementMagnetColumnIndex(
+        item, rowColumnCount
+      );
       const resolvedXRatio = xEdited ? normalizePlacementXRatio(item.placementXRatio) : autoXRatio;
       reflowed.push({
         ...item,
+        layoutGapMode: normalizedGapMode,
         heightFrac: metric.heightPages,
         startYPages: Number(rowStartPages.toFixed(6)),
         snappedNextStartYPages: Number(snappedNextStartYPages.toFixed(6)),
@@ -605,6 +1339,10 @@ function reflowItemsForBoardOrder(items, slotHeight = DEFAULT_SLOT_HEIGHT_PAGES,
         placementXRatio: resolvedXRatio,
         placementXEdited: xEdited,
         placementMagnetColumnIndex: xEdited ? magnetColumnIndex : null,
+        placement_magnet_column_index: xEdited ? magnetColumnIndex : null,
+        placementGapAfterPages: normalizePlacementGapAfterPages(
+          item.placementGapAfterPages ?? item.placement_gap_after_pages
+        ),
       });
     });
 
@@ -634,26 +1372,64 @@ const freshInitialItems = () => INITIAL_ITEMS.map(item => ({ ...item }));
 
 // ─── icons ────────────────────────────────────────────────────────────────
 // smooth scroll helper (rAF easing — works around iframe smooth-scroll quirks)
-function smoothScrollTo(el, top, duration = 380){
-  if (!el) return;
-  if (duration <= 0){ el.scrollTop = top; return; }
-  const start = el.scrollTop;
-  const delta = top - start;
-  if (Math.abs(delta) < 4){ el.scrollTop = top; return; }
+function cancelSmoothScroll(el){
+  if (!el) return false;
   if (el.__scrollRaf) cancelAnimationFrame(el.__scrollRaf);
-  const t0 = performance.now();
-  const ease = u => 1 - Math.pow(1 - u, 3);
-  const step = (now) => {
-    const u = Math.min(1, (now - t0) / duration);
-    el.scrollTop = start + delta * ease(u);
-    if (u < 1) el.__scrollRaf = requestAnimationFrame(step);
-    else el.__scrollRaf = null;
-  };
-  el.__scrollRaf = requestAnimationFrame(step);
+  const resolve = el.__scrollResolve;
+  el.__scrollRaf = null;
+  el.__scrollResolve = null;
+  if (typeof resolve === 'function') resolve(false);
+  return Boolean(resolve);
+}
+
+function clampedScrollTop(el, top){
+  const maximum = Math.max(0, finiteNumber(el?.scrollHeight, 0) - finiteNumber(el?.clientHeight, 0));
+  return Math.max(0, Math.min(maximum, finiteNumber(top, 0)));
+}
+
+function smoothScrollTo(el, top, duration = 380){
+  if (!el) return Promise.resolve(false);
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+    duration = 0;
+  }
+  cancelSmoothScroll(el);
+  const target = clampedScrollTop(el, top);
+  if (duration <= 0){
+    el.scrollTop = target;
+    return Promise.resolve(true);
+  }
+  const start = el.scrollTop;
+  const delta = target - start;
+  if (Math.abs(delta) < 4){
+    el.scrollTop = target;
+    return Promise.resolve(true);
+  }
+  return new Promise(resolve => {
+    el.__scrollResolve = resolve;
+    const t0 = performance.now();
+    const ease = u => 1 - Math.pow(1 - u, 3);
+    const step = (now) => {
+      const u = Math.min(1, (now - t0) / duration);
+      el.scrollTop = start + delta * ease(u);
+      if (u < 1) {
+        el.__scrollRaf = requestAnimationFrame(step);
+        return;
+      }
+      el.scrollTop = target;
+      el.__scrollRaf = null;
+      el.__scrollResolve = null;
+      resolve(true);
+    };
+    el.__scrollRaf = requestAnimationFrame(step);
+  });
 }
 
 const Icon = {
+  eye: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>,
+  eyeOff: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1 12 5c6.5 0 10 7 10 7a19.1 19.1 0 0 1-3 3.9M6.2 6.2A21.8 21.8 0 0 0 2 12s3.5 7 10 7a10.8 10.8 0 0 0 5.8-1.8M10 10a2.8 2.8 0 0 0 4 4"/></svg>,
   upload: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>,
+  folderPlus: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h4l2 3h8a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M8 13h8M12 9v8"/></svg>,
+  filesCheck: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="3" width="14" height="16" rx="2"/><path d="M7 22h12a2 2 0 0 0 2-2V7M7 11l3 3 4-5"/></svg>,
   trash:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h16M10 11v6M14 11v6M5 7l1 13a2 2 0 002 2h8a2 2 0 002-2l1-13M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>,
   crop:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M7 2v15h15M2 7h15v15"/></svg>,
   rotate: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 0114.5-7.2M21 4v5h-5"/></svg>,
@@ -662,6 +1438,7 @@ const Icon = {
   pagePng:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3.5h7l4 4V19a1.8 1.8 0 0 1-1.8 1.8H7A1.8 1.8 0 0 1 5.2 19V5.3A1.8 1.8 0 0 1 7 3.5z"/><path d="M14 3.7v4h4"/><path d="M8.5 12.4h7M8.5 15.3h5.5"/><path d="M3.6 7.3v12.2a2.8 2.8 0 0 0 2.8 2.8h8.2"/></svg>,
   stamp: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 4h6l1 5a3 3 0 0 1-3 3h-2a3 3 0 0 1-3-3l1-5z"/><path d="M8 14h8l1 5H7l1-5z"/><path d="M5 21h14"/><path d="M12 4v8"/></svg>,
   copy:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
+  keyboard:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h.01M11 9h.01M15 9h.01M18 9h.01M7 13h.01M11 13h.01M15 13h.01M8 16h8"/></svg>,
   check:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7"/></svg>,
   board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
   download:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>,
@@ -673,8 +1450,8 @@ const Icon = {
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
   power:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v9"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/></svg>,
   more:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>,
+  bug:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M8 8.5h8V15a4 4 0 0 1-8 0V8.5zM9.5 5.5h5M12 5.5V3M5 10h3M16 10h3M5 15h3M16 15h3M8.5 19.5L6.5 22M15.5 19.5l2 2.5"/></svg>,
   close:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>,
-  split:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="5" y="4" width="14" height="16" rx="2"/><path d="M5 12h14M9 8h6M9 16h6"/></svg>,
   pen:    <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3l5 5L8 21H3v-5L16 3z"/></svg>,
   align:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h10M4 12h16M4 18h7"/></svg>,
   scan:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M7 9h10M7 13h7M7 17h5"/></svg>,
@@ -685,6 +1462,14 @@ const Icon = {
   arrowDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M19 12l-7 7-7-7"/></svg>,
   arrowLeft:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg>,
   arrowRight:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>,
+  grip:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>,
+  chevronUp:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 14.5L12 9l5.5 5.5"/></svg>,
+  chevronDown:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 9.5L12 15l5.5-5.5"/></svg>,
+  plus: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>,
+  sparkle: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z"/></svg>,
+  clock: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>,
+  photo: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>,
+  alert: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
 };
 
 const PROCESSING_STEPS = new Set(['raw', 's1', 's2', 's3']);
@@ -748,6 +1533,497 @@ function ReviewCanvasZoomShell({ children }){
   );
 }
 
+function reviewBoxesEqual(leftBox, rightBox){
+  return ['left', 'top', 'width', 'height'].every(key => (
+    Math.abs(finiteNumber(leftBox?.[key], 0) - finiteNumber(rightBox?.[key], 0)) < 0.5
+  ));
+}
+
+function editableSourceSegmentsForProblem(problem){
+  const sourceSegments = Array.isArray(problem?.sourceSegments || problem?.source_segments)
+    ? (problem.sourceSegments || problem.source_segments)
+    : [];
+  const normalized = sourceSegments.flatMap((segment, index) => {
+    const bbox = segment?.bbox || {};
+    const pageId = String(segment?.sourcePageId || segment?.source_page_id || '').trim();
+    if (!pageId || !finiteNumber(bbox.width, 0) || !finiteNumber(bbox.height, 0)) return [];
+    return [{
+      id: `passage-segment-${index + 1}`,
+      pageId,
+      order: index + 1,
+      columnIndex: [1, 2].includes(Number(segment?.columnIndex ?? segment?.column_index))
+        ? Number(segment?.columnIndex ?? segment?.column_index)
+        : null,
+      bbox: {
+        left: finiteNumber(bbox.left, 0),
+        top: finiteNumber(bbox.top, 0),
+        width: Math.max(1, finiteNumber(bbox.width, 1)),
+        height: Math.max(1, finiteNumber(bbox.height, 1)),
+      },
+    }];
+  });
+  if (normalized.length) return normalized;
+  const fallbackBox = problem?.bbox || {};
+  const fallbackPageId = String(problem?.sourcePageId || problem?.source_page_id || '').trim();
+  if (!fallbackPageId || !finiteNumber(fallbackBox.width, 0) || !finiteNumber(fallbackBox.height, 0)) return [];
+  return [{
+    id: 'passage-segment-1',
+    pageId: fallbackPageId,
+    order: 1,
+    // Legacy passages do not always retain their physical column. Let the
+    // server infer it from the current page divider instead of forcing left.
+    columnIndex: null,
+    bbox: {
+      left: finiteNumber(fallbackBox.left, 0),
+      top: finiteNumber(fallbackBox.top, 0),
+      width: Math.max(1, finiteNumber(fallbackBox.width, 1)),
+      height: Math.max(1, finiteNumber(fallbackBox.height, 1)),
+    },
+  }];
+}
+
+function boxEditSegmentsEqual(leftSegments, rightSegments){
+  const left = leftSegments || [];
+  const right = rightSegments || [];
+  return left.length === right.length && left.every((segment, index) => (
+    String(segment?.pageId || '') === String(right[index]?.pageId || '')
+    && reviewBoxesEqual(segment?.bbox, right[index]?.bbox)
+  ));
+}
+
+function renumberBoxEditSegments(segments){
+  return (segments || []).map((segment, index) => ({ ...segment, order: index + 1 }));
+}
+
+function serializeBoxEditSegments(segments){
+  return renumberBoxEditSegments(segments).map(segment => ({
+    pageId: segment.pageId,
+    order: segment.order,
+    columnIndex: segment.columnIndex,
+    bbox: {
+      left: Math.round(finiteNumber(segment.bbox?.left, 0)),
+      top: Math.round(finiteNumber(segment.bbox?.top, 0)),
+      width: Math.round(Math.max(1, finiteNumber(segment.bbox?.width, 1))),
+      height: Math.round(Math.max(1, finiteNumber(segment.bbox?.height, 1))),
+    },
+  }));
+}
+
+function reviewSourcePageLabel(pages, pageId){
+  const pageIndex = (pages || []).findIndex(page => String(page?.id || '') === String(pageId || ''));
+  if (pageIndex >= 0) return `${pageIndex + 1}페이지`;
+  return '원본 페이지';
+}
+
+function reviewBoxIntersectionOverUnion(leftBox, rightBox){
+  const left = Math.max(finiteNumber(leftBox?.left, 0), finiteNumber(rightBox?.left, 0));
+  const top = Math.max(finiteNumber(leftBox?.top, 0), finiteNumber(rightBox?.top, 0));
+  const right = Math.min(
+    finiteNumber(leftBox?.left, 0) + finiteNumber(leftBox?.width, 0),
+    finiteNumber(rightBox?.left, 0) + finiteNumber(rightBox?.width, 0)
+  );
+  const bottom = Math.min(
+    finiteNumber(leftBox?.top, 0) + finiteNumber(leftBox?.height, 0),
+    finiteNumber(rightBox?.top, 0) + finiteNumber(rightBox?.height, 0)
+  );
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const leftArea = Math.max(0, finiteNumber(leftBox?.width, 0)) * Math.max(0, finiteNumber(leftBox?.height, 0));
+  const rightArea = Math.max(0, finiteNumber(rightBox?.width, 0)) * Math.max(0, finiteNumber(rightBox?.height, 0));
+  const union = leftArea + rightArea - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+function boxEditSegmentValidation(segments){
+  const segmentList = segments || [];
+  const hardIssues = [];
+  const warnings = [];
+  if (!segmentList.length) hardIssues.push('이어붙일 영역이 없습니다.');
+  if (segmentList.length > 32) hardIssues.push('한 지문에는 영역을 최대 32개까지 합칠 수 있습니다.');
+  segmentList.forEach((segment, index) => {
+    if (finiteNumber(segment?.bbox?.width, 0) < 8 || finiteNumber(segment?.bbox?.height, 0) < 8) {
+      hardIssues.push(`${index + 1}번째 영역이 너무 작습니다.`);
+    }
+  });
+  for (let leftIndex = 0; leftIndex < segmentList.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < segmentList.length; rightIndex += 1) {
+      const leftSegment = segmentList[leftIndex];
+      const rightSegment = segmentList[rightIndex];
+      if (String(leftSegment?.pageId || '') !== String(rightSegment?.pageId || '')) continue;
+      const overlap = reviewBoxIntersectionOverUnion(leftSegment?.bbox, rightSegment?.bbox);
+      if (overlap >= 0.98) {
+        hardIssues.push(`${leftIndex + 1}번과 ${rightIndex + 1}번이 사실상 같은 영역입니다.`);
+      } else if (overlap >= 0.5) {
+        warnings.push(`${leftIndex + 1}번과 ${rightIndex + 1}번이 많이 겹칩니다.`);
+      }
+    }
+  }
+  return {
+    valid: hardIssues.length === 0,
+    hardIssues: listUnique(hardIssues),
+    warnings: listUnique(warnings),
+  };
+}
+
+function BoxEditPreview({ label, page, box }){
+  const pageWidth = Math.max(1, finiteNumber(page?.width, 1));
+  const cropWidth = Math.max(1, finiteNumber(box?.width, 1));
+  const cropHeight = Math.max(1, finiteNumber(box?.height, 1));
+  return (
+    <div className="box-edit-preview-item">
+      {label && <span>{label}</span>}
+      <div className="box-edit-preview-viewport" style={{ aspectRatio: `${cropWidth} / ${cropHeight}` }}>
+        {page?.sourceImageUri ? (
+          <img
+            src={filePreviewUrl(page.sourceImageUri)}
+            alt={`${label} 영역 미리보기`}
+            draggable={false}
+            style={{
+              width: `${(pageWidth / cropWidth) * 100}%`,
+              left: `${(-finiteNumber(box?.left, 0) / cropWidth) * 100}%`,
+              top: `${(-finiteNumber(box?.top, 0) / cropHeight) * 100}%`,
+            }}
+          />
+        ) : (
+          <span className="box-edit-preview-empty">미리보기 없음</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function BoxEditStitchedPreview({ pages, segments }){
+  const segmentList = segments || [];
+  return (
+    <div className="box-edit-stitched-preview" aria-label="합친 지문 결과 미리보기">
+      <div className="box-edit-stitched-preview-head">
+        <strong>합친 결과</strong>
+        <span>위에서 아래로 {segmentList.length}개 영역</span>
+      </div>
+      <div className="box-edit-stitched-fragments">
+        {segmentList.map((segment, index) => {
+          const sourcePage = (pages || []).find(page => String(page?.id || '') === String(segment?.pageId || ''));
+          return (
+            <div className="box-edit-stitched-fragment" key={segment.id || `${segment.pageId}-${index}`}>
+              <BoxEditPreview
+                label={`${index + 1} · ${reviewSourcePageLabel(pages, segment.pageId)} · ${manualSplitBoxSizeLabel(segment.bbox)}`}
+                page={sourcePage}
+                box={segment.bbox}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function BoxEditPanel({
+  page,
+  pages,
+  problem,
+  displayNumber,
+  originalBox,
+  box,
+  originalSegments,
+  segments,
+  selectedSegmentId,
+  multi,
+  addingSegment,
+  mode,
+  mutating,
+  aiAvailable,
+  aiBusy,
+  onModeChange,
+  onToggleAddSegment,
+  onSelectSegment,
+  onDeleteSegment,
+  onMoveSegment,
+  onReset,
+  onCancel,
+  onManualSplit,
+  onApply,
+}){
+  const segmentList = segments || [];
+  const selectedSegment = segmentList.find(segment => segment.id === selectedSegmentId) || segmentList[0] || null;
+  const selectedOriginalSegment = (originalSegments || []).find(segment => segment.id === selectedSegment?.id) || null;
+  const selectedPage = (pages || []).find(item => item.id === selectedSegment?.pageId) || page;
+  const selectedBox = selectedSegment?.bbox || box;
+  const selectedOriginalBox = selectedOriginalSegment?.bbox || (multi ? selectedBox : originalBox) || selectedBox;
+  const changed = multi
+    ? !boxEditSegmentsEqual(originalSegments, segmentList)
+    : !reviewBoxesEqual(originalBox, box);
+  const recognizeMode = !multi && mode === 'recognize';
+  const recognizeDisabled = !aiAvailable || aiBusy;
+  const busy = mutating || (recognizeMode && aiBusy);
+  const segmentValidation = boxEditSegmentValidation(segmentList);
+  const canApply = multi ? segmentValidation.valid && changed : recognizeMode || changed;
+  const nearPageEdge = finiteNumber(selectedBox?.left, 0) < 4
+    || finiteNumber(selectedBox?.top, 0) < 4
+    || finiteNumber(selectedBox?.left, 0) + finiteNumber(selectedBox?.width, 0) > finiteNumber(selectedPage?.width, 1) - 4
+    || finiteNumber(selectedBox?.top, 0) + finiteNumber(selectedBox?.height, 0) > finiteNumber(selectedPage?.height, 1) - 4;
+  const sourcePageCount = new Set(segmentList.map(segment => segment.pageId)).size;
+  return (
+    <aside className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`} aria-label="영역 다시 잡기 확인 패널">
+      <div className="box-edit-panel-head">
+        <div>
+          <span>선택된 항목</span>
+          <strong>{multi ? (problem?.title || '선택 지문') : displayNumber ? `${displayNumber}번 문항` : (problem?.title || '선택 문항')}</strong>
+        </div>
+        <button className="icon-btn" type="button" aria-label="영역 편집 취소" onClick={onCancel} disabled={mutating}>
+          {Icon.close}
+        </button>
+      </div>
+      <div className="box-edit-panel-section">
+        <h3>{multi ? '지문 여러 영역 이어붙이기' : '영역 다시 잡기'}</h3>
+        <p>{multi
+          ? '분할선이나 페이지를 넘어가는 지문을 여러 번 드래그하세요. 아래 순서대로 한 지문이 됩니다.'
+          : '시험지 위의 파란 테두리와 조절점을 직접 움직이세요.'}</p>
+      {!multi && <button className="btn" type="button" onClick={onManualSplit} disabled={busy}>
+        {Icon.crop} 연속 자르기·스탬프
+      </button>}
+      </div>
+      {multi && (
+        <div className="box-edit-panel-section multi-crop-segment-section">
+          <div className="box-edit-section-head">
+            <h4>이어붙일 영역</h4>
+            <button
+              className={`btn ${addingSegment ? 'primary' : ''}`}
+              type="button"
+              aria-pressed={addingSegment}
+              onClick={onToggleAddSegment}
+              disabled={busy || segmentList.length >= 32}
+            >
+              {Icon.crop} {addingSegment ? '페이지에서 드래그…' : '영역 추가'}
+            </button>
+          </div>
+          <p>페이지가 달라도 추가할 수 있습니다. 목록 순서가 최종 읽기 순서입니다.</p>
+          <div className="multi-crop-segment-list">
+            {segmentList.map((segment, index) => (
+              <div key={segment.id} className={`multi-crop-segment-row ${segment.id === selectedSegment?.id ? 'selected' : ''}`}>
+                <button type="button" className="multi-crop-segment-main" onClick={() => onSelectSegment?.(segment.id)}>
+                  <strong>{index + 1}</strong>
+                  <span title={segment.pageId}>{reviewSourcePageLabel(pages, segment.pageId)}<small>{manualSplitBoxSizeLabel(segment.bbox)}</small></span>
+                </button>
+                <div className="multi-crop-segment-actions">
+                  <button type="button" className="icon-btn" aria-label={`${index + 1}번째 영역 위로`} onClick={() => onMoveSegment?.(segment.id, -1)} disabled={busy || index === 0}>{Icon.arrowUp}</button>
+                  <button type="button" className="icon-btn" aria-label={`${index + 1}번째 영역 아래로`} onClick={() => onMoveSegment?.(segment.id, 1)} disabled={busy || index === segmentList.length - 1}>{Icon.arrowDown}</button>
+                  <button type="button" className="icon-btn danger" aria-label={`${index + 1}번째 영역 삭제`} onClick={() => onDeleteSegment?.(segment.id)} disabled={busy || segmentList.length <= 1}>{Icon.trash}</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="box-edit-panel-section">
+        <div className="box-edit-section-head">
+          <h4>미리보기</h4>
+          <button className="text-action" type="button" onClick={onReset} disabled={mutating || !changed}>원래 영역으로</button>
+        </div>
+        <div className="box-edit-previews">
+          <BoxEditPreview label="조정 전" page={selectedPage} box={selectedOriginalBox} />
+          <BoxEditPreview label="조정 후" page={selectedPage} box={selectedBox} />
+        </div>
+        {multi && <BoxEditStitchedPreview pages={pages} segments={segmentList} />}
+        <p className="box-edit-keyboard-help">방향키 1px 이동 · Shift+방향키 10px 이동</p>
+      </div>
+      {!multi && <div className="box-edit-panel-section">
+        <h4>적용 방식</h4>
+        <label className={`box-edit-mode ${recognizeMode ? '' : 'selected'}`}>
+          <input
+            type="radio"
+            name="box-edit-mode"
+            checked={!recognizeMode}
+            onChange={() => onModeChange?.('crop')}
+            disabled={busy}
+          />
+          <span><strong>자르기만 적용</strong><small>영역의 크기와 위치만 조정합니다.</small></span>
+        </label>
+        <label
+          className={`box-edit-mode ${recognizeMode ? 'selected' : ''} ${recognizeDisabled ? 'disabled' : ''}`}
+          title={!aiAvailable ? 'Gemini API 키를 먼저 저장해 주세요' : aiBusy ? '다른 AI 인식이 진행 중입니다' : '현재 문항의 ID, 번호, 순서를 유지하며 경계를 다시 찾습니다'}
+        >
+          <input
+            type="radio"
+            name="box-edit-mode"
+            checked={recognizeMode}
+            onChange={() => onModeChange?.('recognize')}
+            disabled={recognizeDisabled || mutating}
+          />
+          <span>
+            <strong>이 영역 다시 인식</strong>
+            <small>
+              {!aiAvailable
+                ? 'Gemini API 키 필요 · 현재 문항은 그대로 유지됩니다.'
+                : aiBusy
+                  ? '다른 AI 인식이 끝난 뒤 사용할 수 있습니다.'
+                  : '여러 후보가 나와도 하나의 경계로 합치며 번호와 순서를 유지합니다.'}
+            </small>
+          </span>
+        </label>
+      </div>}
+      {nearPageEdge && (
+        <div className="box-edit-warning" role="status">
+          <strong>페이지 가장자리에 닿아 있습니다.</strong>
+          <span>글자나 그림이 잘리지 않았는지 미리보기를 확인하세요.</span>
+        </div>
+      )}
+      {multi && segmentValidation.hardIssues.length > 0 && (
+        <div className="box-edit-warning error" role="alert">
+          <strong>합칠 수 없는 영역이 있습니다.</strong>
+          <span>{segmentValidation.hardIssues.join(' ')}</span>
+        </div>
+      )}
+      {multi && segmentValidation.warnings.length > 0 && (
+        <div className="box-edit-warning" role="status">
+          <strong>겹친 내용을 확인하세요.</strong>
+          <span>{segmentValidation.warnings.join(' ')}</span>
+        </div>
+      )}
+      <div className="box-edit-impact">
+        <span>영향 요약</span>
+        <strong>
+          {multi
+            ? `영역 ${segmentList.length}개 · ${sourcePageCount}페이지를 한 지문으로 교체`
+            : displayNumber ? `${displayNumber}번 문항만 교체` : '선택 문항만 교체'}
+          {' '}<small>· ID와 순서 유지</small>
+        </strong>
+      </div>
+      <div className="box-edit-panel-footer">
+        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={onCancel} disabled={busy}>취소</button>
+        <button
+          className="btn primary"
+          type="button"
+          aria-keyshortcuts="Enter"
+          onClick={onApply}
+          disabled={busy || !canApply || (recognizeMode && !aiAvailable)}
+        >
+          {recognizeMode ? Icon.wand : Icon.check}{' '}
+          {multi
+            ? (mutating ? '이어붙이는 중…' : '합치고 다음 검수')
+            : recognizeMode
+            ? (aiBusy ? '인식 중…' : '다시 인식')
+            : (mutating ? '적용 중…' : '적용')}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function ManualSplitStampDimensionInput({ value, maxValue, disabled, onChange }){
+  const [draft, setDraft] = useState(String(value));
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!focusedRef.current) setDraft(String(value));
+  }, [value]);
+  const commit = () => {
+    focusedRef.current = false;
+    const next = clampManualSplitStampDimension(draft, maxValue);
+    setDraft(String(next));
+    onChange?.(next);
+  };
+  return (
+    <input
+      type="number"
+      min={Math.min(24, maxValue)}
+      max={maxValue}
+      step="10"
+      value={draft}
+      disabled={disabled}
+      onFocus={evt => { focusedRef.current = true; evt?.currentTarget?.select(); }}
+      onChange={event => {
+        const text = event.target.value;
+        setDraft(text);
+        const next = Number(text);
+        // Keep partial input such as "3" while typing "320". Valid sizes
+        // still update the preview immediately; clamp only when editing ends.
+        if (text && Number.isFinite(next) && next >= Math.min(24, maxValue) && next <= maxValue) onChange?.(Math.round(next));
+      }}
+      onBlur={commit}
+      onKeyDown={event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        event.stopPropagation();
+        event.currentTarget.blur();
+      }}
+    />
+  );
+}
+
+function manualSplitStampBoxFromPoint(point, page, stampBox){
+  const width = Math.min(page.width, Math.max(1, finiteNumber(stampBox?.width, page.width * 0.36)));
+  const height = Math.min(page.height, Math.max(1, finiteNumber(stampBox?.height, page.height * 0.20)));
+  return {
+    left: Math.max(0, Math.min(page.width - width, point.x - width / 2)),
+    top: Math.max(0, Math.min(page.height - height, point.y - height / 2)),
+    width, height,
+  };
+}
+
+// Hover is transient: move just the preview, without rendering the review,
+// thumbnails and crop list again for every mouse event.
+function ManualSplitStampPreview({ canvasRef, page, stampBox, enabled }){
+  const previewRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const preview = previewRef.current;
+    if (!canvas || !preview) return undefined;
+    preview.hidden = true;
+    if (!enabled) return undefined;
+    let frame = null;
+    let latest = null;
+    const move = evt => {
+      latest = { x: evt.clientX, y: evt.clientY };
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        const rect = canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        const box = manualSplitStampBoxFromPoint({
+          x: (latest.x - rect.left) * page.width / rect.width,
+          y: (latest.y - rect.top) * page.height / rect.height,
+        }, page, stampBox);
+        Object.assign(preview.style, manualSplitBoxStyle(box, page));
+        preview.hidden = false;
+      });
+    };
+    const leave = () => {
+      if (frame != null) cancelAnimationFrame(frame);
+      frame = null;
+      preview.hidden = true;
+    };
+    canvas.addEventListener('mousemove', move);
+    canvas.addEventListener('mouseleave', leave);
+    return () => {
+      leave();
+      canvas.removeEventListener('mousemove', move);
+      canvas.removeEventListener('mouseleave', leave);
+    };
+  }, [canvasRef, page, stampBox, enabled]);
+  return <div ref={previewRef} hidden aria-hidden="true" className="manual-split-box draft stamp-preview">
+    <div className="review-bbox-label manual-split-badge">스탬프</div>
+  </div>;
+}
+
+function manualSplitScopeSummary(page, items, replaceProblemIds, scope){
+  const ids = new Set(replaceProblemIds || []);
+  const positions = (items || []).flatMap((item, index) => ids.has(item.id) ? [index + 1] : []);
+  const ranges = [];
+  for (let i = 0; i < positions.length; i++) {
+    const start = positions[i];
+    let end = start;
+    while (positions[i + 1] === end + 1) end = positions[++i];
+    ranges.push(start === end ? `${start}번` : `${start}–${end}번`);
+  }
+  return {
+    pageId: page.id,
+    problemIds: [...ids],
+    label: scope === 'page' ? `페이지 전체 ${ids.size}개 교체`
+      : ids.size ? `선택 ${ids.size}개만 교체` : '기존 문제 유지 · 새 영역 추가',
+    rangeLabel: positions.length ? `목록 ${ranges.join(', ')}` : '새 문제 추가',
+    pageLabel: `${page.pageNumber || page.id}페이지`,
+  };
+}
+
 function ManualSplitEditor({
   page,
   regions,
@@ -758,8 +2034,6 @@ function ManualSplitEditor({
   hasOverlap,
   mutating,
   onCanvasMouseDown,
-  onCanvasMouseMove,
-  onCanvasMouseLeave,
   onModeChange,
   onSaveStampFromSelection,
   onRegionMouseDown,
@@ -771,11 +2045,47 @@ function ManualSplitEditor({
   onReorderRegion,
   onApply,
   onStampSizeChange,
+  panelSide,
+  onPanelSideChange,
+  shortcutHelpOpen,
+  scope,
+  scopeSummary,
+  onScopeChange,
+  selectedScopeCount,
 }){
+  const canvasRef = useRef(null);
+  const panelRef = useRef(null);
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const wrap = panel?.closest('.review-wrap');
+    if (!panel || !wrap) return undefined;
+    let frame = null;
+    const measure = () => {
+      frame = null;
+      const available = Math.min(window.innerHeight, wrap.getBoundingClientRect().bottom)
+        - panel.getBoundingClientRect().top - 12;
+      panel.style.setProperty('--manual-panel-available', `${Math.max(180, available)}px`);
+    };
+    const schedule = () => {
+      if (frame == null) frame = requestAnimationFrame(measure);
+    };
+    const observer = new ResizeObserver(schedule);
+    observer.observe(wrap);
+    wrap.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    measure();
+    return () => {
+      observer.disconnect();
+      wrap.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      if (frame != null) cancelAnimationFrame(frame);
+    };
+  }, []);
   const dragRegionIdRef = useRef(null);
+  const [listDragState, setListDragState] = useState(null);
   const selectedCount = selectedRegionIds?.size || 0;
   const regionList = regions || [];
-  const activeMode = mode === 'stamp' ? 'stamp' : 'draw';
+  const activeMode = ['stamp', 'select'].includes(mode) ? mode : 'draw';
   const selectedRegion = regionList.find(region => selectedRegionIds?.has(region.id)) || null;
   const focusShadeRegionId = draftBox ? null : selectedRegion?.id;
   const canSaveStamp = Boolean(selectedRegion?.bbox?.width && selectedRegion?.bbox?.height);
@@ -786,24 +2096,24 @@ function ManualSplitEditor({
   const handleDrop = (evt, targetId) => {
     evt.preventDefault();
     const sourceId = evt.dataTransfer?.getData('text/plain') || dragRegionIdRef.current;
-    dragRegionIdRef.current = null;
-    if (!sourceId || sourceId === targetId) return;
     const position = dropPositionFromClientY(evt.currentTarget.getBoundingClientRect(), evt.clientY);
+    dragRegionIdRef.current = null;
+    setListDragState(null);
+    if (!sourceId || sourceId === targetId) return;
     onReorderRegion?.(sourceId, targetId, position);
   };
 
   return (
-    <div className="manual-split-layout">
+    <div className={`manual-split-layout panel-${panelSide}`}>
       <div className="manual-split-canvas-shell">
         <ReviewCanvasZoomShell>
           <div
-            className={`review-page-canvas manual-split-canvas ${activeMode === 'stamp' ? 'stamp-mode' : 'draw-mode'}`}
+            ref={canvasRef}
+            className={`review-page-canvas manual-split-canvas ${activeMode}-mode`}
             onMouseDown={(evt) => onCanvasMouseDown?.(evt, page)}
-            onMouseMove={(evt) => onCanvasMouseMove?.(evt, page)}
-            onMouseLeave={(evt) => onCanvasMouseLeave?.(evt, page)}
           >
             {page.sourceImageUri ? (
-              <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+              <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} width={pageWidth} height={pageHeight} draggable={false} />
             ) : (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                 페이지 이미지를 불러올 수 없어요.
@@ -826,7 +2136,7 @@ function ManualSplitEditor({
                   <div className="review-bbox-label manual-split-badge">
                     {String(region.order || 0).padStart(2, '0')}
                   </div>
-                  {isSelected && (
+                  {isSelected && activeMode !== 'stamp' && (
                     <>
                       <div className="crop-frame-label">영역</div>
                       {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
@@ -854,20 +2164,50 @@ function ManualSplitEditor({
                 </div>
               </div>
             )}
+            <ManualSplitStampPreview canvasRef={canvasRef} page={page} stampBox={stampBox} enabled={activeMode === 'stamp' && !mutating} />
           </div>
         </ReviewCanvasZoomShell>
       </div>
-      <aside className="manual-split-panel" aria-label="수동 분할 영역 목록">
+      <aside ref={panelRef} className="manual-split-panel" aria-label="수동 분할 영역 목록">
+        <div className="manual-split-scope">
+          <label>적용 범위
+            <select aria-label="자르기 적용 범위" value={scope} disabled={mutating} onChange={evt => onScopeChange?.(evt.target.value)}>
+              {selectedScopeCount > 0 && <option value="selection">선택한 {selectedScopeCount}개 문제만</option>}
+              <option value="page">이 페이지 전체 다시 자르기</option>
+              <option value="append">기존 문제 유지하고 추가</option>
+            </select>
+          </label>
+          <span>{scopeSummary?.pageLabel} · {scopeSummary?.rangeLabel}</span>
+          <strong>{scopeSummary?.label}</strong>
+        </div>
         <div className="manual-split-panel-head">
-          <strong>영역 {regionList.length}개</strong>
-          {hasOverlap && <span className="manual-split-warning">겹침 있음</span>}
+          <span className="manual-split-panel-title" aria-live="polite">
+            <strong>영역 {regionList.length}개</strong>
+            {hasOverlap && <span className="manual-split-warning">겹침 있음</span>}
+          </span>
+          <button
+            type="button"
+            className="icon-btn manual-split-panel-move"
+            title={`패널을 ${panelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동`}
+            aria-label={`영역 패널을 ${panelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동`}
+            aria-keyshortcuts="P"
+            onClick={() => onPanelSideChange?.(panelSide === 'right' ? 'left' : 'right')}
+          >
+            {panelSide === 'right' ? Icon.arrowLeft : Icon.arrowRight}
+          </button>
         </div>
         <div className="manual-split-toolset" aria-label="영역 생성 방식">
+          <button type="button" className={`manual-split-tool ${activeMode === 'select' ? 'on' : ''}`}
+            aria-pressed={activeMode === 'select'} aria-keyshortcuts="V Escape" disabled={mutating}
+            title="기존 영역 선택·이동·크기 조절 (V / Esc)" onClick={() => onModeChange?.('select')}>
+            <span>선택·이동</span>
+          </button>
           <button
             type="button"
             className={`manual-split-tool ${activeMode === 'draw' ? 'on' : ''}`}
             title="드래그해서 자유 영역 만들기"
             aria-pressed={activeMode === 'draw'}
+            disabled={mutating}
             onClick={() => onModeChange?.('draw')}
           >
             {Icon.crop}
@@ -878,6 +2218,7 @@ function ManualSplitEditor({
             className={`manual-split-tool ${activeMode === 'stamp' ? 'on' : ''}`}
             title="같은 크기 틀을 클릭으로 찍기 · Esc로 스탬프 종료"
             aria-pressed={activeMode === 'stamp'}
+            disabled={mutating}
             aria-keyshortcuts="Escape"
             onClick={() => onModeChange?.('stamp')}
           >
@@ -885,80 +2226,106 @@ function ManualSplitEditor({
             <span>스탬프</span>
           </button>
         </div>
-        <div className="manual-stamp-card">
-          <div className="manual-stamp-card-head">
-            <span className="manual-stamp-size">
-              {Icon.stamp}
-              <strong>{manualSplitBoxSizeLabel({ width: stampWidth, height: stampHeight })}</strong>
-            </span>
-            <span className="manual-stamp-scale-actions" aria-label="스탬프 크기 빠른 조절">
-              <button
-                type="button"
-                className="icon-btn"
-                title="스탬프 10% 축소"
-                disabled={mutating}
-                onClick={() => onStampSizeChange?.({
-                  width: Math.round(stampWidth * 0.9),
-                  height: Math.round(stampHeight * 0.9),
-                })}
-              >
-                {Icon.zoomOut}
-              </button>
-              <button
-                type="button"
-                className="icon-btn"
-                title="스탬프 10% 확대"
-                disabled={mutating}
-                onClick={() => onStampSizeChange?.({
-                  width: Math.round(stampWidth * 1.1),
-                  height: Math.round(stampHeight * 1.1),
-                })}
-              >
-                {Icon.zoomIn}
-              </button>
-            </span>
+        <div className="manual-split-note" role="status">
+          {activeMode === 'stamp' ? '클릭마다 새 영역 · Esc로 선택·이동'
+            : activeMode === 'draw' ? '드래그마다 새 영역 · 기존 영역 클릭으로 수정'
+            : '영역을 클릭해 이동·크기 조절 · G/S로 연속 생성'}
+        </div>
+        {activeMode === 'stamp' ? (
+          <div className="manual-stamp-card">
+            <div className="manual-stamp-card-head">
+              <span className="manual-stamp-size">
+                {Icon.stamp}
+                <strong>{manualSplitBoxSizeLabel({ width: stampWidth, height: stampHeight })}</strong>
+              </span>
+              <span className="manual-stamp-scale-actions" aria-label="스탬프 크기 빠른 조절">
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="스탬프 10% 축소"
+                  disabled={mutating}
+                  onClick={() => onStampSizeChange?.({
+                    width: Math.round(stampWidth * 0.9),
+                    height: Math.round(stampHeight * 0.9),
+                  })}
+                >
+                  {Icon.zoomOut}
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  title="스탬프 10% 확대"
+                  disabled={mutating}
+                  onClick={() => onStampSizeChange?.({
+                    width: Math.round(stampWidth * 1.1),
+                    height: Math.round(stampHeight * 1.1),
+                  })}
+                >
+                  {Icon.zoomIn}
+                </button>
+              </span>
+            </div>
+            <div className="manual-stamp-fields" aria-label="스탬프 크기 조절">
+              <label className="manual-stamp-field">
+                <span>가로</span>
+                <ManualSplitStampDimensionInput
+                  value={stampWidth}
+                  maxValue={pageWidth}
+                  disabled={mutating}
+                  onChange={width => onStampSizeChange?.({ width })}
+                />
+              </label>
+              <label className="manual-stamp-field">
+                <span>세로</span>
+                <ManualSplitStampDimensionInput
+                  value={stampHeight}
+                  maxValue={pageHeight}
+                  disabled={mutating}
+                  onChange={height => onStampSizeChange?.({ height })}
+                />
+              </label>
+            </div>
           </div>
-          <div className="manual-stamp-fields" aria-label="스탬프 크기 조절">
-            <label className="manual-stamp-field">
-              <span>가로</span>
-              <input
-                type="number"
-                min="24"
-                max={pageWidth}
-                step="10"
-                value={stampWidth}
-                disabled={mutating}
-                onChange={(evt) => onStampSizeChange?.({ width: evt.target.value })}
-              />
-            </label>
-            <label className="manual-stamp-field">
-              <span>세로</span>
-              <input
-                type="number"
-                min="24"
-                max={pageHeight}
-                step="10"
-                value={stampHeight}
-                disabled={mutating}
-                onChange={(evt) => onStampSizeChange?.({ height: evt.target.value })}
-              />
-            </label>
-          </div>
+        ) : canSaveStamp ? (
           <button
             type="button"
-            className="btn"
-            title="선택 영역 크기를 다음 스탬프로 저장"
-            disabled={mutating || !canSaveStamp}
+            className="manual-stamp-quick"
+            title="선택 영역 크기로 같은 크기 자르기를 계속합니다"
+            disabled={mutating}
             onClick={() => onSaveStampFromSelection?.(selectedRegion?.id)}
           >
-            {Icon.check}
-            이 크기로 계속
+            {Icon.stamp}
+            <span>선택 크기로 반복</span>
+            <strong>{manualSplitBoxSizeLabel(selectedRegion?.bbox)}</strong>
           </button>
+        ) : null}
+        <div className="manual-split-shortcuts" aria-label="수동 분할 단축키">
+          <span>V 선택</span>
+          <span>G 드래그</span>
+          <span>S 스탬프</span>
+          <span>P 패널 이동</span>
+          <span>Enter 적용</span>
         </div>
+        {shortcutHelpOpen && (
+          <div className="manual-split-shortcut-guide" id="manual-split-shortcuts" aria-label="수동 자르기 단축키 전체 목록">
+            <span><kbd>G</kbd> 드래그 모드</span>
+            <span><kbd>V / Esc</kbd> 선택·이동 모드</span>
+            <span><kbd>S</kbd> 스탬프 모드</span>
+            <span><kbd>P</kbd> 패널 좌우 이동</span>
+            <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 전체 선택</span>
+            <span><kbd>{PRIMARY_MODIFIER_LABEL} D</kbd> 선택 복제</span>
+            <span><kbd>방향키</kbd> 1px 이동</span>
+            <span><kbd>Shift 방향키</kbd> 빠른 이동</span>
+            <span><kbd>Delete</kbd> 선택 삭제</span>
+            <span><kbd>Enter</kbd> 분할 적용</span>
+            <span><kbd>Esc</kbd> 진행 중 조작 취소 · 영역 유지</span>
+          </div>
+        )}
         {regionList.length === 0 ? (
           <div className="manual-split-empty">
             {activeMode === 'stamp'
               ? '원본 위를 클릭해 같은 크기 영역을 찍으세요.'
+              : activeMode === 'select' ? '드래그나 스탬프로 영역을 만든 뒤 선택해 조절하세요.'
               : '원본 위에서 드래그해 자를 영역을 만드세요.'}
           </div>
         ) : (
@@ -969,21 +2336,41 @@ function ManualSplitEditor({
               return (
                 <div
                   key={region.id}
-                  className={`manual-split-row ${isSelected ? 'selected' : ''}`}
+                  className={[
+                    'manual-split-row',
+                    isSelected ? 'selected' : '',
+                    listDragState?.sourceId === region.id ? 'is-dragging' : '',
+                    listDragState?.targetId === region.id ? `drop-${listDragState.position}` : '',
+                  ].filter(Boolean).join(' ')}
                   draggable={!mutating}
+                  aria-label={`${String(region.order || index + 1).padStart(2, '0')} ${region.title}`}
                   onClick={(evt) => onListSelect?.(region.id, evt)}
                   onDragStart={(evt) => {
                     dragRegionIdRef.current = region.id;
+                    setListDragState({ sourceId: region.id, targetId: null, position: null });
                     evt.dataTransfer.effectAllowed = 'move';
                     evt.dataTransfer.setData('text/plain', region.id);
                   }}
                   onDragOver={(evt) => {
                     evt.preventDefault();
                     evt.dataTransfer.dropEffect = 'move';
+                    const position = dropPositionFromClientY(evt.currentTarget.getBoundingClientRect(), evt.clientY);
+                    setListDragState(state => {
+                      if (state?.targetId === region.id && state?.position === position) return state;
+                      return {
+                        sourceId: state?.sourceId || dragRegionIdRef.current,
+                        targetId: region.id,
+                        position,
+                      };
+                    });
                   }}
                   onDrop={(evt) => handleDrop(evt, region.id)}
-                  onDragEnd={() => { dragRegionIdRef.current = null; }}
+                  onDragEnd={() => {
+                    dragRegionIdRef.current = null;
+                    setListDragState(null);
+                  }}
                 >
+                  <span className="manual-split-row-grip" title="끌어서 순서 변경" aria-hidden="true">{Icon.rows3}</span>
                   <span className="manual-split-row-order">{String(region.order || index + 1).padStart(2, '0')}</span>
                   <button
                     type="button"
@@ -1051,6 +2438,11 @@ function ManualSplitEditor({
           <div className="manual-split-note">{selectedCount}개 선택됨</div>
         )}
         <div className="manual-split-panel-actions">
+          <span className="manual-split-apply-summary" aria-live="polite">
+            {regionList.length
+              ? `${regionList.length}개 영역을 새 문제로 만들어요`
+              : '영역을 하나 이상 만들어 주세요'}
+          </span>
           <button
             type="button"
             className="btn primary"
@@ -1060,7 +2452,7 @@ function ManualSplitEditor({
             onClick={() => onApply?.()}
           >
             {Icon.check}
-            분할 적용 {regionList.length}
+            {mutating ? '분할 적용 중…' : `분할 적용 ${regionList.length}`}
           </button>
         </div>
       </aside>
@@ -1083,7 +2475,16 @@ function TooltipLayer(){
 
   const restoreNativeTitle = useCallback((element) => {
     if (!element?.dataset || element.dataset.nativeTooltipTitle == null) return;
-    element.setAttribute('title', element.dataset.nativeTooltipTitle);
+    // A React update may have replaced the title while the tooltip was open.
+    if (!element.hasAttribute('title')) {
+      element.setAttribute('title', element.dataset.nativeTooltipTitle);
+    }
+    if (element.dataset.nativeTooltipAriaLabel != null) {
+      if (element.getAttribute('aria-label') === element.dataset.nativeTooltipAriaLabel) {
+        element.removeAttribute('aria-label');
+      }
+      delete element.dataset.nativeTooltipAriaLabel;
+    }
     delete element.dataset.nativeTooltipTitle;
   }, []);
 
@@ -1108,6 +2509,19 @@ function TooltipLayer(){
     }
     if (element.hasAttribute?.('title') && element.dataset?.nativeTooltipTitle == null) {
       element.dataset.nativeTooltipTitle = element.getAttribute('title') || '';
+      // Icon-only controls often use title as their accessible name. Keep that
+      // name available while suppressing the browser's duplicate tooltip.
+      if (
+        element.matches?.('button, a, summary, [role="button"]')
+        && !element.getAttribute('aria-label')
+        && !element.getAttribute('aria-labelledby')
+        && !element.textContent?.trim()
+        && !element.querySelector?.('img[alt]:not([alt=""]), svg title')
+        && element.dataset.nativeTooltipTitle.trim()
+      ) {
+        element.dataset.nativeTooltipAriaLabel = element.dataset.nativeTooltipTitle;
+        element.setAttribute('aria-label', element.dataset.nativeTooltipAriaLabel);
+      }
       element.removeAttribute('title');
     }
     activeRef.current = element;
@@ -1134,10 +2548,18 @@ function TooltipLayer(){
       target?.closest?.('[data-tooltip], [title]')
     );
     const onPointerOver = (event) => {
+      if (event.buttons) {
+        hideTooltip();
+        return;
+      }
       const target = tooltipTarget(event.target);
       if (target) showTooltipFor(target);
     };
     const onPointerMove = (event) => {
+      if (event.buttons) {
+        hideTooltip();
+        return;
+      }
       const target = tooltipTarget(event.target);
       if (target && target !== activeRef.current) {
         showTooltipFor(target);
@@ -1158,7 +2580,7 @@ function TooltipLayer(){
       if (event.key === 'Escape') hideTooltip();
     };
     document.addEventListener('pointerover', onPointerOver, true);
-    document.addEventListener('pointermove', onPointerMove, true);
+    document.addEventListener('pointermove', onPointerMove, { capture: true, passive: true });
     document.addEventListener('pointerout', onPointerOut, true);
     document.addEventListener('focusin', onFocusIn, true);
     document.addEventListener('focusout', hideTooltip, true);
@@ -1192,146 +2614,368 @@ function TooltipLayer(){
   );
 }
 
-function TopBar({ fileName, setFileName, progress, processed, total, onPublish, published, onReset, onRefresh, refreshing, canReset, view, setView, reviewAvailable, onUndo, canUndo, onShutdown, onExportImages, exportingImages, canExportImages }){
-  const [moreOpen, setMoreOpen] = useState(false);
-  const moreRef = useRef(null);
+function toolbarMenuFocusIndex(key, currentIndex, itemCount){
+  if (itemCount <= 0) return -1;
+  if (key === 'Home') return 0;
+  if (key === 'End') return itemCount - 1;
+  if (key === 'ArrowDown') return (currentIndex + 1 + itemCount) % itemCount;
+  if (key === 'ArrowUp') return currentIndex < 0 ? itemCount - 1 : (currentIndex - 1 + itemCount) % itemCount;
+  return -1;
+}
+
+function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' }){
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const openingEdgeRef = useRef('first');
+  const closeMenu = useCallback((restoreFocus = false) => {
+    setOpen(false);
+    if (restoreFocus) triggerRef.current?.focus();
+  }, []);
   useEffect(() => {
-    if (!moreOpen) return;
-    const close = (event) => {
-      if (!moreRef.current || moreRef.current.contains(event.target)) return;
-      setMoreOpen(false);
+    if (!open) return undefined;
+    const menuItems = menuRef.current?.querySelectorAll('[role="menuitem"]') || [];
+    const index = openingEdgeRef.current === 'last' ? menuItems.length - 1 : 0;
+    menuItems[index]?.focus();
+    const onPointerDown = event => {
+      if (!rootRef.current?.contains(event.target)) closeMenu();
     };
-    const onKey = (event) => {
-      if (event.key === 'Escape') setMoreOpen(false);
-    };
-    window.addEventListener('pointerdown', close);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pointerdown', close);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [moreOpen]);
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, [open, closeMenu]);
+  return (
+    <div
+      className={`topbar-more topbar-action-menu ${className}`.trim()}
+      ref={rootRef}
+      onBlur={event => {
+        if (!event.currentTarget.contains(event.relatedTarget)) closeMenu();
+      }}
+    >
+      <button
+        ref={triggerRef}
+        className={`btn ghost icon topbar-action-menu-trigger ${open ? 'on' : ''}`}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={`${id}-menu`}
+        aria-label={label}
+        title={label}
+        onClick={() => {
+          openingEdgeRef.current = 'first';
+          setOpen(value => !value);
+        }}
+        onKeyDown={event => {
+          if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+          event.preventDefault();
+          openingEdgeRef.current = event.key === 'ArrowUp' ? 'last' : 'first';
+          setOpen(true);
+        }}
+      >{icon}</button>
+      {open && (
+        <div
+          id={`${id}-menu`}
+          ref={menuRef}
+          className="topbar-more-menu topbar-action-menu-popup"
+          role="menu"
+          aria-label={label}
+          onKeyDown={event => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              event.stopPropagation();
+              closeMenu(true);
+              return;
+            }
+            if (event.key === 'Tab') {
+              closeMenu(true);
+              return;
+            }
+            const menuItems = Array.from(event.currentTarget.querySelectorAll('[role="menuitem"]'));
+            const index = toolbarMenuFocusIndex(event.key, menuItems.indexOf(event.target), menuItems.length);
+            if (index < 0) return;
+            event.preventDefault();
+            menuItems[index]?.focus();
+          }}
+        >
+          {items.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              role="menuitem"
+              tabIndex={-1}
+              className={item.danger ? 'is-danger' : undefined}
+              aria-disabled={item.disabled || undefined}
+              onClick={() => {
+                if (item.disabled) return;
+                closeMenu(true);
+                item.onSelect?.();
+              }}
+            >
+              {item.icon}
+              <span className="topbar-menu-item-copy">
+                <span>{item.label}</span>
+                {item.description && <small>{item.description}</small>}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TopBar({
+  fileName, setFileName, total, onPublish, published, onReset,
+  onRefresh, refreshing, canReset, view, setView, reviewAvailable,
+  reviewAttentionCount = 0,
+  recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
+  canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
+  editingActive = false, saveStateLabel = '', saveStateTone = '',
+  onOpenUpdateSettings, onOpenBugReport, updateAvailable = false, updateBusy = false,
+  focusMode = false, onChangeFocusMode, canChangeFocusMode = false,
+}){
+  const resetReason = pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요'
+    : conflictBlocked ? '오류 안내에서 최신 상태를 먼저 선택해 주세요'
+    : resetBlocked || operationBusy ? '진행 중인 작업이 끝난 뒤 사용할 수 있어요'
+    : !canReset ? '초기화할 내용이 없습니다' : '현재 수업, 대기열, 최근 작업을 초기화합니다';
+  const refreshReason = refreshing ? '저장된 최신 세션을 읽는 중'
+    : pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요'
+    : operationBusy ? '진행 중인 작업이 끝난 뒤 사용할 수 있어요'
+    : '저장된 최신 세션 다시 읽기';
+  const hasOutput = total > 0;
 
   return (
     <div className="topbar">
-      <div className="brand">
+      <div className="brand" aria-label="칠판 자료 편집기">
         <BrandMark />
-        칠판 자료 편집기
+        <span className="brand-name">칠판 자료 편집기</span>
       </div>
       <div className="crumb">
         <span>수업 ›</span>
-        <input value={fileName} onChange={e => setFileName(e.target.value)} />
+        <input
+          value={fileName}
+          aria-label="수업 자료 이름"
+          title={fileName || '수업 자료 이름'}
+          onChange={e => setFileName(e.target.value)}
+          disabled={pageReviewActive || operationBusy || conflictBlocked}
+        />
       </div>
+      {saveStateLabel && <span className={`topbar-save-state ${saveStateTone}`} role="status">{saveStateLabel}</span>}
       <div className="spacer" />
-      <div className="view-toggle" title={reviewAvailable ? '' : '먼저 자료를 업로드하세요'}>
-        <button
-          className={view === 'board' ? 'on' : ''}
-          data-tooltip="보드 배치 화면으로 이동"
-          onClick={() => setView && setView('board')}
-        >칠판</button>
-        <button
-          className={view === 'review' ? 'on' : ''}
-          data-tooltip={reviewAvailable ? 'AI 인식 박스와 문제 분할을 검수' : '먼저 자료를 업로드하세요'}
-          onClick={() => reviewAvailable && setView && setView('review')}
-          disabled={!reviewAvailable}
-          style={!reviewAvailable ? { cursor: 'not-allowed', opacity: .5 } : null}
-        >검수</button>
-      </div>
-      <div className="progress" title={`${processed} / ${total} 처리됨`}>
-        <div className="bar"><i style={{ width: `${Math.round(progress*100)}%` }} /></div>
-        <span>{processed}/{total} 처리됨</span>
-      </div>
+      {recognitionBusy && <div className="progress is-working" role="status"><span className="spin-ic">{Icon.refresh}</span><span>문항 인식 중…</span></div>}
       <div className="topbar-actions" aria-label="보조 작업">
-        <button
-          className="btn ghost icon"
-          type="button"
-          title={canReset ? '초기화' : '초기화할 내용이 없습니다'}
-          data-tooltip={canReset ? '현재 세션, 대기열, 최근 작업 초기화' : '초기화할 내용이 없습니다'}
-          aria-label="초기화"
-          onClick={onReset}
-          disabled={!canReset}
-        >
-          {Icon.reset}
+        {canChangeFocusMode && <div className="editor-mode-control" role="group" aria-label="편집기 보기 모드">
+          <button className="btn ghost" type="button" aria-pressed={!focusMode}
+            disabled={pageReviewActive || operationBusy} onClick={() => onChangeFocusMode?.(false)}>기본형</button>
+          <button className="btn ghost" type="button" aria-pressed={focusMode}
+            disabled={pageReviewActive || operationBusy} onClick={() => onChangeFocusMode?.(true)}>집중 모드</button>
+        </div>}
+        <button className="btn ghost topbar-update" type="button"
+          onClick={onOpenUpdateSettings}
+          disabled={pageReviewActive || operationBusy}
+          title="앱 업데이트 확인 및 설치 설정 열기">
+          <span className={updateBusy ? 'spin-ic' : ''}>{Icon.refresh}</span>
+          업데이트{updateAvailable && <span className="topbar-update-badge">새 버전</span>}
         </button>
         <button
           className="btn ghost icon"
-          title={canUndo ? '되돌리기 (Ctrl/Cmd+Z)' : '되돌릴 변경이 없습니다'}
+          title={canUndo ? `되돌리기 (${PRIMARY_MODIFIER_LABEL}+Z)` : '되돌릴 변경이 없습니다'}
           data-tooltip={canUndo ? '마지막 편집 되돌리기' : '되돌릴 변경이 없습니다'}
           aria-label="되돌리기"
           onClick={onUndo}
-          disabled={!canUndo}
+          disabled={pageReviewActive || operationBusy || !canUndo}
         >{Icon.undo}</button>
-        <button
-          className="btn ghost icon"
-          onClick={onRefresh}
-          disabled={refreshing}
-          title={refreshing ? '세션 새로고침 중' : '저장된 최신 세션 다시 읽기'}
-          data-tooltip={refreshing ? '저장된 최신 세션을 읽는 중' : '디스크에 저장된 최신 세션을 다시 읽기'}
-          aria-label={refreshing ? '세션 새로고침 중' : '세션 새로고침'}
-        >
-          <span className={refreshing ? 'spin-ic' : ''} style={{display:'inline-flex'}}>{Icon.refresh}</span>
-        </button>
-        <button
-          className="btn ghost icon"
-          type="button"
-          title={canExportImages ? '현재 선택 단계 기준 PNG ZIP' : '다운로드할 이미지가 없습니다'}
-          data-tooltip={canExportImages ? '현재 선택한 처리 단계 기준으로 최종 PNG 묶음 다운로드' : '다운로드할 이미지가 없습니다'}
-          aria-label={exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드'}
-          onClick={onExportImages}
-          disabled={!canExportImages || exportingImages}
-        >
-          {Icon.download}
-        </button>
-        <div className="topbar-more" ref={moreRef}>
-          <button
-            className={`btn ghost icon ${moreOpen ? 'on' : ''}`}
-            type="button"
-            aria-haspopup="menu"
-            aria-expanded={moreOpen}
-            title="더보기"
-            data-tooltip="종료 등 추가 작업"
-            onClick={() => setMoreOpen(open => !open)}
-          >
-            {Icon.more}
-          </button>
-          {moreOpen && (
-            <div className="topbar-more-menu" role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  onShutdown?.();
-                }}
-              >
-                {Icon.power}<span>종료</span>
-              </button>
-            </div>
-          )}
-        </div>
+        <ToolbarActionMenu
+          id="topbar-more"
+          label="수업 작업 더보기"
+          items={[
+            ...(view === 'review'
+              ? [{ id: 'board', icon: Icon.board, label: '칠판으로 돌아가기',
+                  disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('board') }]
+              : reviewAvailable ? [{ id: 'review', icon: Icon.check, label: '문항 검수 열기',
+                  description: reviewAttentionCount > 0 ? `확인 필요 ${reviewAttentionCount}개 · 필요할 때 검수합니다` : '원본과 분할 영역을 확인하거나 직접 수정합니다',
+                  disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
+            { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
+            { id: 'reset', icon: Icon.reset, label: '초기화', description: resetReason, danger: true, disabled: pageReviewActive || operationBusy || resetBlocked || !canReset, onSelect: onReset },
+            { id: 'support', icon: Icon.fileText, label: '문제 신고', description: '오류나 불편한 점을 알려 주세요', onSelect: onOpenBugReport },
+            { id: 'shutdown', icon: Icon.power, label: '종료', onSelect: onShutdown },
+          ]}
+        />
       </div>
+      {hasOutput && <div className="topbar-export-group" role="group" aria-label="수업 내보내기">
       <button
-        className={`btn primary ${published ? 'done' : ''}`}
-        data-tooltip={published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
+        className={`btn ${view === 'board' && !editingActive ? 'primary' : ''} ${published ? 'done' : ''}`}
+        type="button"
+        data-tooltip={pageReviewActive
+          ? '페이지 확인 후 제작할 수 있습니다'
+          : conflictBlocked
+            ? '오류 안내에서 최신 상태를 먼저 선택해 주세요'
+            : published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
         onClick={onPublish}
+        disabled={pageReviewActive || operationBusy}
       >
         {published ? <>{Icon.check} 제작 완료</> : <>{Icon.board} EDB 제작</>}
       </button>
+      <ToolbarActionMenu
+        id="topbar-export"
+        label="다른 형식으로 내보내기"
+        icon={Icon.chevronDown}
+        items={[
+          {
+            id: 'images', icon: Icon.download,
+            label: exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드',
+            description: pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요'
+              : operationBusy ? '진행 중인 작업이 끝난 뒤 사용할 수 있어요'
+              : canExportImages ? '현재 선택 단계 기준 PNG ZIP' : '다운로드할 이미지가 없습니다',
+            disabled: pageReviewActive || operationBusy || !canExportImages || exportingImages,
+            onSelect: onExportImages,
+          },
+        ]}
+      />
+      </div>}
     </div>
   );
 }
 
 // ─── REVIEW STAGE: detected-box overlay with split / merge / exclude ─────
+function SessionRecognitionAction({ onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState }){
+  if (!sourcePageCount || !onRecognizeSession) return null;
+  return (
+    <details className="workspace-session-actions">
+      <summary>수업 작업</summary>
+      <div className="workspace-session-actions-body">
+        <button className="btn" type="button" onClick={onRecognizeSession} disabled={!canRecognizeSession}>
+          {Icon.aiBatch} 원본 전체에서 문항 다시 찾기
+        </button>
+        <p className="workspace-session-action-note">
+          원본 {sourcePageCount}페이지 전체 · 수업 변경 포함
+          {sessionEditState?.dirty ? ' · 변경한 수업 내용을 먼저 저장합니다.' : ' · 현재 수업을 저장한 뒤 인식 결과를 확인합니다.'}
+        </p>
+        {!canRecognizeSession && recognitionDisabledReason && <p className="workspace-session-action-reason">{recognitionDisabledReason}</p>}
+      </div>
+    </details>
+  );
+}
+
+function ReviewToolbarGroup({ label, className = '', ariaLabel, children }){
+  return (
+    <div className={`review-toolbar-group ${className}`.trim()} role="group" aria-label={ariaLabel || label}>
+      <span className="review-toolbar-group-label">{label}</span>
+      <div className="review-toolbar-group-content">{children}</div>
+    </div>
+  );
+}
+
+function ReviewFilterTabs({ options, value, onChange }){
+  return (
+    <div className="review-filters" role="group" aria-label="검수 상태 필터">
+      {options.map(([filterValue, label, count]) => (
+        <button
+          key={filterValue}
+          className={value === filterValue ? 'on' : ''}
+          type="button"
+          aria-pressed={value === filterValue}
+          onClick={() => onChange(filterValue)}
+        >
+          {label} <span>{count}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function nextUnresolvedReviewTargetAfter(session, anchorPageId, { includeAnchorPage = false } = {}){
+  const targets = sessionReviewSummary(session).unresolvedReviewTargets || [];
+  if (!targets.length) return null;
+  const pageOrder = new Map(
+    (session?.pages || []).map((page, index) => [String(page?.id || ''), index])
+  );
+  const anchorIndex = pageOrder.get(String(anchorPageId || ''));
+  if (!Number.isInteger(anchorIndex)) return targets[0]?.id || null;
+  let nextTarget = null;
+  let nextTargetIndex = Number.POSITIVE_INFINITY;
+  let wrapTarget = null;
+  let wrapTargetIndex = Number.POSITIVE_INFINITY;
+  targets.forEach(target => {
+    const targetIndex = pageOrder.get(String(target?.pageId || ''));
+    if (!Number.isInteger(targetIndex)) return;
+    if (targetIndex < wrapTargetIndex) {
+      wrapTarget = target;
+      wrapTargetIndex = targetIndex;
+    }
+    const followsAnchor = includeAnchorPage ? targetIndex >= anchorIndex : targetIndex > anchorIndex;
+    if (followsAnchor && targetIndex < nextTargetIndex) {
+      nextTarget = target;
+      nextTargetIndex = targetIndex;
+    }
+  });
+  return nextTarget?.id || wrapTarget?.id || targets[0]?.id || null;
+}
+
 function ReviewStage({
   session, items, activeId, setActive, mutateSession, retryAiSession, mutating,
   aiAvailable, aiBusy, onConfirm, reviewFocus, onEnhanceImage, imageEnhanceBusy,
+  onEditorModeChange, onOpenBoard, selectedIds, setSelectedIds, reviewUi, setReviewUi,
+  onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
+  onManualSplitFlowDone, onEditScopeChange,
 }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
+  const sourcePageHeading = (page, pageIndex) => {
+    const metadata = page?.metadata || {};
+    const inputFiles = Array.isArray(session?.input_files) ? session.input_files : [];
+    const sourceFileBaseName = value => {
+      let reference = typeof value === 'string' ? value.trim() : '';
+      const pathParameter = reference.match(/[?&]path=([^&]*)/);
+      if (pathParameter) reference = pathParameter[1];
+      try { reference = decodeURIComponent(reference); } catch (_error) { /* Keep the original file name. */ }
+      return reference.replace(/\\/g, '/').split('/').pop();
+    };
+    const uploadDigest = value => (
+      sourceFileBaseName(value).match(/^([a-f\d]{64}|[a-f\d]{40})_/i)?.[1]?.toLowerCase() || ''
+    );
+    const sourceDigests = [...new Set([
+      page?.sourceImagePath,
+      page?.source_image_path,
+      page?.sourceImageUri,
+      page?.source_image_uri,
+    ].map(uploadDigest).filter(Boolean))];
+    const matchingInputs = sourceDigests.length === 1
+      ? inputFiles.filter(value => uploadDigest(value) === sourceDigests[0])
+      : [];
+    const sourceReference = [
+      page?.sourceFileName,
+      page?.source_file_name,
+      metadata.source_hwp_path,
+      metadata.original_source_path,
+      metadata.source_pdf_path,
+      ...(matchingInputs.length === 1 ? matchingInputs : []),
+      ...(inputFiles.length === 1 ? inputFiles : []),
+    ].find(value => typeof value === 'string' && value.trim());
+    let sourceName = sourceFileBaseName(sourceReference);
+    const uploadedName = /^(?:[a-f\d]{64}|[a-f\d]{40})_/i.test(sourceName);
+    sourceName = /^[a-f\d]{32,64}(?:[-_]page[-_]\d+)?(?:\.[^.]+)?$/i.test(sourceName)
+      ? ''
+      : sourceName.replace(/^(?:[a-f\d]{64}|[a-f\d]{40})_/i, '');
+    if (uploadedName) sourceName = sourceName.replace(/_[a-f\d]{10}(?=\.[^.]+$|$)/i, '');
+    const pageNumber = [
+      metadata.original_page_index,
+      page?.sourcePageNumber,
+      page?.source_page_number,
+      page?.pageNumber,
+      page?.page_number,
+      pageIndex + 1,
+    ].map(Number).find(value => Number.isInteger(value) && value > 0);
+    return `${sourceName ? `${sourceName} · ` : ''}원본 ${pageNumber}쪽`;
+  };
   const problemsById = useMemo(() => {
     const map = new Map();
     (session?.problems || []).forEach(p => { if (p && p.id) map.set(p.id, p); });
     return map;
   }, [session]);
+  const passageOnlyReview = Boolean(
+    (session?.problems || []).length
+    && (session?.problems || []).every(problem => isPassageFragmentProblem(problem))
+  );
   // Problem display number reflects the current rail order (user reordering /
   // excluding is honoured here, so the chip on each bbox matches the rail).
   const orderMap = useMemo(() => {
@@ -1340,61 +2984,176 @@ function ReviewStage({
     return map;
   }, [items]);
 
-  // Multi-select state: ids of bboxes currently selected. Clicking without
-  // shift replaces selection; shift-click toggles.
-  const [selectedIds, setSelectedIds] = useState(() => new Set());
-  // Split mode: when set to a problem id, that bbox shows a draggable
-  // horizontal guideline. The ratio is in (0, 1).
-  const [splitTarget, setSplitTarget] = useState(null);
-  const [splitRatio, setSplitRatio] = useState(0.5);
   const [boxEdit, setBoxEdit] = useState(null);
+  const [boxEditDraftBox, setBoxEditDraftBox] = useState(null);
   const [manualSplit, setManualSplit] = useState(null);
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
-  const [reviewFilter, setReviewFilter] = useState('all');
-  const [reviewRiskFilter, setReviewRiskFilter] = useState(null);
+  const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
+  const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
+  const [reviewDiagnosticsOpen, setReviewDiagnosticsOpen] = useState(false);
+  const [focusedPageReviewTargetId, setFocusedPageReviewTargetId] = useState('');
+  const [pendingReviewNavigation, setPendingReviewNavigation] = useState(null);
+  const reviewFilter = reviewUi?.filter || 'all';
+  const reviewRiskFilter = reviewUi?.riskFilter || null;
+  const [guidedSplitPageIds, setGuidedSplitPageIds] = useState([]);
   const [reviewScopeProblemIds, setReviewScopeProblemIds] = useState([]);
   const [reviewScopePageIds, setReviewScopePageIds] = useState([]);
-  const [reviewZoom, setReviewZoom] = useState(1);
-  const splitDraggingRef = useRef(false);
-  const splitBoxRef = useRef(null);
+  const reviewZoom = clampReviewZoom(reviewUi?.zoom || 1);
+  const updateReviewUiField = useCallback((field, value) => {
+    setReviewUi?.(prev => {
+      const previous = prev || {};
+      const nextValue = typeof value === 'function' ? value(previous[field]) : value;
+      return previous[field] === nextValue ? previous : { ...previous, [field]: nextValue };
+    });
+  }, [setReviewUi]);
+  const setReviewFilter = useCallback(value => updateReviewUiField('filter', value), [updateReviewUiField]);
+  const setReviewRiskFilter = useCallback(value => updateReviewUiField('riskFilter', value), [updateReviewUiField]);
+  const setReviewZoom = useCallback(value => updateReviewUiField('zoom', value), [updateReviewUiField]);
   const boxEditDragRef = useRef(null);
   const boxEditCommitRef = useRef(false);
+  const boxEditSeqRef = useRef(1);
   const manualSplitDragRef = useRef(null);
   const manualSplitCommitRef = useRef(false);
   const manualSplitSeqRef = useRef(1);
   const manualSplitFocusRef = useRef('');
+  const pendingReviewSelectionProblemIdRef = useRef('');
+  const reviewNavigationSeqRef = useRef(0);
+  const reviewSelectionAnchorRef = useRef(null);
+  // Set while a guided page is being committed so the next-page effect does
+  // not reopen the page that is mid-save (the session reset clears other refs).
+  const guidedSplitCommitRef = useRef(false);
   const pendingBoxEditProblemIdRef = useRef('');
   const reviewWrapRef = useRef(null);
+  const reviewScrollSyncFrameRef = useRef(null);
+  const reviewZoomCenterFrameRef = useRef(null);
+  const reviewZoomCenterSecondFrameRef = useRef(null);
+  const reviewWheelFrameRef = useRef(null);
+  const reviewWheelDeltaRef = useRef(0);
+  const reviewScrollTopRef = useRef(Number(reviewUi?.scrollTop) || 0);
+  const [reviewPageNav, setReviewPageNav] = useState({ current: 1, total: pages.length });
+  const reviewEditorActive = Boolean(boxEdit || manualSplit);
 
-  // Cancel split mode if the session changes underneath (e.g. after a mutation).
+  const syncReviewPageNavigation = useCallback((wrap = reviewWrapRef.current) => {
+    if (!wrap) return;
+    const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+    if (!pageNodes.length) {
+      setReviewPageNav(prev => (prev.current === 0 && prev.total === 0 ? prev : { current: 0, total: 0 }));
+      return;
+    }
+    const markerTop = wrap.getBoundingClientRect().top + 24;
+    const currentIndex = Math.max(0, pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop));
+    const next = { current: currentIndex + 1, total: pageNodes.length };
+    setReviewPageNav(prev => (
+      prev.current === next.current && prev.total === next.total ? prev : next
+    ));
+  }, []);
+
+  const jumpReviewPage = useCallback((direction) => {
+    const wrap = reviewWrapRef.current;
+    if (!wrap || manualSplit) return;
+    const pageNodes = Array.from(wrap.querySelectorAll('.review-page'));
+    if (!pageNodes.length) return;
+    const markerTop = wrap.getBoundingClientRect().top + 24;
+    const visibleIndex = pageNodes.findIndex(node => node.getBoundingClientRect().bottom > markerTop);
+    const currentIndex = visibleIndex < 0 ? pageNodes.length - 1 : visibleIndex;
+    const targetIndex = Math.max(0, Math.min(pageNodes.length - 1, currentIndex + direction));
+    const wrapRect = wrap.getBoundingClientRect();
+    const targetRect = pageNodes[targetIndex].getBoundingClientRect();
+    const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+    setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
+    smoothScrollTo(wrap, targetTop, 220);
+  }, [manualSplit]);
+
+  const handleReviewScroll = useCallback((event) => {
+    const wrap = event.currentTarget;
+    reviewScrollTopRef.current = wrap.scrollTop;
+    if (reviewScrollSyncFrameRef.current != null) return;
+    reviewScrollSyncFrameRef.current = window.requestAnimationFrame(() => {
+      reviewScrollSyncFrameRef.current = null;
+      syncReviewPageNavigation(wrap);
+    });
+  }, [syncReviewPageNavigation]);
+
+  useLayoutEffect(() => {
+    onEditorModeChange?.(reviewEditorActive);
+  }, [onEditorModeChange, reviewEditorActive]);
+  useEffect(() => () => onEditorModeChange?.(false), [onEditorModeChange]);
+  useEffect(() => () => {
+    cancelSmoothScroll(reviewWrapRef.current);
+    if (reviewScrollSyncFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewScrollSyncFrameRef.current);
+    }
+    if (reviewZoomCenterFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterFrameRef.current);
+    }
+    if (reviewZoomCenterSecondFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterSecondFrameRef.current);
+    }
+    if (reviewWheelFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewWheelFrameRef.current);
+    }
+  }, []);
+
+  // Reset transient editors if the session changes underneath after a mutation.
   useEffect(() => {
-    setSplitTarget(null);
     boxEditCommitRef.current = false;
+    setBoxEditDraftBox(null);
     manualSplitCommitRef.current = false;
     setManualSplit(null);
     setManualSplitDraftBox(null);
-    setReviewRiskFilter(null);
-    const pendingProblemId = String(pendingBoxEditProblemIdRef.current || '').trim();
-    pendingBoxEditProblemIdRef.current = '';
+    setManualSplitShortcutHelpOpen(false);
+    const pendingProblemId = String(pendingReviewSelectionProblemIdRef.current || '').trim();
+    pendingReviewSelectionProblemIdRef.current = '';
     if (pendingProblemId) {
+      setReviewFilter('all');
+      setReviewRiskFilter(null);
+      setReviewScopeProblemIds([]);
+      setReviewScopePageIds([]);
+      if (pendingProblemId.startsWith('page:')) {
+        const pendingPageId = pendingProblemId.slice(5);
+        setSelectedIds(new Set());
+        setFocusedPageReviewTargetId(pendingProblemId);
+        reviewNavigationSeqRef.current += 1;
+        setPendingReviewNavigation({
+          requestId: reviewNavigationSeqRef.current,
+          pageId: pendingPageId,
+          targetId: pendingProblemId,
+        });
+        setBoxEdit(null);
+        return;
+      }
       const nextProblem = (session?.problems || []).find(problem => String(problem?.id || '') === pendingProblemId);
-      const nextPage = nextProblem
-        ? (session?.pages || []).find(page => page.id === (nextProblem.sourcePageId || nextProblem.source_page_id))
-        : null;
-      if (nextProblem && nextPage) {
+      if (nextProblem) {
+        setFocusedPageReviewTargetId('');
         setSelectedIds(new Set([pendingProblemId]));
         if (setActive) setActive(pendingProblemId);
-        setBoxEdit({
-          problemId: pendingProblemId,
-          pageId: nextPage.id,
-          box: clampReviewBox(nextProblem.bbox, nextPage),
+        reviewNavigationSeqRef.current += 1;
+        setPendingReviewNavigation({
+          requestId: reviewNavigationSeqRef.current,
+          pageId: String(nextProblem.sourcePageId || nextProblem.source_page_id || ''),
+          targetId: pendingProblemId,
         });
+        setBoxEdit(null);
         return;
       }
     }
     setBoxEdit(null);
-    setSelectedIds(new Set());
   }, [session]);
+  useLayoutEffect(() => {
+    const wrap = reviewWrapRef.current;
+    if (!wrap) return undefined;
+    if (reviewScrollTopRef.current > 0) wrap.scrollTop = reviewScrollTopRef.current;
+    return () => {
+      setReviewUi?.(prev => ({
+        ...(prev || {}),
+        scrollTop: reviewScrollTopRef.current,
+      }));
+    };
+  }, [setReviewUi]);
+  useLayoutEffect(() => {
+    const frame = window.requestAnimationFrame(() => syncReviewPageNavigation());
+    return () => window.cancelAnimationFrame(frame);
+  }, [pages, reviewFilter, reviewRiskFilter, reviewScopeProblemIds, reviewScopePageIds, manualSplit, syncReviewPageNavigation]);
   useEffect(() => {
     if (reviewFocus === null) {
       setReviewScopeProblemIds([]);
@@ -1455,25 +3214,21 @@ function ReviewStage({
 
   const onBoxClick = (probId, evt) => {
     if (manualSplit) return;
-    if (splitTarget) return;  // ignore clicks while splitting
     if (boxEdit) {
       evt.preventDefault();
       evt.stopPropagation();
-      if (boxEdit.problemId !== probId) {
-        void applyBoxEdit({ continueWithProblemId: probId });
-      }
       return;
     }
-    if (evt.shiftKey) {
-      setSelectedIds(prev => {
-        const next = new Set(prev);
-        if (next.has(probId)) next.delete(probId);
-        else next.add(probId);
-        return next;
-      });
-    } else {
-      setSelectedIds(new Set([probId]));
-    }
+    const orderedIds = items.map(item => String(item.id)).filter(id => problemsById.has(id));
+    const result = applySelectionClick(
+      orderedIds,
+      Array.from(selectedIds || []),
+      reviewSelectionAnchorRef.current,
+      probId,
+      evt
+    );
+    reviewSelectionAnchorRef.current = result.anchorId;
+    setSelectedIds(new Set(result.selectedIds));
     if (setActive) setActive(probId);
   };
 
@@ -1487,33 +3242,55 @@ function ReviewStage({
     : null;
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
+  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
   const statusCounts = useMemo(() => {
     const helperCounts = globalThis.EDB_REVIEW_FILTERS?.countReviewFilters?.(scopedProblems);
-    if (helperCounts) return helperCounts;
-    const counts = { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
+    const counts = helperCounts
+      ? { ...helperCounts }
+      : { all: 0, normal: 0, check_needed: 0, failed: 0, passage: 0, passageGroups: 0 };
     const passageGroups = new Set();
     scopedProblems.forEach(problem => {
+      const passageGroupId = passageGroupIdFor(problem);
+      if (passageGroupId) {
+        passageGroups.add(passageGroupId);
+      }
+      if (helperCounts) return;
       const status = deriveProblemStatus(problem);
       counts.all += 1;
       counts[status] = (counts[status] || 0) + 1;
-      const passageGroupId = passageGroupIdFor(problem);
-      if (passageGroupId) {
-        counts.passage += 1;
-        passageGroups.add(passageGroupId);
-      }
+      if (passageGroupId) counts.passage += 1;
     });
-    counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
-    counts.passageGroups = passageGroups.size;
+    if (!helperCounts) {
+      counts.supplemental = scopedProblems.filter(isSupplementalProblem).length;
+      counts.passageGroups = passageGroups.size;
+    }
+    (reviewSummary.reviewTargets || [])
+      .filter(target => target?.type === 'page')
+      .filter(target => !reviewScopeActive || reviewScopePageIdSet.has(target.pageId))
+      .forEach(target => {
+        const status = normalizeReviewStatus(target.status) || 'check_needed';
+        counts.all += 1;
+        counts[status] = (counts[status] || 0) + 1;
+      });
     return counts;
-  }, [scopedProblems]);
+  }, [reviewScopeActive, reviewScopePageIdSet, reviewSummary.reviewTargets, scopedProblems]);
   const sessionCounts = useMemo(
     () => reviewScopeActive ? countSessionProblems(scopedProblems) : sessionProblemCounts(session),
     [reviewScopeActive, scopedProblems, session]
   );
-  const reviewSummary = useMemo(() => sessionReviewSummary(session), [session]);
+  const reviewStageCopy = reviewStageCopyFor(session, sessionCounts, pages.length);
+  const formatCurrentReviewCount = (counts, options = {}) => formatReviewStageCount(
+    reviewStageCopy.mode,
+    counts,
+    options
+  );
   const passageReviewProblemIds = useMemo(
     () => new Set(reviewSummary.passageReviewProblemIds || []),
     [reviewSummary.passageReviewProblemIds]
+  );
+  const reviewTargetById = useMemo(
+    () => new Map((reviewSummary.reviewTargets || []).map(target => [target.id, target])),
+    [reviewSummary.reviewTargets]
   );
   const riskFilterHasProblemMatches = useMemo(() => {
     if (!reviewRiskFilter) return false;
@@ -1534,12 +3311,18 @@ function ReviewStage({
       const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
       const hasProblemRisk = scopedPageProblems
         .some(problem => deriveProblemStatus(problem) !== 'normal');
-      if (pageStatus === 'failed' || (Array.isArray(pageFlags) && pageFlags.length) || !scopedPageProblems.length || hasProblemRisk) {
+      const pageTarget = reviewTargetById.get(pageReviewTargetId(page));
+      if (
+        pageStatus === 'failed'
+        || (Array.isArray(pageFlags) && pageFlags.length)
+        || pageTarget?.status === 'check_needed'
+        || hasProblemRisk
+      ) {
         ids.push(page.id);
       }
     });
     return listUnique(ids.filter(Boolean));
-  }, [pages, problemsById, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet]);
+  }, [pages, problemsById, problemInReviewScope, reviewScopeActive, reviewScopePageIdSet, reviewTargetById]);
   const activeReviewFilter = reviewFilter !== 'all' || Boolean(reviewRiskFilter) || reviewScopeActive;
   const visibleReviewScope = useMemo(() => {
     const retryPageIdSet = new Set();
@@ -1576,6 +3359,36 @@ function ReviewStage({
   const actionableProblemIds = useMemo(() => scopedProblems
     .filter(problem => problem?.id && deriveProblemStatus(problem) !== 'normal')
     .map(problem => problem.id), [scopedProblems]);
+  const reviewFlow = useMemo(() => reviewFlowState(reviewSummary), [reviewSummary]);
+  const unresolvedProblemIdSet = useMemo(
+    () => new Set(reviewSummary.unresolvedReviewProblemIds || []),
+    [reviewSummary.unresolvedReviewProblemIds]
+  );
+  const selectedUnresolvedProblemIds = useMemo(
+    () => selectedActionIds.filter(id => unresolvedProblemIdSet.has(id)),
+    [selectedActionIds, unresolvedProblemIdSet]
+  );
+  const focusedUnresolvedPageTarget = (reviewSummary.unresolvedReviewTargets || [])
+    .find(target => (
+      target?.type === 'page'
+      && target.id === focusedPageReviewTargetId
+    )) || null;
+  const nextUnresolvedTarget = focusedUnresolvedPageTarget
+    || (reviewSummary.unresolvedReviewTargets || [])[0]
+    || null;
+  const nextUnresolvedProblemId = nextUnresolvedTarget?.id
+    || (reviewSummary.unresolvedReviewProblemIds || [])[0]
+    || null;
+  const nextUnresolvedIsPage = nextUnresolvedTarget
+    ? nextUnresolvedTarget.type === 'page'
+    : String(nextUnresolvedProblemId || '').startsWith('page:');
+  const nextUnresolvedPageFocused = Boolean(
+    nextUnresolvedIsPage
+    && focusedPageReviewTargetId
+    && focusedPageReviewTargetId === nextUnresolvedProblemId
+  );
+  const nextUnresolvedAfterSelectionId = (reviewSummary.unresolvedReviewProblemIds || [])
+    .find(id => !selectedUnresolvedProblemIds.includes(id)) || null;
   const selectedRetryPageIds = listUnique(selectedProblems.map(problem => problem.sourcePageId).filter(Boolean));
   const selectedHasRetryable = selectedProblems.some(problem => deriveProblemStatus(problem) !== 'normal');
   const selectedCanBoxEdit = Boolean(
@@ -1605,6 +3418,17 @@ function ReviewStage({
   const manualSplitPage = manualSplit
     ? pages.find(page => page.id === manualSplit.pageId)
     : null;
+  const manualSplitScope = useMemo(() => manualSplitPage ? {
+    ...manualSplitScopeSummary(manualSplitPage, items, manualSplit.replaceProblemIds, manualSplit.scope),
+    pageLabel: sourcePageHeading(manualSplitPage, pages.indexOf(manualSplitPage)),
+  } : null, [manualSplitPage, pages, items, manualSplit?.replaceProblemIds, manualSplit?.scope]);
+  useLayoutEffect(() => { onEditScopeChange?.(manualSplitScope); }, [onEditScopeChange, manualSplitScope]);
+  useEffect(() => () => onEditScopeChange?.(null), [onEditScopeChange]);
+  useLayoutEffect(() => {
+    if (!manualSplit?.pageId || !reviewWrapRef.current) return;
+    cancelSmoothScroll(reviewWrapRef.current);
+    reviewWrapRef.current.scrollTop = 0;
+  }, [manualSplit?.pageId]);
   const manualSplitSelectedIds = useMemo(
     () => new Set(manualSplit?.selectedRegionIds || []),
     [manualSplit?.selectedRegionIds]
@@ -1688,20 +3512,7 @@ function ReviewStage({
     });
   };
 
-  const manualSplitStampBoxFromPoint = (point, page, stampBox) => {
-    const pageWidth = Math.max(1, Number(page?.width) || 1);
-    const pageHeight = Math.max(1, Number(page?.height) || 1);
-    const width = Math.min(pageWidth, Math.max(1, finiteNumber(stampBox?.width, pageWidth * 0.36)));
-    const height = Math.min(pageHeight, Math.max(1, finiteNumber(stampBox?.height, pageHeight * 0.20)));
-    return clampReviewBox({
-      left: Math.max(0, Math.min(pageWidth - width, point.x - width / 2)),
-      top: Math.max(0, Math.min(pageHeight - height, point.y - height / 2)),
-      width,
-      height,
-    }, page);
-  };
-
-  const beginManualPageSplit = (page, replaceProblemIds = []) => {
+  const beginManualPageSplit = (page, replaceProblemIds = [], options = {}) => {
     if (!page?.id || !page?.sourceImageUri || !page.width || !page.height) return;
     const replacementIds = listUnique((replaceProblemIds || []).filter(Boolean));
     const stampBox = manualSplitDefaultStampBox(page, replacementIds);
@@ -1709,22 +3520,45 @@ function ReviewStage({
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
     setManualSplitDraftBox(null);
-    setSplitTarget(null);
+    setManualSplitShortcutHelpOpen(false);
     setBoxEdit(null);
+    setPendingReviewNavigation(null);
+    pendingBoxEditProblemIdRef.current = '';
+    setReviewFilter('all');
+    setReviewRiskFilter(null);
     setSelectedIds(new Set(replacementIds));
     setManualSplit({
       pageId: page.id,
       replaceProblemIds: replacementIds,
+      selectionProblemIds: replacementIds,
+      scope: options.scope || (replacementIds.length ? 'selection' : 'append'),
       mode: 'draw',
-      stampBox,
-      regions: [],
+      stampBox: options.initialBox ? { width: options.initialBox.width, height: options.initialBox.height } : stampBox,
+      regions: options.initialBox ? [{ id: `draft-region-${manualSplitSeqRef.current++}`, pageId: page.id, bbox: { ...options.initialBox }, title: manualSplitTitle(0), order: 1 }] : [],
       selectedRegionIds: [],
+      guided: !!options.guided,
     });
   };
 
   const beginManualSplitForSelection = () => {
     if (!selectedCanManualSplit || !selectedSourcePage) return;
     beginManualPageSplit(selectedSourcePage, selectedList);
+  };
+
+  const changeManualSplitScope = (scope) => {
+    if (!manualSplitPage || mutating) return;
+    setManualSplit(prev => {
+      if (!prev) return prev;
+      const replaceProblemIds = scope === 'page'
+        ? (session?.problems || []).filter(problem => problem.sourcePageId === prev.pageId).map(problem => problem.id)
+        : scope === 'selection' ? prev.selectionProblemIds : [];
+      return { ...prev, scope, replaceProblemIds };
+    });
+  };
+
+  const guidedSplitReplacementIds = (page) => {
+    const scopedIds = new Set((reviewFocus?.scopeProblemIds || []).map(id => String(id || '').trim()).filter(Boolean));
+    return (page?.problemIds || []).filter(id => !scopedIds.size || scopedIds.has(String(id)));
   };
 
   useEffect(() => {
@@ -1740,14 +3574,38 @@ function ReviewStage({
     const page = pages.find(item => item.id === pageId);
     if (!page?.sourceImageUri || !page.width || !page.height) return;
     manualSplitFocusRef.current = focusKey;
-    const scopedIds = new Set((reviewFocus?.scopeProblemIds || []).map(id => String(id || '').trim()).filter(Boolean));
-    const replacementIds = (page.problemIds || []).filter(id => !scopedIds.size || scopedIds.has(String(id)));
-    beginManualPageSplit(page, replacementIds);
+    const guidedIds = listUnique([pageId, ...(reviewFocus?.manualSplitPageIds || [])]
+      .map(id => String(id || '').trim())
+      .filter(Boolean));
+    setGuidedSplitPageIds(guidedIds);
+    beginManualPageSplit(page, guidedSplitReplacementIds(page), { guided: true });
   }, [reviewFocus, pages]);
 
+  // After each applied page, open the next queued page; when none are left
+  // the guided flow hands control back to the board.
+  useEffect(() => {
+    if (manualSplit || mutating || guidedSplitCommitRef.current || !guidedSplitPageIds.length) return;
+    const [nextPageId, ...rest] = guidedSplitPageIds;
+    const page = pages.find(item => item.id === nextPageId);
+    if (!page?.sourceImageUri || !page.width || !page.height) {
+      setGuidedSplitPageIds(rest);
+      if (!rest.length) onManualSplitFlowDone?.();
+      return;
+    }
+    beginManualPageSplit(page, guidedSplitReplacementIds(page), { guided: true });
+  }, [manualSplit, mutating, guidedSplitPageIds, pages]);
+
   const centerReviewZoomScrollers = useCallback(() => {
-    window.requestAnimationFrame(() => {
-      window.requestAnimationFrame(() => {
+    if (reviewZoomCenterFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterFrameRef.current);
+    }
+    if (reviewZoomCenterSecondFrameRef.current != null) {
+      window.cancelAnimationFrame(reviewZoomCenterSecondFrameRef.current);
+    }
+    reviewZoomCenterFrameRef.current = window.requestAnimationFrame(() => {
+      reviewZoomCenterFrameRef.current = null;
+      reviewZoomCenterSecondFrameRef.current = window.requestAnimationFrame(() => {
+        reviewZoomCenterSecondFrameRef.current = null;
         reviewWrapRef.current?.querySelectorAll?.('.review-canvas-scroll').forEach(scroller => {
           const maxScrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
           if (maxScrollLeft > 1) scroller.scrollLeft = maxScrollLeft / 2;
@@ -1780,23 +3638,42 @@ function ReviewStage({
   }, [manualSplit?.pageId, reviewZoom, centerReviewZoomScrollers]);
 
   const handleReviewWheel = useCallback((evt) => {
-    if (!manualSplit) return;
-    if (!evt.ctrlKey && !evt.metaKey) return;
+    if (!evt.ctrlKey && !evt.metaKey) {
+      cancelSmoothScroll(reviewWrapRef.current);
+      return;
+    }
     if (!evt.target?.closest?.('.review-canvas-scroll')) return;
     evt.preventDefault();
-    adjustReviewZoom(evt.deltaY > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
-  }, [adjustReviewZoom, manualSplit]);
+    reviewWheelDeltaRef.current += evt.deltaY;
+    if (reviewWheelFrameRef.current != null) return;
+    reviewWheelFrameRef.current = window.requestAnimationFrame(() => {
+      reviewWheelFrameRef.current = null;
+      const delta = reviewWheelDeltaRef.current;
+      reviewWheelDeltaRef.current = 0;
+      if (delta !== 0) {
+        adjustReviewZoom(delta > 0 ? -REVIEW_ZOOM_STEP : REVIEW_ZOOM_STEP);
+      }
+    });
+  }, [adjustReviewZoom]);
 
   const cancelManualPageSplit = () => {
+    const wasGuided = !!manualSplit?.guided;
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
     setManualSplitDraftBox(null);
     setManualSplit(null);
+    setManualSplitShortcutHelpOpen(false);
+    if (wasGuided) {
+      // Cancelling ends the whole queue flow; uncut pages stay whole.
+      setGuidedSplitPageIds([]);
+      onManualSplitFlowDone?.();
+    }
   };
 
   const setManualSplitMode = (mode) => {
-    const nextMode = mode === 'stamp' ? 'stamp' : 'draw';
-    manualSplitDragRef.current = null;
+    if (mutating) return;
+    const nextMode = ['stamp', 'select'].includes(mode) ? mode : 'draw';
+    cancelManualSplitGesture();
     setManualSplitDraftBox(null);
     setManualSplit(prev => prev ? { ...prev, mode: nextMode } : prev);
   };
@@ -1813,7 +3690,7 @@ function ReviewStage({
         current.clear();
         current.add(regionId);
       }
-      return { ...prev, selectedRegionIds: Array.from(current) };
+      return { ...prev, mode: 'select', selectedRegionIds: Array.from(current) };
     });
   };
 
@@ -1839,6 +3716,49 @@ function ReviewStage({
         selectedRegionIds: [],
       };
     });
+  };
+
+  const selectAllManualSplitRegions = () => {
+    setManualSplit(prev => {
+      if (!prev || !(prev.regions || []).length) return prev;
+      return {
+        ...prev,
+        selectedRegionIds: (prev.regions || []).map(region => region.id),
+      };
+    });
+  };
+
+  const duplicateManualSplitSelected = () => {
+    if (!manualSplitPage) return;
+    setManualSplit(prev => {
+      const selected = new Set(prev?.selectedRegionIds || []);
+      if (!prev || !selected.size) return prev;
+      const offset = Math.max(12, Math.min(36, Math.min(manualSplitPage.width, manualSplitPage.height) * 0.025));
+      const duplicatedIds = [];
+      const nextRegions = (prev.regions || []).flatMap(region => {
+        if (!selected.has(region.id)) return [region];
+        const copy = {
+          ...region,
+          id: `draft-region-${manualSplitSeqRef.current++}`,
+          bbox: clampReviewBox({
+            ...region.bbox,
+            left: finiteNumber(region.bbox?.left, 0) + offset,
+            top: finiteNumber(region.bbox?.top, 0) + offset,
+          }, manualSplitPage),
+        };
+        duplicatedIds.push(copy.id);
+        return [region, copy];
+      });
+      return {
+        ...prev,
+        regions: renumberManualSplitRegions(nextRegions),
+        selectedRegionIds: duplicatedIds,
+      };
+    });
+  };
+
+  const toggleManualSplitPanelSide = () => {
+    setManualSplitPanelSide(side => side === 'right' ? 'left' : 'right');
   };
 
   const duplicateManualSplitRegion = (regionId) => {
@@ -1930,18 +3850,15 @@ function ReviewStage({
     setManualSplit(prev => {
       const selected = new Set(prev?.selectedRegionIds || []);
       if (!prev || !selected.size) return prev;
+      const boxes = new Map((prev.regions || [])
+        .filter(region => selected.has(region.id))
+        .map(region => [region.id, region.bbox]));
+      const translated = translateManualSplitBoxes(boxes, manualSplitPage, dx, dy);
       return {
         ...prev,
         regions: (prev.regions || []).map(region => (
-          selected.has(region.id)
-            ? {
-                ...region,
-                bbox: clampReviewBox({
-                  ...region.bbox,
-                  left: finiteNumber(region.bbox?.left, 0) + dx,
-                  top: finiteNumber(region.bbox?.top, 0) + dy,
-                }, manualSplitPage),
-              }
+          translated.has(region.id)
+            ? { ...region, bbox: translated.get(region.id) }
             : region
         )),
       };
@@ -1951,6 +3868,7 @@ function ReviewStage({
   const applyManualPageSplit = useCallback(async () => {
     if (!manualSplit?.pageId || !(manualSplit.regions || []).length || manualSplitCommitRef.current) return;
     manualSplitCommitRef.current = true;
+    guidedSplitCommitRef.current = !!manualSplit.guided;
     try {
       const payload = {
         pageId: manualSplit.pageId,
@@ -1961,11 +3879,18 @@ function ReviewStage({
       if (!nextSession) return;
       setManualSplit(null);
       setManualSplitDraftBox(null);
+      setManualSplitShortcutHelpOpen(false);
       manualSplitDragRef.current = null;
+      if (manualSplit.guided) {
+        const rest = guidedSplitPageIds.filter(id => id !== manualSplit.pageId);
+        setGuidedSplitPageIds(rest);
+        if (!rest.length) onManualSplitFlowDone?.();
+      }
     } finally {
       manualSplitCommitRef.current = false;
+      guidedSplitCommitRef.current = false;
     }
-  }, [manualSplit, mutateSession]);
+  }, [manualSplit, mutateSession, guidedSplitPageIds, onManualSplitFlowDone]);
 
   const stampManualSplitRegion = (evt, page) => {
     if (!manualSplit || manualSplit.pageId !== page?.id || evt.button !== 0) return;
@@ -1989,19 +3914,12 @@ function ReviewStage({
     });
   };
 
-  const updateManualSplitStampPreview = (evt, page) => {
-    if (!manualSplit || manualSplit.mode !== 'stamp' || manualSplit.pageId !== page?.id) return;
-    if (!evt.currentTarget?.getBoundingClientRect) return;
-    const rect = evt.currentTarget.getBoundingClientRect();
-    const point = manualSplitPointFromClient(evt.clientX, evt.clientY, page, rect);
-    setManualSplitDraftBox(manualSplitStampBoxFromPoint(point, page, manualSplit.stampBox));
-  };
-
-  const clearManualSplitStampPreview = () => {
-    if (manualSplit?.mode === 'stamp') setManualSplitDraftBox(null);
-  };
-
   const beginManualSplitCanvasAction = (evt, page) => {
+    if (mutating || evt.button !== 0) return;
+    if (manualSplit?.mode === 'select') {
+      setManualSplit(prev => prev ? { ...prev, selectedRegionIds: [] } : prev);
+      return;
+    }
     if (manualSplit?.mode === 'stamp') {
       stampManualSplitRegion(evt, page);
       return;
@@ -2028,7 +3946,8 @@ function ReviewStage({
   };
 
   const beginManualSplitRegionDrag = (regionId, evt) => {
-    if (!manualSplit || evt.button !== 0) return;
+    if (!manualSplit || mutating || evt.button !== 0) return;
+    if (manualSplit.mode === 'stamp') return;
     evt.preventDefault();
     evt.stopPropagation();
     if (evt.shiftKey) {
@@ -2047,7 +3966,7 @@ function ReviewStage({
     (manualSplit.regions || []).forEach(region => {
       if (regionIds.includes(region.id)) initialBoxes.set(region.id, { ...region.bbox });
     });
-    setManualSplit(prev => prev ? { ...prev, selectedRegionIds: regionIds } : prev);
+    setManualSplit(prev => prev ? { ...prev, mode: 'select', selectedRegionIds: regionIds } : prev);
     manualSplitDragRef.current = {
       mode: 'move',
       page,
@@ -2061,7 +3980,7 @@ function ReviewStage({
   };
 
   const beginManualSplitResize = (regionId, mode, evt) => {
-    if (!manualSplit || evt.button !== 0) return;
+    if (!manualSplit || mutating || evt.button !== 0) return;
     evt.preventDefault();
     evt.stopPropagation();
     const canvas = evt.currentTarget.closest?.('.review-page-canvas');
@@ -2069,7 +3988,7 @@ function ReviewStage({
     const page = manualSplitPage;
     const region = (manualSplit.regions || []).find(item => item.id === regionId);
     if (!rect?.width || !rect?.height || !page || !region) return;
-    setManualSplit(prev => prev ? { ...prev, selectedRegionIds: [regionId] } : prev);
+    setManualSplit(prev => prev ? { ...prev, mode: 'select', selectedRegionIds: [regionId] } : prev);
     manualSplitDragRef.current = {
       mode: 'resize',
       resizeMode: mode,
@@ -2109,59 +4028,219 @@ function ReviewStage({
 
   const beginBoxEdit = () => {
     if (!selectedCanBoxEdit || !selectedSingleProblem || !selectedSinglePage) return;
-    setSplitTarget(null);
     setManualSplit(null);
     setManualSplitDraftBox(null);
+    setBoxEditDraftBox(null);
     boxEditCommitRef.current = false;
+    const multi = isPassageFragmentProblem(selectedSingleProblem);
+    const initialSegments = editableSourceSegmentsForProblem(selectedSingleProblem).flatMap(segment => {
+      const segmentPage = pages.find(page => page.id === segment.pageId);
+      return segmentPage ? [{ ...segment, bbox: clampReviewBox(segment.bbox, segmentPage) }] : [];
+    });
+    const fallbackBox = clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage);
+    const segments = initialSegments.length ? initialSegments : [{
+      id: 'passage-segment-1',
+      pageId: selectedSinglePage.id,
+      order: 1,
+      bbox: fallbackBox,
+    }];
+    const firstSegment = segments[0];
+    const initialBox = firstSegment.bbox;
     setBoxEdit({
       problemId: selectedSingleProblem.id,
-      pageId: selectedSinglePage.id,
-      box: clampReviewBox(selectedSingleProblem.bbox, selectedSinglePage),
+      pageId: firstSegment.pageId,
+      originalBox: initialBox,
+      box: initialBox,
+      originalSegments: segments.map(segment => ({ ...segment, bbox: { ...segment.bbox } })),
+      segments,
+      selectedSegmentId: firstSegment.id,
+      multi,
+      addingSegment: false,
+      mode: 'crop',
     });
   };
   const cancelBoxEdit = () => {
     boxEditDragRef.current = null;
     boxEditCommitRef.current = false;
+    setBoxEditDraftBox(null);
     setBoxEdit(null);
   };
-  const applyBoxEdit = useCallback(async (options = {}) => {
+  const resetBoxEdit = () => {
+    boxEditDragRef.current = null;
+    setBoxEditDraftBox(null);
+    setBoxEdit(prev => {
+      if (!prev?.originalBox) return prev;
+      const segments = (prev.originalSegments || []).map(segment => ({ ...segment, bbox: { ...segment.bbox } }));
+      const selected = segments[0] || null;
+      return {
+        ...prev,
+        pageId: selected?.pageId || prev.pageId,
+        originalBox: { ...prev.originalBox },
+        box: selected?.bbox || { ...prev.originalBox },
+        segments,
+        selectedSegmentId: selected?.id || prev.selectedSegmentId,
+        addingSegment: false,
+      };
+    });
+  };
+  const setBoxEditMode = (mode) => {
+    setBoxEdit(prev => prev ? {
+      ...prev,
+      mode: mode === 'recognize' ? 'recognize' : 'crop',
+    } : prev);
+  };
+  const applyBoxEdit = useCallback(async () => {
     if (!boxEdit?.problemId || !boxEdit?.box || boxEditCommitRef.current) return;
-    const continueWithProblemId = String(options?.continueWithProblemId || '').trim();
-    const shouldContinue = continueWithProblemId && continueWithProblemId !== boxEdit.problemId;
+    const recognizeMode = !boxEdit.multi && boxEdit.mode === 'recognize';
+    if (boxEdit.multi) {
+      if (!(boxEdit.segments || []).length) return;
+      if (!boxEditSegmentValidation(boxEdit.segments).valid) return;
+      if (boxEditSegmentsEqual(boxEdit.originalSegments, boxEdit.segments)) return;
+    }
+    if (!boxEdit.multi && !recognizeMode && reviewBoxesEqual(boxEdit.originalBox, boxEdit.box)) return;
+    if (recognizeMode && (!aiAvailable || aiBusy)) return;
     boxEditCommitRef.current = true;
-    if (shouldContinue) pendingBoxEditProblemIdRef.current = continueWithProblemId;
     try {
-      const nextSession = await mutateSession?.('crop', { problemId: boxEdit.problemId, cropBox: boxEdit.box });
-      if (nextSession && !shouldContinue) setBoxEdit(null);
-      if (!nextSession && shouldContinue) pendingBoxEditProblemIdRef.current = '';
+      if (recognizeMode) {
+        const result = await retryAiSession?.({
+          partial: true,
+          preserveProblemIdentity: true,
+          collapseToSingle: true,
+          problemIds: [boxEdit.problemId],
+          cropBox: boxEdit.box,
+        });
+        if (result) setBoxEdit(null);
+        return;
+      }
+      const nextSession = boxEdit.multi
+        ? await mutateSession?.('stitch-crop', {
+            problemId: boxEdit.problemId,
+            segments: serializeBoxEditSegments(boxEdit.segments || []),
+          })
+        : await mutateSession?.('crop', {
+            problemId: boxEdit.problemId,
+            cropBox: boxEdit.box,
+          });
+      if (nextSession) {
+        pendingReviewSelectionProblemIdRef.current = sessionReviewSummary(nextSession).unresolvedReviewTargets?.[0]?.id || '';
+        setBoxEditDraftBox(null);
+        setBoxEdit(null);
+      } else {
+        pendingReviewSelectionProblemIdRef.current = '';
+      }
     } finally {
       boxEditCommitRef.current = false;
     }
-  }, [boxEdit, mutateSession]);
+  }, [boxEdit, mutateSession, retryAiSession, aiAvailable, aiBusy]);
   const applyExpandedCrop = async (problem = selectedSingleProblem, page = selectedSinglePage, cropBox = null) => {
     if (!problem?.id || !page?.id) return;
     const retryBox = expandBoxWithinPage(cropBox || problem.bbox, page);
     await mutateSession?.('crop', { problemId: problem.id, cropBox: retryBox });
   };
-  const applyExpandedBoxEdit = async () => {
-    if (!boxEdit?.problemId || !boxEdit?.box) return;
-    const problem = problemsById.get(boxEdit.problemId);
-    const page = pages.find(item => item.id === (problem?.sourcePageId || boxEdit.pageId));
-    await applyExpandedCrop(problem, page, boxEdit.box);
-    setBoxEdit(null);
+  const selectBoxEditSegment = (segmentId) => {
+    setBoxEdit(prev => {
+      const segment = (prev?.segments || []).find(item => item.id === segmentId);
+      return prev && segment ? {
+        ...prev,
+        pageId: segment.pageId,
+        box: segment.bbox,
+        selectedSegmentId: segment.id,
+        addingSegment: false,
+      } : prev;
+    });
   };
-  const beginBoxDrag = (evt, mode, page) => {
+  const toggleBoxEditAddSegment = () => {
+    boxEditDragRef.current = null;
+    setBoxEditDraftBox(null);
+    setBoxEdit(prev => prev?.multi && (prev.segments || []).length < 32
+      ? { ...prev, addingSegment: !prev.addingSegment }
+      : prev);
+  };
+  const deleteBoxEditSegment = (segmentId) => {
+    setBoxEdit(prev => {
+      if (!prev?.multi || (prev.segments || []).length <= 1) return prev;
+      const segments = renumberBoxEditSegments((prev.segments || []).filter(segment => segment.id !== segmentId));
+      const selected = segments.find(segment => segment.id === prev.selectedSegmentId) || segments[0];
+      return {
+        ...prev,
+        segments,
+        selectedSegmentId: selected.id,
+        pageId: selected.pageId,
+        box: selected.bbox,
+        addingSegment: false,
+      };
+    });
+  };
+  const moveBoxEditSegment = (segmentId, direction) => {
+    setBoxEdit(prev => {
+      if (!prev?.multi) return prev;
+      const segments = [...(prev.segments || [])];
+      const fromIndex = segments.findIndex(segment => segment.id === segmentId);
+      const toIndex = Math.max(0, Math.min(segments.length - 1, fromIndex + direction));
+      if (fromIndex < 0 || fromIndex === toIndex) return prev;
+      const [segment] = segments.splice(fromIndex, 1);
+      segments.splice(toIndex, 0, segment);
+      return { ...prev, segments: renumberBoxEditSegments(segments) };
+    });
+  };
+  const nudgeBoxEditSelection = useCallback((deltaX, deltaY) => {
+    setBoxEdit(prev => {
+      if (!prev?.box) return prev;
+      const selectedSegment = prev.multi
+        ? (prev.segments || []).find(segment => segment.id === prev.selectedSegmentId)
+        : null;
+      const pageId = selectedSegment?.pageId || prev.pageId;
+      const sourcePage = pages.find(page => String(page?.id || '') === String(pageId || ''));
+      if (!sourcePage) return prev;
+      const currentBox = selectedSegment?.bbox || prev.box;
+      const nextBox = clampReviewBox({
+        ...currentBox,
+        left: finiteNumber(currentBox.left, 0) + deltaX,
+        top: finiteNumber(currentBox.top, 0) + deltaY,
+      }, sourcePage);
+      const nextSegments = selectedSegment
+        ? (prev.segments || []).map(segment => (
+            segment.id === selectedSegment.id ? { ...segment, bbox: nextBox } : segment
+          ))
+        : prev.segments;
+      return { ...prev, box: nextBox, segments: nextSegments };
+    });
+  }, [pages, clampReviewBox]);
+  const beginBoxSegmentDraw = (evt, page) => {
+    if (!boxEdit?.multi || !boxEdit.addingSegment || evt.button !== 0) return;
+    if (!evt.currentTarget?.getBoundingClientRect) return;
+    evt.preventDefault();
+    evt.stopPropagation();
+    const rect = evt.currentTarget.getBoundingClientRect();
+    const startPoint = manualSplitPointFromClient(evt.clientX, evt.clientY, page, rect);
+    boxEditDragRef.current = {
+      mode: 'draw-segment',
+      page,
+      rect,
+      startPoint,
+      startX: evt.clientX,
+      startY: evt.clientY,
+      moved: false,
+    };
+  };
+  const beginBoxDrag = (evt, mode, page, segmentId = null) => {
     if (!boxEdit?.box || evt.button !== 0) return;
     evt.preventDefault();
     evt.stopPropagation();
     const canvas = evt.currentTarget.closest?.('.review-page-canvas');
     const rect = canvas?.getBoundingClientRect?.();
     if (!rect?.width || !rect?.height) return;
+    const segment = segmentId
+      ? (boxEdit.segments || []).find(item => item.id === segmentId)
+      : null;
+    const initialBox = segment?.bbox || boxEdit.box;
+    if (segment) selectBoxEditSegment(segment.id);
     boxEditDragRef.current = {
       mode,
+      segmentId: segment?.id || null,
       startX: evt.clientX,
       startY: evt.clientY,
-      initialBox: { ...boxEdit.box },
+      initialBox: { ...initialBox },
       pageWidth: Number(page?.width) || 1,
       pageHeight: Number(page?.height) || 1,
       scaleX: (Number(page?.width) || 1) / rect.width,
@@ -2169,27 +4248,12 @@ function ReviewStage({
     };
   };
 
-  const beginSplit = () => {
-    if (selectedList.length !== 1) return;
-    setBoxEdit(null);
-    setManualSplit(null);
-    setManualSplitDraftBox(null);
-    setSplitTarget(selectedList[0]);
-    setSplitRatio(0.5);
-  };
-  const cancelSplit = () => setSplitTarget(null);
-  const confirmSplit = async () => {
-    if (!splitTarget) return;
-    const ratio = Math.max(0.06, Math.min(0.94, splitRatio));
-    await mutateSession?.('split', { problemId: splitTarget, splitYRatio: ratio });
-  };
   const doMerge = async () => {
     if (!sameSourcePage) return;
     await mutateSession?.('merge', { problemIds: selectedList });
   };
   const doExclude = useCallback(async () => {
     if (selectedActionIds.length === 0 || mutating) return;
-    setSplitTarget(null);
     setBoxEdit(null);
     if (selectedActionIds.length === 1) {
       await mutateSession?.('exclude', { problemId: selectedActionIds[0] });
@@ -2213,6 +4277,184 @@ function ReviewStage({
     setSelectedIds(new Set(visibleReviewScope.problemIds));
     if (setActive) setActive(visibleReviewScope.problemIds[0]);
   };
+  const scrollReviewPageIntoView = useCallback((pageId, targetId = '') => {
+    const normalizedPageId = String(pageId || '').trim();
+    if (!normalizedPageId) return false;
+    reviewNavigationSeqRef.current += 1;
+    setPendingReviewNavigation({
+      requestId: reviewNavigationSeqRef.current,
+      pageId: normalizedPageId,
+      targetId: String(targetId || '').trim(),
+    });
+    return true;
+  }, []);
+  useLayoutEffect(() => {
+    if (!pendingReviewNavigation?.pageId) return undefined;
+    const navigation = pendingReviewNavigation;
+    let cancelled = false;
+    let frameId = 0;
+    const navigationDeadline = performance.now() + 1500;
+    const finish = () => {
+      if (cancelled) return;
+      setPendingReviewNavigation(current => (
+        current?.requestId === navigation.requestId ? null : current
+      ));
+    };
+    const findAndScroll = () => {
+      if (cancelled) return;
+      const wrap = reviewWrapRef.current;
+      const pageNodes = wrap ? Array.from(wrap.querySelectorAll('.review-page')) : [];
+      const targetIndex = pageNodes.findIndex(
+        node => String(node.dataset?.pageId || '') === navigation.pageId
+      );
+      if (!wrap || targetIndex < 0) {
+        if (performance.now() < navigationDeadline) {
+          frameId = window.requestAnimationFrame(findAndScroll);
+          return;
+        }
+        reportRuntimeDiagnostic(new Error('검수 페이지 이동 대상을 찾지 못했습니다.'), {
+          type: 'review-navigation',
+          pageId: navigation.pageId,
+          targetId: navigation.targetId,
+        });
+        finish();
+        return;
+      }
+      const target = pageNodes[targetIndex];
+      const wrapRect = wrap.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+      reviewScrollTopRef.current = targetTop;
+      setReviewPageNav({ current: targetIndex + 1, total: pageNodes.length });
+      void smoothScrollTo(wrap, targetTop, 300).then(finish);
+    };
+    frameId = window.requestAnimationFrame(findAndScroll);
+    return () => {
+      cancelled = true;
+      if (frameId) window.cancelAnimationFrame(frameId);
+      cancelSmoothScroll(reviewWrapRef.current);
+    };
+  }, [
+    pages,
+    pendingReviewNavigation,
+    reviewFilter,
+    reviewRiskFilter,
+    reviewScopePageIds,
+    reviewScopeProblemIds,
+  ]);
+  const focusReviewProblem = useCallback((problemId) => {
+    const normalizedProblemId = String(problemId || '').trim();
+    if (!normalizedProblemId) return;
+    setReviewFilter('all');
+    setReviewRiskFilter(null);
+    clearReviewScope();
+    if (normalizedProblemId.startsWith('page:')) {
+      setSelectedIds(new Set());
+      setFocusedPageReviewTargetId(normalizedProblemId);
+      scrollReviewPageIntoView(normalizedProblemId.slice(5), normalizedProblemId);
+      return;
+    }
+    setFocusedPageReviewTargetId('');
+    setSelectedIds(new Set([normalizedProblemId]));
+    if (setActive) setActive(normalizedProblemId);
+    scrollReviewPageIntoView(
+      problemsById.get(normalizedProblemId)?.sourcePageId,
+      normalizedProblemId
+    );
+  }, [
+    clearReviewScope,
+    problemsById,
+    scrollReviewPageIntoView,
+    setActive,
+    setReviewFilter,
+    setReviewRiskFilter,
+    setSelectedIds,
+  ]);
+  const selectNextUnresolvedProblem = useCallback(() => {
+    focusReviewProblem(nextUnresolvedProblemId);
+  }, [focusReviewProblem, nextUnresolvedProblemId]);
+  const confirmSelectedAndAdvance = useCallback(async () => {
+    if (mutating || selectedUnresolvedProblemIds.length === 0) return false;
+    const pageOrder = new Map(pages.map((page, index) => [String(page?.id || ''), index]));
+    const anchorPageId = selectedUnresolvedProblemIds
+      .map(problemId => String(
+        problemsById.get(problemId)?.sourcePageId
+        || problemsById.get(problemId)?.source_page_id
+        || ''
+      ))
+      .filter(Boolean)
+      .sort((left, right) => (pageOrder.get(right) ?? -1) - (pageOrder.get(left) ?? -1))[0] || '';
+    const confirmedSession = await onConfirm?.(null, {
+      problemIds: selectedUnresolvedProblemIds,
+      bulk: true,
+    });
+    if (!confirmedSession) return false;
+    const nextProblemId = Array.isArray(confirmedSession?.problems)
+      ? nextUnresolvedReviewTargetAfter(confirmedSession, anchorPageId, { includeAnchorPage: true })
+      : nextUnresolvedAfterSelectionId;
+    pendingReviewSelectionProblemIdRef.current = nextProblemId || '';
+    if (nextProblemId) focusReviewProblem(nextProblemId);
+    return true;
+  }, [
+    focusReviewProblem,
+    mutating,
+    nextUnresolvedAfterSelectionId,
+    onConfirm,
+    pages,
+    problemsById,
+    selectedUnresolvedProblemIds,
+  ]);
+  const confirmPageAndAdvance = useCallback(async (pageId) => {
+    const normalizedPageId = String(pageId || '').trim().replace(/^page:/, '');
+    if (mutating || !normalizedPageId) return false;
+    const confirmedSession = await mutateSession?.('confirm-page', {
+      pageIds: [normalizedPageId],
+      decision: 'no_passage',
+    });
+    if (!confirmedSession) return false;
+    const confirmedSummary = sessionReviewSummary(confirmedSession);
+    const nextTargetId = nextUnresolvedReviewTargetAfter(
+      confirmedSession,
+      normalizedPageId,
+    );
+    pendingReviewSelectionProblemIdRef.current = nextTargetId || '';
+    setFocusedPageReviewTargetId('');
+    if (nextTargetId) {
+      focusReviewProblem(nextTargetId);
+    } else if (reviewFlowState(confirmedSummary).complete) {
+      onOpenBoard?.();
+    }
+    return true;
+  }, [focusReviewProblem, mutateSession, mutating, onOpenBoard]);
+
+  useEffect(() => {
+    if (reviewEditorActive || reviewFlow.complete) return undefined;
+    const onReviewConfirmKey = (evt) => {
+      if (evt.defaultPrevented || evt.repeat || mutating || isEditableKeyboardTarget(evt.target)) return;
+      if (evt.key !== 'Enter' || (!evt.metaKey && !evt.ctrlKey) || evt.altKey) return;
+      evt.preventDefault();
+      evt.stopPropagation();
+      if (selectedUnresolvedProblemIds.length > 0) {
+        void confirmSelectedAndAdvance();
+      } else if (nextUnresolvedPageFocused) {
+        void confirmPageAndAdvance(nextUnresolvedProblemId);
+      } else {
+        selectNextUnresolvedProblem();
+      }
+    };
+    window.addEventListener('keydown', onReviewConfirmKey);
+    return () => window.removeEventListener('keydown', onReviewConfirmKey);
+  }, [
+    confirmSelectedAndAdvance,
+    confirmPageAndAdvance,
+    mutating,
+    reviewEditorActive,
+    reviewFlow.complete,
+    selectNextUnresolvedProblem,
+    nextUnresolvedPageFocused,
+    nextUnresolvedProblemId,
+    selectedUnresolvedProblemIds.length,
+  ]);
 
   useEffect(() => {
     if (manualSplit || selectedActionIds.length === 0) return undefined;
@@ -2229,62 +4471,18 @@ function ReviewStage({
     return () => window.removeEventListener('keydown', onReviewDeleteKey);
   }, [manualSplit, selectedActionIds, mutating, doExclude]);
 
-  // Drag handler for the split guideline. Tracks against the splitting bbox
-  // element so the ratio is relative to the box, not the page image.
-  useEffect(() => {
-    if (!splitTarget) return;
-    const onMove = (evt) => {
-      if (!splitDraggingRef.current || !splitBoxRef.current) return;
-      const rect = splitBoxRef.current.getBoundingClientRect();
-      const y = evt.clientY - rect.top;
-      const ratio = Math.max(0.06, Math.min(0.94, y / rect.height));
-      setSplitRatio(ratio);
-    };
-    const onUp = () => { splitDraggingRef.current = false; };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [splitTarget]);
-
-  useEffect(() => {
-    if (!boxEdit || mutating) return undefined;
-    const onManualCropOutsideMouseDown = (evt) => {
-      if (boxEditDragRef.current || boxEditCommitRef.current) return;
-      const target = evt.target;
-      if (target?.closest?.('.review-bbox.editing')) return;
-      if (target?.closest?.('.review-bbox')) return;
-      if (target?.closest?.('.crop-frame-handle')) return;
-      if (target?.closest?.('.review-actionbar')) return;
-      evt.preventDefault();
-      evt.stopPropagation();
-      void applyBoxEdit();
-    };
-    window.addEventListener('mousedown', onManualCropOutsideMouseDown, true);
-    return () => window.removeEventListener('mousedown', onManualCropOutsideMouseDown, true);
-  }, [boxEdit, mutating, applyBoxEdit]);
-
-  useEffect(() => {
-    if (!manualSplit || mutating || !(manualSplit.regions || []).length) return undefined;
-    const onManualSplitOutsideMouseDown = (evt) => {
-      if (manualSplitDragRef.current || manualSplitCommitRef.current) return;
-      const target = evt.target;
-      if (target?.closest?.('.manual-split-layout')) return;
-      if (target?.closest?.('.manual-split-actionbar')) return;
-      evt.preventDefault();
-      evt.stopPropagation();
-      void applyManualPageSplit();
-    };
-    window.addEventListener('mousedown', onManualSplitOutsideMouseDown, true);
-    return () => window.removeEventListener('mousedown', onManualSplitOutsideMouseDown, true);
-  }, [manualSplit, mutating, applyManualPageSplit]);
-
   useEffect(() => {
     const onMove = (evt) => {
       const drag = boxEditDragRef.current;
       if (!drag) return;
+      if (drag.mode === 'draw-segment') {
+        const point = manualSplitPointFromClient(evt.clientX, evt.clientY, drag.page, drag.rect);
+        const bbox = manualSplitBoxFromPoints(drag.startPoint, point, drag.page);
+        drag.latestBox = bbox;
+        drag.moved = Math.hypot(evt.clientX - drag.startX, evt.clientY - drag.startY) >= MANUAL_SPLIT_DRAW_THRESHOLD_PX;
+        setBoxEditDraftBox({ pageId: drag.page.id, bbox });
+        return;
+      }
       const dx = (evt.clientX - drag.startX) * drag.scaleX;
       const dy = (evt.clientY - drag.startY) * drag.scaleY;
       const minWidth = Math.min(drag.pageWidth, Math.max(12, Math.min(36, drag.pageWidth * 0.02)));
@@ -2313,9 +4511,37 @@ function ReviewStage({
         { left, top, width: right - left, height: bottom - top },
         { width: drag.pageWidth, height: drag.pageHeight }
       );
-      setBoxEdit(prev => prev ? { ...prev, box: nextBox } : prev);
+      setBoxEdit(prev => {
+        if (!prev) return prev;
+        const segments = drag.segmentId
+          ? (prev.segments || []).map(segment => (
+              segment.id === drag.segmentId ? { ...segment, bbox: nextBox } : segment
+            ))
+          : prev.segments;
+        return { ...prev, box: nextBox, segments };
+      });
     };
     const onUp = () => {
+      const drag = boxEditDragRef.current;
+      if (drag?.mode === 'draw-segment') {
+        if (drag.moved && drag.latestBox) {
+          const id = `manual-passage-segment-${boxEditSeqRef.current++}`;
+          setBoxEdit(prev => {
+            if (!prev?.multi) return prev;
+            const nextSegment = { id, pageId: drag.page.id, bbox: drag.latestBox };
+            const segments = renumberBoxEditSegments([...(prev.segments || []), nextSegment]);
+            return {
+              ...prev,
+              pageId: drag.page.id,
+              box: drag.latestBox,
+              segments,
+              selectedSegmentId: id,
+              addingSegment: false,
+            };
+          });
+        }
+        setBoxEditDraftBox(null);
+      }
       boxEditDragRef.current = null;
     };
     window.addEventListener('mousemove', onMove);
@@ -2327,7 +4553,54 @@ function ReviewStage({
   }, [clampReviewBox]);
 
   useEffect(() => {
-    const onMove = (evt) => {
+    if (!boxEdit || mutating) return undefined;
+    const onBoxEditKeyDown = (evt) => {
+      if (isEditableKeyboardTarget(evt.target)) return;
+      if (evt.key === 'Escape') {
+        evt.preventDefault();
+        cancelBoxEdit();
+      } else if (evt.key === 'Enter') {
+        evt.preventDefault();
+        void applyBoxEdit();
+      } else {
+        const arrowDelta = {
+          ArrowLeft: [-1, 0],
+          ArrowRight: [1, 0],
+          ArrowUp: [0, -1],
+          ArrowDown: [0, 1],
+        }[evt.key];
+        if (arrowDelta) {
+          evt.preventDefault();
+          const step = evt.shiftKey ? 10 : 1;
+          nudgeBoxEditSelection(arrowDelta[0] * step, arrowDelta[1] * step);
+        }
+      }
+    };
+    window.addEventListener('keydown', onBoxEditKeyDown);
+    return () => window.removeEventListener('keydown', onBoxEditKeyDown);
+  }, [boxEdit, mutating, applyBoxEdit, nudgeBoxEditSelection]);
+
+  useLayoutEffect(() => {
+    const wrap = reviewWrapRef.current;
+    const pageId = String(boxEdit?.pageId || '').trim();
+    if (!wrap || !pageId) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const target = Array.from(wrap.querySelectorAll('.review-page'))
+        .find(node => String(node.dataset?.pageId || '') === pageId);
+      if (!target) return;
+      const wrapRect = wrap.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetTop = Math.max(0, wrap.scrollTop + targetRect.top - wrapRect.top - 8);
+      smoothScrollTo(wrap, targetTop, 180);
+      syncReviewPageNavigation(wrap);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [boxEdit?.pageId, syncReviewPageNavigation]);
+
+  useEffect(() => {
+    let frame = null;
+    let latest = null;
+    const move = (evt) => {
       const drag = manualSplitDragRef.current;
       if (!drag) return;
       if (drag.mode === 'draw') {
@@ -2342,21 +4615,14 @@ function ReviewStage({
       if (drag.mode === 'move') {
         const dx = (evt.clientX - drag.startX) * drag.scaleX;
         const dy = (evt.clientY - drag.startY) * drag.scaleY;
+        const translated = translateManualSplitBoxes(drag.initialBoxes, drag.page, dx, dy);
         setManualSplit(prev => {
           if (!prev) return prev;
           return {
             ...prev,
             regions: (prev.regions || []).map(region => {
-              const initialBox = drag.initialBoxes.get(region.id);
-              if (!initialBox) return region;
-              return {
-                ...region,
-                bbox: clampReviewBox({
-                  ...initialBox,
-                  left: finiteNumber(initialBox.left, 0) + dx,
-                  top: finiteNumber(initialBox.top, 0) + dy,
-                }, drag.page),
-              };
+              const box = translated.get(region.id);
+              return box ? { ...region, bbox: box } : region;
             }),
           };
         });
@@ -2393,7 +4659,16 @@ function ReviewStage({
         } : prev);
       }
     };
+    const onMove = evt => {
+      if (!manualSplitDragRef.current) return;
+      latest = { clientX: evt.clientX, clientY: evt.clientY };
+      if (frame != null) return;
+      frame = requestAnimationFrame(() => { frame = null; move(latest); });
+    };
     const onUp = (evt) => {
+      if (frame != null) cancelAnimationFrame(frame);
+      frame = null;
+      move(evt);
       const drag = manualSplitDragRef.current;
       if (!drag) return;
       if (drag.mode === 'draw') {
@@ -2421,9 +4696,13 @@ function ReviewStage({
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
+    const onBlur = () => cancelManualSplitGesture();
+    window.addEventListener('blur', onBlur);
     return () => {
+      if (frame != null) cancelAnimationFrame(frame);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      window.removeEventListener('blur', onBlur);
     };
   }, [clampReviewBox]);
 
@@ -2431,27 +4710,63 @@ function ReviewStage({
     if (!manualSplit) return undefined;
     const onKeyDown = (evt) => {
       const isFormControl = isEditableKeyboardTarget(evt.target);
-      if (evt.key === 'Escape' && manualSplit.mode === 'stamp') {
+      const key = String(evt.key || '').toLowerCase();
+      const primaryModifier = evt.ctrlKey || evt.metaKey;
+      if (manualSplitShortcutHelpOpen && evt.key === 'Escape') {
+        evt.preventDefault();
+        evt.stopPropagation();
+        setManualSplitShortcutHelpOpen(false);
+        return;
+      }
+      if (mutating) return;
+      if (evt.key === 'Escape') {
+        evt.preventDefault();
+        cancelManualSplitGesture();
+        setManualSplitMode('select');
+        if (isFormControl) evt.target.blur?.();
+        return;
+      }
+      if (isFormControl) return;
+      if (primaryModifier && !evt.altKey && key === 'a') {
+        evt.preventDefault();
+        selectAllManualSplitRegions();
+        return;
+      }
+      if (primaryModifier && !evt.altKey && key === 'd') {
+        evt.preventDefault();
+        duplicateManualSplitSelected();
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && evt.key === '?') {
+        evt.preventDefault();
+        setManualSplitShortcutHelpOpen(open => !open);
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && key === 'v') {
+        evt.preventDefault();
+        setManualSplitMode('select');
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && key === 'g') {
         evt.preventDefault();
         setManualSplitMode('draw');
         return;
       }
-      if (isFormControl) return;
+      if (!primaryModifier && !evt.altKey && key === 's') {
+        evt.preventDefault();
+        setManualSplitMode('stamp');
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && key === 'p') {
+        evt.preventDefault();
+        toggleManualSplitPanelSide();
+        return;
+      }
       if (evt.key === 'Delete' || evt.key === 'Backspace') {
         if ((manualSplit.selectedRegionIds || []).length) {
           evt.preventDefault();
           deleteManualSplitSelected();
         }
-        return;
-      }
-      if (evt.key === 'Escape') {
-        evt.preventDefault();
-        if (cancelManualSplitGesture()) return;
-        if ((manualSplit.selectedRegionIds || []).length) {
-          setManualSplit(prev => prev ? { ...prev, selectedRegionIds: [] } : prev);
-          return;
-        }
-        cancelManualPageSplit();
         return;
       }
       if (evt.key === 'Enter') {
@@ -2475,11 +4790,11 @@ function ReviewStage({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [manualSplit, mutating, manualSplitPage]);
+  }, [manualSplit, mutating, manualSplitPage, manualSplitShortcutHelpOpen]);
 
   if (!pages.length) {
     return (
-      <div className="col center">
+      <div className="col center" id="workspace-stage" role="region" aria-label="검수 화면">
         <div className="stage">
           <div className="stage-toolbar">
             <span className="name">검수 — 검출된 문제 박스</span>
@@ -2501,12 +4816,6 @@ function ReviewStage({
     ['check_needed', '확인 필요', statusCounts.check_needed],
     ['failed', '실패', statusCounts.failed],
   ];
-  if (sessionCounts.supplemental > 0) {
-    filterOptions.push(['supplemental', '자료', sessionCounts.supplemental]);
-  }
-  if (statusCounts.passage > 0) {
-    filterOptions.push(['passage', '지문', statusCounts.passage]);
-  }
   const retryDisabledReason = !aiAvailable
     ? 'Gemini API 키를 먼저 저장해 주세요'
     : aiBusy
@@ -2522,147 +4831,166 @@ function ReviewStage({
   const bulkRetryPageIds = activeReviewFilter ? visibleReviewScope.retryPageIds : pageRetryIds;
   const bulkRetryProblemCount = activeReviewFilter ? visibleReviewScope.problemCount : riskyCount;
   const showBulkRetry = reviewFilter !== 'normal' && reviewFilter !== 'supplemental' && bulkRetryProblemCount > 0 && bulkRetryPageIds.length > 0;
+  const showOverviewBatchActions = (
+    (activeReviewFilter && visibleReviewScope.problemIds.length > 0)
+    || (!activeReviewFilter && actionableProblemIds.length > 0)
+    || showBulkRetry
+  );
 
   const actionBar = boxEdit ? (
-    <div className="review-actionbar">
-      <span className="count-chip">틀 조정 중</span>
-      <span className="hint">모서리와 변을 끌어 맞춘 뒤 다른 문제를 클릭하면 현재 자르기를 적용하고 다음 틀을 이어 조정합니다.</span>
+    <div className="review-actionbar box-edit-actionbar">
+      <span className="count-chip">{boxEdit.multi ? '지문 영역 합치기' : '영역 다시 잡기'}</span>
+      <span className="hint">
+        {boxEdit.multi
+          ? '페이지를 스크롤하며 영역을 추가하세요. 목록 순서대로 한 지문이 됩니다. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'
+          : '시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'}
+      </span>
       <div className="spacer" />
-      <button className="btn" type="button" onClick={cancelBoxEdit} disabled={mutating}>취소</button>
-      <button
-        className="btn"
-        type="button"
-        title="조정한 틀에 주변 여백을 더해 빠르게 다시 자릅니다"
-        onClick={applyExpandedBoxEdit}
-        disabled={mutating}
-      >
-        주변 포함 빠른 자르기
-      </button>
-      <button className="btn primary" type="button" onClick={applyBoxEdit} disabled={mutating}>
-        자르기 적용
-      </button>
-    </div>
-  ) : splitTarget ? (
-    <div className="review-actionbar">
-      <span className="count-chip">가르기 중</span>
-      <span className="hint">박스 안의 파란 선을 드래그해서 위치를 정한 다음 [가르기]를 눌러주세요.</span>
-      <div className="spacer" />
-      <button className="btn" onClick={cancelSplit} disabled={mutating}>취소</button>
-      <button className="btn primary" onClick={confirmSplit} disabled={mutating}>
-        ✂ {(splitRatio * 100).toFixed(0)}% 위치에서 가르기
-      </button>
+      {boxEdit.multi && (
+        <button
+          className={`btn ${boxEdit.addingSegment ? 'primary' : ''}`}
+          type="button"
+          aria-pressed={boxEdit.addingSegment}
+          onClick={toggleBoxEditAddSegment}
+          disabled={mutating || (boxEdit.segments || []).length >= 32}
+        >
+          {Icon.crop} {boxEdit.addingSegment ? '페이지에서 드래그…' : '영역 추가'}
+        </button>
+      )}
+      <span className="box-edit-actionbar-impact">
+        {boxEdit.multi ? `영역 ${(boxEdit.segments || []).length}개 · 한 지문으로 유지` : '선택 문항만 변경 · 번호와 순서 유지'}
+      </span>
     </div>
   ) : manualSplit ? (
     <div className="review-actionbar manual-split-actionbar">
       <span className="count-chip">수동 분할</span>
-      <span className="hint">
-        드래그로 그리고, 스탬프로 찍고, 선택 영역은 바로 조정하세요.
-        {' '}
-        {(manualSplit.regions || []).length}개 영역
+      <span className="manual-split-toolbar-status" aria-live="polite">
+        영역 {(manualSplit.regions || []).length}개
         {(manualSplit.replaceProblemIds || []).length
           ? ` · ${(manualSplit.replaceProblemIds || []).length}개 항목 교체`
           : ' · 페이지에 추가'}
       </span>
       {manualSplitOverlaps && (
-        <span className="review-summary-chip warn">겹침 허용됨</span>
+        <span className="review-summary-chip warn">겹침 있음</span>
       )}
       <div className="spacer" />
-      <button
-        className="btn"
-        type="button"
-        onClick={autoSortManualSplitRegions}
-        disabled={mutating || !(manualSplit.regions || []).length}
-      >
-        {Icon.align} 자동 정렬
-      </button>
-      <button
-        className="btn danger"
-        type="button"
-        onClick={deleteManualSplitSelected}
-        disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
-      >
-        {Icon.trash} 선택 삭제
-      </button>
-      <button className="btn" type="button" onClick={cancelManualPageSplit} disabled={mutating}>취소</button>
-      <button
-        className="btn primary"
-        type="button"
-        onClick={applyManualPageSplit}
-        title="Enter로 분할 적용"
-        aria-keyshortcuts="Enter"
-        disabled={mutating || !(manualSplit.regions || []).length}
-      >
-        {Icon.check} 분할 적용 {(manualSplit.regions || []).length}
-      </button>
+      <div className="manual-split-toolbar-actions" role="toolbar" aria-label="수동 분할 빠른 작업">
+        <button
+          className="btn"
+          type="button"
+          title={`모든 영역 선택 (${PRIMARY_MODIFIER_LABEL}+A)`}
+          aria-keyshortcuts="Control+A Meta+A"
+          onClick={selectAllManualSplitRegions}
+          disabled={mutating || !(manualSplit.regions || []).length || (manualSplit.selectedRegionIds || []).length === (manualSplit.regions || []).length}
+        >
+          {Icon.check} 전체 선택
+        </button>
+        <button
+          className="btn"
+          type="button"
+          title={`선택 영역 복제 (${PRIMARY_MODIFIER_LABEL}+D)`}
+          aria-keyshortcuts="Control+D Meta+D"
+          onClick={duplicateManualSplitSelected}
+          disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
+        >
+          {Icon.copy} 복제
+        </button>
+        <button
+          className="btn"
+          type="button"
+          title="위에서 아래, 왼쪽에서 오른쪽 순서로 자동 정렬"
+          onClick={autoSortManualSplitRegions}
+          disabled={mutating || !(manualSplit.regions || []).length}
+        >
+          {Icon.align} 자동 정렬
+        </button>
+        <button
+          className="btn"
+          type="button"
+          title={`영역 패널을 ${manualSplitPanelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동 (P)`}
+          aria-keyshortcuts="P"
+          onClick={toggleManualSplitPanelSide}
+          disabled={mutating}
+        >
+          {manualSplitPanelSide === 'right' ? Icon.arrowLeft : Icon.arrowRight} 패널 이동
+        </button>
+        <button
+          className={`btn ${manualSplitShortcutHelpOpen ? 'is-active' : ''}`}
+          type="button"
+          title="전체 단축키 보기 (?)"
+          aria-keyshortcuts="?"
+          aria-expanded={manualSplitShortcutHelpOpen}
+          aria-controls="manual-split-shortcuts"
+          onClick={() => setManualSplitShortcutHelpOpen(open => !open)}
+        >
+          {Icon.keyboard} 단축키
+        </button>
+        <span className="manual-split-toolbar-separator" aria-hidden="true" />
+        <button
+          className="btn danger"
+          type="button"
+          title="선택 영역 삭제 (Delete)"
+          aria-keyshortcuts="Delete Backspace"
+          onClick={deleteManualSplitSelected}
+          disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
+        >
+          {Icon.trash} 선택 삭제
+        </button>
+        <button className="btn" type="button" onClick={cancelManualPageSplit} disabled={mutating}>취소</button>
+      </div>
     </div>
   ) : selectedList.length === 0 ? (
-    <div className="review-actionbar">
-      <div className="review-filters" aria-label="검수 상태 필터">
-        {filterOptions.map(([value, label, count]) => (
-          <button
-            key={value}
-            className={reviewFilter === value ? 'on' : ''}
-            type="button"
-            onClick={() => setReviewFilter(value)}
-          >
-            {label} <span>{count}</span>
-          </button>
-        ))}
-      </div>
+    <div className="review-actionbar review-overview-toolbar">
+      <ReviewFilterTabs options={filterOptions} value={reviewFilter} onChange={setReviewFilter} />
       {reviewRiskFilter && (
         <span className="review-risk-filter-active">
-          원인 필터 · {riskFlagLabel(reviewRiskFilter)}
+          원인 · {riskFlagLabel(reviewRiskFilter)}
           <button type="button" onClick={() => setReviewRiskFilter(null)}>해제</button>
         </span>
       )}
       {reviewScopeActive && (
         <span className="review-risk-filter-active">
-          최근 추가 묶음 · {formatProblemCount(sessionCounts)}
-          <button type="button" onClick={clearReviewScope}>전체 세션 보기</button>
+          최근 묶음 · {formatCurrentReviewCount(sessionCounts)}
+          <button type="button" onClick={clearReviewScope}>전체 보기</button>
         </span>
       )}
-      <span className="hint">문제 박스를 확인하고, 이상한 페이지만 AI로 다시 인식하세요.</span>
       <div className="spacer" />
-      {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
-        <>
-          <button
-            className="btn"
-            type="button"
-            onClick={selectVisibleProblems}
-            disabled={mutating}
-          >
-            표시 항목 선택 {visibleReviewScope.problemIds.length}
-          </button>
-          <button
-            className="btn"
-            type="button"
-            onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
-            disabled={mutating}
-          >
-            표시 항목 확인 완료 {visibleReviewScope.problemIds.length}
-          </button>
-        </>
-      )}
-      {!activeReviewFilter && actionableProblemIds.length > 0 && (
-        <button
-          className="btn"
-          type="button"
-          onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
-          disabled={mutating}
-        >
-          확인 필요 전체 확인 {actionableProblemIds.length}
-        </button>
-      )}
-      {showBulkRetry && (
-        <button
-          className="btn primary"
-          type="button"
-          title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
-          onClick={() => doRetryAi(bulkRetryPageIds)}
-          disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
-        >
-          페이지 전체 AI 재인식 {bulkRetryProblemCount}
-        </button>
+      {showOverviewBatchActions && (
+        <div className="review-toolbar-actions" role="toolbar" aria-label="검수 빠른 작업">
+          {activeReviewFilter && visibleReviewScope.problemIds.length > 0 && (
+            <button
+              className="btn review-toolbar-action"
+              type="button"
+              title={`${visibleReviewScope.problemIds.length}개 표시 항목 확인`}
+              onClick={() => onConfirm?.(null, { problemIds: visibleReviewScope.problemIds, bulk: true })}
+              disabled={mutating}
+            >
+              {Icon.check} 표시 {visibleReviewScope.problemIds.length}개 확인
+            </button>
+          )}
+          {!activeReviewFilter && actionableProblemIds.length > 0 && (
+            <button
+              className="btn review-toolbar-action"
+              type="button"
+              title={`${actionableProblemIds.length}개 확인 필요 항목 확인`}
+              onClick={() => onConfirm?.(null, { problemIds: actionableProblemIds, bulk: true })}
+              disabled={mutating}
+            >
+              {Icon.check} 확인 필요 {actionableProblemIds.length}개 확인
+            </button>
+          )}
+          {showBulkRetry && (
+            <button
+              className="btn review-toolbar-action"
+              type="button"
+              title={retryDisabledReason || `${bulkRetryPageIds.length}개 페이지 재인식`}
+              onClick={() => doRetryAi(bulkRetryPageIds)}
+              disabled={!aiAvailable || aiBusy || mutating || !bulkRetryPageIds.length}
+            >
+              {Icon.wand} 원본 {bulkRetryPageIds.length}페이지 재인식
+            </button>
+          )}
+        </div>
       )}
     </div>
   ) : (
@@ -2673,7 +5001,7 @@ function ReviewStage({
           {selectedHasPageChromeArtifact
             ? '페이지 선/번호가 감지된 문제입니다. 3단계 원문 보존으로 다시 뽑거나 원본 틀을 조정하세요.'
             : selectedList.length === 1
-            ? '선택 박스 주변만 다시 인식하거나, 틀을 조정해 자르고, 필요하면 두 문제로 나눌 수 있어요.'
+            ? '현재 문항의 테두리를 원본 위에서 바로 조정할 수 있어요.'
             : sameSourcePage
               ? '같은 페이지의 박스들을 하나로 합치거나, 모두 제외할 수 있어요.'
               : '같은 페이지의 박스만 합칠 수 있어요. (현재 선택은 페이지가 다름)'}
@@ -2681,9 +5009,10 @@ function ReviewStage({
       </div>
       <div className="review-actionbar-actions">
         <div className="review-action-group review-action-group-main">
+          <span className="review-action-group-label">보정</span>
           {selectedHasPageChromeArtifact && (
             <button
-              className="btn danger"
+              className="btn"
               type="button"
               title={imageEnhanceDisabledReason || `${selectedPageChromeProblemIds.length}개 문항을 글자 보존 고화질로 다시 생성`}
               onClick={() => onEnhanceImage?.(selectedPageChromeProblemIds, { mode: 'preserve' })}
@@ -2700,19 +5029,19 @@ function ReviewStage({
               onClick={() => doRetryAi(selectedRetryPageIds)}
               disabled={!aiAvailable || aiBusy || mutating || !selectedHasRetryable || !selectedRetryPageIds.length}
             >
-              {Icon.wand} 페이지 전체 AI 재인식 {selectedList.length}
+              {Icon.wand} 원본 {selectedRetryPageIds.length}페이지 재인식
             </button>
           )}
           {selectedList.length === 1 && (
             <>
               <button
-                className="btn primary"
+                className="btn"
                 type="button"
                 onClick={() => applyExpandedCrop()}
                 disabled={mutating || !selectedCanBoxEdit}
                 title="선택한 박스 주변 여백까지 포함해 빠르게 다시 자르기"
               >
-                {Icon.crop} 주변 포함 빠른 자르기
+                {Icon.crop} 빠른 자르기
               </button>
               <button
                 className="btn"
@@ -2721,42 +5050,31 @@ function ReviewStage({
                 disabled={mutating || !selectedCanBoxEdit}
                 title={selectedCanBoxEdit ? '원본 페이지 위에서 자르기 틀을 직접 조정' : '원본 페이지 이미지가 있어야 합니다'}
               >
-                {Icon.crop} 틀 조정/자르기
-              </button>
-            </>
-          )}
-        </div>
-        <div className="review-action-group review-action-group-reshape">
-          {selectedList.length === 1 && (
-            <>
-              <button
-                className="btn"
-                type="button"
-                onClick={beginSplit}
-                disabled={mutating}
-              >
-                {Icon.split} 두 문제로 나누기
+                {Icon.crop} 영역 다시 잡기
               </button>
               <button
                 className="btn"
                 type="button"
                 onClick={beginManualSplitForSelection}
                 disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 원본 페이지를 직접 여러 영역으로 자르기' : '같은 원본 페이지의 항목을 선택해야 합니다'}
+                title={selectedCanManualSplit ? '선택한 문항을 여러 영역으로 다시 나누기' : '원본 페이지 이미지가 있어야 합니다'}
               >
-                {Icon.pen} 수동 쪼개기
+                {Icon.pen} 문항 다시 나누기
               </button>
             </>
           )}
-          {selectedList.length >= 2 && (
+        </div>
+        {selectedList.length >= 2 && (
+          <div className="review-action-group review-action-group-reshape">
+            <span className="review-action-group-label">구조</span>
             <>
               <button
-                className="btn primary"
+                className="btn"
                 type="button"
                 onClick={doMerge}
                 disabled={!sameSourcePage || mutating}
               >
-                {Icon.align} 합치기
+                {Icon.align} 하나로 합치기
               </button>
               <button
                 className="btn"
@@ -2765,20 +5083,13 @@ function ReviewStage({
                 disabled={mutating || !selectedCanManualSplit}
                 title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 수동 분할할 수 있습니다'}
               >
-                {Icon.pen} 수동 쪼개기
+                {Icon.pen} 선택 항목 재분할
               </button>
             </>
-          )}
-        </div>
+          </div>
+        )}
         <div className="review-action-group review-action-group-status">
-          <button
-            className="btn soft-success"
-            type="button"
-            onClick={() => onConfirm?.(null, { problemIds: selectedList, bulk: true })}
-            disabled={mutating}
-          >
-            {Icon.check} 확인 완료 {selectedList.length}
-          </button>
+          <span className="review-action-group-label">선택</span>
           <button className="btn danger" type="button" onClick={doExclude} disabled={mutating}>
             {Icon.trash} 제외 {selectedList.length}
           </button>
@@ -2797,66 +5108,150 @@ function ReviewStage({
   );
 
   return (
-    <div className="col center">
+    <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="검수 화면">
       <div className="stage">
-        <div className="stage-toolbar">
-          <span className="name">검수 — 검출된 문제 박스</span>
-          <span className="pill"><span className="dotc" /> {pages.length} 페이지 · {formatProblemCount(sessionCounts)}</span>
+        <div className="stage-toolbar review-stage-toolbar">
+          <div className="review-stage-heading">
+            <span className="name">{reviewStageCopy.title}</span>
+            <span className="review-stage-subtitle">{reviewStageCopy.subtitle}</span>
+          </div>
+          <span className="pill"><span className="dotc" /> {reviewStageCopy.headerCountLabel}</span>
           <div className="spacer" />
-          <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>
-            빨간 박스는 인식이 의심됩니다. 클릭 후 가르기·합치기·제외하세요.
-          </span>
-          <div className="review-zoom-controls" aria-label="검수 화면 확대">
+          <div className="review-page-jump" role="group" aria-label="검수 페이지 이동">
             <button
               type="button"
               className="icon-btn"
-              title="문제 이미지 축소"
-              onClick={() => adjustReviewZoom(-REVIEW_ZOOM_STEP)}
-              disabled={reviewZoom <= REVIEW_ZOOM_MIN}
+              title="이전 검수 페이지"
+              aria-label="이전 검수 페이지"
+              onClick={() => jumpReviewPage(-1)}
+              disabled={!!manualSplit || reviewPageNav.current <= 1}
             >
-              {Icon.zoomOut}
+              {Icon.arrowLeft}
             </button>
-            <input
-              className="review-zoom-range"
-              type="range"
-              min={reviewZoomPercent(REVIEW_ZOOM_MIN)}
-              max={reviewZoomPercent(REVIEW_ZOOM_MAX)}
-              step="1"
-              value={reviewZoomPercent(reviewZoom)}
-              aria-label="검수 이미지 확대율"
-              title="문제 이미지만 확대/축소"
-              onChange={updateReviewZoomPercent}
-            />
-            <button
-              type="button"
-              className="review-zoom-reset"
-              title="100%로 되돌리기"
-              onClick={resetReviewZoom}
-              disabled={Math.abs(reviewZoom - 1) < 0.001}
-            >
-              {reviewZoomPercent(reviewZoom)}%
-            </button>
+            <span className="review-page-jump-status" aria-live="polite">
+              <b>{reviewPageNav.current || 0}</b> / {reviewPageNav.total}
+            </span>
             <button
               type="button"
               className="icon-btn"
-              title="문제 이미지 확대"
-              onClick={() => adjustReviewZoom(REVIEW_ZOOM_STEP)}
-              disabled={reviewZoom >= REVIEW_ZOOM_MAX}
+              title="다음 검수 페이지"
+              aria-label="다음 검수 페이지"
+              onClick={() => jumpReviewPage(1)}
+              disabled={!!manualSplit || !reviewPageNav.total || reviewPageNav.current >= reviewPageNav.total}
             >
-              {Icon.zoomIn}
+              {Icon.arrowRight}
             </button>
           </div>
+          <div className="review-view-control-group" role="group" aria-label="검수 화면 배율">
+            <div className="review-zoom-controls">
+              <button
+                type="button"
+                className="icon-btn"
+                title="문제 이미지 축소"
+                aria-label="문제 이미지 축소"
+                onClick={() => adjustReviewZoom(-REVIEW_ZOOM_STEP)}
+                disabled={reviewZoom <= REVIEW_ZOOM_MIN}
+              >
+                {Icon.zoomOut}
+              </button>
+              <details
+                className="review-zoom-menu"
+                onKeyDown={event => {
+                  if (event.key !== 'Escape') return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.open = false;
+                  event.currentTarget.querySelector('summary')?.focus();
+                }}
+              >
+                <summary aria-label={`검수 배율 ${reviewZoomPercent(reviewZoom)}%, 배율 조절 열기`}>{reviewZoomPercent(reviewZoom)}%</summary>
+                <div className="review-zoom-menu-body">
+                  <input
+                    className="review-zoom-range"
+                    type="range"
+                    min={reviewZoomPercent(REVIEW_ZOOM_MIN)}
+                    max={reviewZoomPercent(REVIEW_ZOOM_MAX)}
+                    step="1"
+                    value={reviewZoomPercent(reviewZoom)}
+                    aria-label="검수 이미지 확대율"
+                    title="문제 이미지만 확대/축소"
+                    onChange={updateReviewZoomPercent}
+                  />
+                  <button
+                    type="button"
+                    className="btn ghost review-zoom-reset"
+                    title="100%로 되돌리기"
+                    onClick={resetReviewZoom}
+                    disabled={Math.abs(reviewZoom - 1) < 0.001}
+                  >100%로 복원</button>
+                </div>
+              </details>
+              <button
+                type="button"
+                className="icon-btn"
+                title="문제 이미지 확대"
+                aria-label="문제 이미지 확대"
+                onClick={() => adjustReviewZoom(REVIEW_ZOOM_STEP)}
+                disabled={reviewZoom >= REVIEW_ZOOM_MAX}
+              >
+                {Icon.zoomIn}
+              </button>
+            </div>
+          </div>
         </div>
+        {!reviewEditorActive && <SessionRecognitionAction
+          onRecognizeSession={onRecognizeSession}
+          canRecognizeSession={canRecognizeSession}
+          recognitionDisabledReason={recognitionDisabledReason}
+          sourcePageCount={sourcePageCount}
+          sessionEditState={sessionEditState}
+        />}
         <div
           className={`review-wrap ${manualSplit ? 'manual-split-open' : ''}`}
           style={{ '--review-zoom': String(reviewZoom) }}
           onWheel={handleReviewWheel}
+          onPointerDown={() => cancelSmoothScroll(reviewWrapRef.current)}
+          onScroll={handleReviewScroll}
           ref={reviewWrapRef}
+          aria-busy={mutating || Boolean(pendingReviewNavigation)}
         >
           {actionBar}
-          <div className="review-summary-strip">
+          {!reviewEditorActive && <div className="review-summary-strip">
+            <div className="review-summary-overview">
+              <span className="review-summary-title">검수 현황</span>
+              <span className={`review-summary-chip ${reviewFlow.complete ? 'ok' : 'warn'}`}>
+                {reviewFlow.complete ? '검수 완료' : `남은 확인 ${reviewFlow.remaining}`}
+              </span>
+              {reviewSummary.passageReviewItemCount > 0 && (
+                <button
+                  type="button"
+                  className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
+                  title="확인이 필요한 지문만 보기"
+                  aria-pressed={reviewFilter === 'passage-review'}
+                  onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
+                >
+                  지문 확인 {reviewSummary.passageReviewItemCount}
+                </button>
+              )}
+              {reviewSummary.warningCount > 0 && (
+                <span className="review-summary-chip warn">주의 {reviewSummary.warningCount}</span>
+              )}
+              <div className="spacer" />
+              <button
+                className="btn ghost-action review-summary-toggle"
+                type="button"
+                aria-expanded={reviewDiagnosticsOpen}
+                aria-controls="review-diagnostics-detail"
+                onClick={() => setReviewDiagnosticsOpen(open => !open)}
+              >
+                {reviewDiagnosticsOpen ? '진단 접기' : '상세 진단'}
+                {reviewDiagnosticsOpen ? Icon.chevronUp : Icon.chevronDown}
+              </button>
+            </div>
+            {reviewDiagnosticsOpen && (
+            <div id="review-diagnostics-detail" className="review-summary-details">
             <span className="review-summary-title">검수 요약</span>
-            <span className="review-summary-chip">{formatProblemCount(reviewSummary.counts)}</span>
+            <span className="review-summary-chip">{formatCurrentReviewCount(reviewSummary.counts, { pageCount: pages.length })}</span>
             <span className={`review-summary-chip ${reviewSummary.warningCount ? 'warn' : 'ok'}`}>
               주의 {reviewSummary.warningCount}
             </span>
@@ -2869,6 +5264,14 @@ function ReviewStage({
                 {aiStageChipText(stage)}
               </span>
             ))}
+            {reviewSummary.aiCostEventCount > 0 && (
+              <span
+                className="review-summary-chip"
+                title={`공개 단가 기반 추정치 · $${reviewSummary.aiCostUsd.toFixed(4)} · 환율 ${Math.round(reviewSummary.aiCostUsdKrwRate).toLocaleString('ko-KR')}원`}
+              >
+                AI 예상 {Math.round(reviewSummary.aiCostKrw).toLocaleString('ko-KR')}원
+              </span>
+            )}
             {reviewSummary.actionableNeedsReviewCount > 0 && (
               <span className="review-summary-chip warn">
                 확인 {reviewSummary.actionableNeedsReviewCount}
@@ -3012,14 +5415,16 @@ function ReviewStage({
             {reviewSummary.warningPreview && (
               <span className="review-summary-note">{reviewSummary.warningPreview}</span>
             )}
-          </div>
-          {pages.map(page => {
+            </div>
+            )}
+          </div>}
+          {pages.map((page, pageIndex) => {
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
               .filter(Boolean)
               .filter(problemInReviewScope);
             const pageId = String(page?.id || '').trim();
-            const pageInScope = !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
+            const pageInScope = boxEdit?.multi || !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
             if (!pageInScope) return null;
             if (manualSplit && page.id !== manualSplit.pageId) return null;
             const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
@@ -3028,20 +5433,47 @@ function ReviewStage({
             const pageProblems = allPageProblems
               .filter(problem => problemMatchesReviewFilter(problem, reviewFilter, { passageReviewProblemIds }))
               .filter(problem => !reviewRiskFilter || pageMatchesRiskFilter || hasRiskFlag(problem, reviewRiskFilter));
-            if ((reviewFilter !== 'all' || reviewRiskFilter) && pageProblems.length === 0) return null;
+            const pageReviewTarget = reviewTargetById.get(pageReviewTargetId(page));
+            const pageTargetMatchesFilter = Boolean(
+              pageReviewTarget
+              && !reviewRiskFilter
+              && (
+                reviewFilter === 'all'
+                || reviewFilter === pageReviewTarget.status
+              )
+            );
+            if (
+              !boxEdit?.multi
+              && (reviewFilter !== 'all' || reviewRiskFilter)
+              && pageProblems.length === 0
+              && !pageTargetMatchesFilter
+            ) return null;
             const pageCounts = countSessionProblems(allPageProblems);
             const pageRiskFlags = riskFlagsFor(page);
-            const pageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status)
-              || (!allPageProblems.length ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal');
-            const hasRisk = pageRiskFlags.length > 0 || pageStatus !== 'normal';
+            const storedPageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
+            const pageStatus = pageReviewTarget?.status
+              || (passageOnlyReview && !pageRiskFlags.length
+                ? 'normal'
+                : storedPageStatus
+                || (!allPageProblems.length && !passageOnlyReview ? 'failed' : pageRiskFlags.length ? 'check_needed' : 'normal'));
+            const hasRisk = pageRiskFlags.length > 0 || pageReviewTarget?.status === 'check_needed' || pageStatus !== 'normal';
             const pageCanRetry = pageRetryIds.includes(page.id);
+            const editedProblem = boxEdit?.multi ? problemsById.get(boxEdit.problemId) : null;
+            const canvasProblems = editedProblem && !pageProblems.some(problem => problem.id === editedProblem.id)
+              ? [...pageProblems, editedProblem]
+              : pageProblems;
+            const pageHeading = sourcePageHeading(page, pageIndex);
             return (
-              <div key={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
+              <div key={page.id} data-page-id={page.id} className={`review-page ${reviewStatusClass(pageStatus)}`}>
                 <div className="review-page-hd">
-                  <span className="pg-num">{page.id}</span>
+                  <span className="pg-num" title={pageHeading}>{pageHeading}</span>
                   <span className="pg-count">
-                    {reviewFilter === 'all' && !reviewRiskFilter
-                      ? formatProblemCount(pageCounts)
+                    {pageReviewTarget?.type === 'page'
+                      ? pageReviewTarget.status === 'normal' ? '지문 없음 확인됨' : '지문 미검출'
+                      : passageOnlyReview && !allPageProblems.length
+                        ? '지문 없음'
+                      : reviewFilter === 'all' && !reviewRiskFilter
+                      ? formatCurrentReviewCount(pageCounts, { pageCount: 1, compact: true })
                       : `${pageProblems.length}/${allPageProblems.length} 표시`}
                   </span>
                   <span className={`status-badge ${reviewStatusClass(pageStatus)}`}>
@@ -3049,17 +5481,30 @@ function ReviewStage({
                   </span>
                   {hasRisk && (
                     <span className="pg-risk" title={pageRiskFlags.join(', ')}>
-                      {pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
+                      {pageReviewTarget?.status === 'check_needed'
+                        ? '지문이 검출되지 않아 확인이 필요합니다'
+                        : pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
                     </span>
                   )}
                   <div className="spacer" />
+                  {pageReviewTarget?.type === 'page' && pageReviewTarget.status === 'check_needed' && (
+                    <button
+                      className="mini-action"
+                      type="button"
+                      title="이 페이지에 별도 지문이 없음을 확인하고 다음 검수 대상으로 이동"
+                      onClick={() => confirmPageAndAdvance(page.id)}
+                      disabled={mutating}
+                    >
+                      {Icon.check} 지문 없음 확인
+                    </button>
+                  )}
                   {pageCanRetry && (
                     <button
                       className="mini-action"
                       type="button"
                       title={retryDisabledReason || '이 페이지만 AI로 다시 인식'}
                       onClick={() => doRetryAi([page.id])}
-                      disabled={!aiAvailable || aiBusy || mutating}
+                      disabled={!aiAvailable || aiBusy || mutating || reviewEditorActive}
                     >
                       AI 재인식
                     </button>
@@ -3067,11 +5512,11 @@ function ReviewStage({
                   <button
                     className="mini-action"
                     type="button"
-                    title={page.sourceImageUri ? '이 페이지를 직접 여러 문제로 자르기' : '페이지 원본 이미지가 있어야 합니다'}
-                    onClick={() => beginManualPageSplit(page, allPageProblems.map(problem => problem.id))}
+                    title={page.sourceImageUri ? '인식에서 누락된 문항 영역을 이 페이지에 추가' : '페이지 원본 이미지가 있어야 합니다'}
+                    onClick={() => beginManualPageSplit(page, [])}
                     disabled={mutating || !!manualSplit || !page.sourceImageUri}
                   >
-                    수동 쪼개기
+                    새 영역 추가
                   </button>
                   <span style={{ fontSize: 11, color: 'var(--muted-2)', fontFamily: "'JetBrains Mono', monospace" }}>
                     {page.width}×{page.height}
@@ -3088,8 +5533,6 @@ function ReviewStage({
                     hasOverlap={manualSplitOverlaps}
                     mutating={mutating}
                     onCanvasMouseDown={beginManualSplitCanvasAction}
-                    onCanvasMouseMove={updateManualSplitStampPreview}
-                    onCanvasMouseLeave={clearManualSplitStampPreview}
                     onModeChange={setManualSplitMode}
                     onSaveStampFromSelection={saveManualSplitStampFromSelection}
                     onRegionMouseDown={beginManualSplitRegionDrag}
@@ -3101,33 +5544,48 @@ function ReviewStage({
                     onReorderRegion={reorderManualSplitRegion}
                     onApply={applyManualPageSplit}
                     onStampSizeChange={updateManualSplitStampSize}
+                    panelSide={manualSplitPanelSide}
+                    onPanelSideChange={setManualSplitPanelSide}
+                    shortcutHelpOpen={manualSplitShortcutHelpOpen}
+                    scope={manualSplit.scope}
+                    scopeSummary={manualSplitScope}
+                    selectedScopeCount={manualSplit.selectionProblemIds.length}
+                    onScopeChange={changeManualSplitScope}
                   />
                 ) : (
-                  <ReviewCanvasZoomShell>
-                    <div className="review-page-canvas">
+                  <div className={`box-edit-layout ${boxEdit?.pageId === page.id ? 'is-open' : ''}`}>
+                    <ReviewCanvasZoomShell>
+                      <div
+                        className={`review-page-canvas ${boxEdit?.multi && boxEdit.addingSegment ? 'adding-passage-segment' : ''}`}
+                        onMouseDown={boxEdit?.multi && boxEdit.addingSegment
+                          ? (evt) => beginBoxSegmentDraw(evt, page)
+                          : undefined}
+                      >
                     {page.sourceImageUri ? (
-                      <img src={page.sourceImageUri} alt={page.id} draggable={false} />
+                      <img
+                        src={filePreviewUrl(page.sourceImageUri)}
+                        alt={pageHeading}
+                        width={Math.max(1, Number(page.width) || 1)}
+                        height={Math.max(1, Number(page.height) || 1)}
+                        loading={pageIndex < 2 ? 'eager' : 'lazy'}
+                        decoding="async"
+                        fetchPriority={pageIndex < 2 ? 'high' : 'auto'}
+                        draggable={false}
+                      />
                     ) : (
                       <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                         페이지 이미지를 불러올 수 없어요.
                       </div>
                     )}
-                    {pageProblems.map(prob => {
+                    {canvasProblems.flatMap(prob => {
                     const isEditing = boxEdit?.problemId === prob.id;
-                    const bbox = isEditing ? boxEdit.box : (prob.bbox || {});
                     const w = page.width || 1;
                     const h = page.height || 1;
-                    if (!bbox.width || !bbox.height) return null;
-                    const leftPct = (bbox.left / w) * 100;
-                    const topPct = (bbox.top / h) * 100;
-                    const widthPct = (bbox.width / w) * 100;
-                    const heightPct = (bbox.height / h) * 100;
                     const isSelected = selectedIds.has(prob.id);
                     const isActive = prob.id === activeId;
                     const status = deriveProblemStatus(prob);
                     const statusMeta = reviewStatusMeta(status);
                     const isRisky = status !== 'normal';
-                    const isSplitting = splitTarget === prob.id;
                     const passageGroupId = passageGroupIdFor(prob);
                     const isPassage = Boolean(passageGroupId);
                     const order = orderMap.get(prob.id);
@@ -3142,21 +5600,38 @@ function ReviewStage({
                     if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
                     if (hasPageChrome) tooltipParts.push('페이지 선/번호 감지');
                     if (isPassage) tooltipParts.push(`지문 ${passageGroupId}`);
-                    const classes = [
-                      'review-bbox',
-                      isPassage ? 'review-bbox-passage' : '',
-                      hasPageChrome ? 'page-chrome-artifact' : '',
-                      isSelected ? 'selected' : '',
-                      isActive ? 'active' : '',
-                      isRisky ? 'risky' : '',
-                      reviewStatusClass(status),
-                      isSplitting ? 'splitting' : '',
-                      isEditing ? 'editing' : '',
-                    ].filter(Boolean).join(' ');
-                    return (
+                    const editableBoxes = isEditing
+                      ? (boxEdit.multi
+                          ? (boxEdit.segments || []).filter(segment => segment.pageId === page.id)
+                          : [{ id: 'single-box', pageId: page.id, bbox: boxEdit.box, order: 1 }])
+                      : editableSourceSegmentsForProblem(prob).filter(segment => segment.pageId === page.id);
+                    const boxes = editableBoxes.length
+                      ? editableBoxes
+                      : (!isEditing && String(prob.sourcePageId || prob.source_page_id || page.id) === String(page.id)
+                          ? [{ id: `${prob.id}-fallback`, pageId: page.id, bbox: prob.bbox || {}, order: 1 }]
+                          : []);
+                    return boxes.filter(segment => segment.bbox?.width && segment.bbox?.height).map((segment, segmentIndex) => {
+                      const bbox = segment.bbox;
+                      const leftPct = (bbox.left / w) * 100;
+                      const topPct = (bbox.top / h) * 100;
+                      const widthPct = (bbox.width / w) * 100;
+                      const heightPct = (bbox.height / h) * 100;
+                      const segmentSelected = !boxEdit?.multi || segment.id === boxEdit.selectedSegmentId;
+                      const classes = [
+                        'review-bbox',
+                        isPassage ? 'review-bbox-passage' : '',
+                        hasPageChrome ? 'page-chrome-artifact' : '',
+                        isSelected ? 'selected' : '',
+                        isActive ? 'active' : '',
+                        isRisky ? 'risky' : '',
+                        reviewStatusClass(status),
+                        isEditing ? 'editing' : '',
+                        isEditing && boxEdit.multi ? 'passage-segment-box' : '',
+                        isEditing && segmentSelected ? 'segment-selected' : '',
+                      ].filter(Boolean).join(' ');
+                      return (
                       <div
-                        key={prob.id}
-                        ref={isSplitting ? splitBoxRef : null}
+                        key={`${prob.id}-${segment.id || segmentIndex}`}
                         className={classes}
                         style={{
                           left: `${leftPct}%`,
@@ -3164,10 +5639,13 @@ function ReviewStage({
                           width: `${widthPct}%`,
                           height: `${heightPct}%`,
                         }}
-                        onMouseDown={isEditing ? (evt) => beginBoxDrag(evt, 'move', page) : undefined}
+                        onMouseDown={isEditing
+                          ? (evt) => beginBoxDrag(evt, 'move', page, boxEdit.multi ? segment.id : null)
+                          : undefined}
                         onClick={(evt) => {
                           if (isEditing) {
                             evt.stopPropagation();
+                            if (boxEdit.multi) selectBoxEditSegment(segment.id);
                             return;
                           }
                           onBoxClick(prob.id, evt);
@@ -3175,47 +5653,160 @@ function ReviewStage({
                         title={tooltipParts.filter(Boolean).join(' · ')}
                       >
                         <div className="review-bbox-label">
-                          {bboxPrimaryLabel}
+                          {isEditing && boxEdit.multi ? `${segment.order || segmentIndex + 1} · ${bboxPrimaryLabel}` : bboxPrimaryLabel}
                           {isPassage && !isPassageFragment && <span className="review-bbox-passage-tag">지문</span>}
                           {hasPageChrome
                             ? <span className="review-bbox-risk">페이지 장식</span>
                             : isRisky && <span className="review-bbox-risk">{statusMeta.shortLabel}</span>}
                         </div>
-                        {isEditing && (
+                        {isEditing && segmentSelected && (
                           <>
-                            <div className="crop-frame-label">틀 조정</div>
+                            <div className="crop-frame-label">{boxEdit.multi ? `${segment.order || segmentIndex + 1}번째 영역` : '영역 조정'}</div>
                             {['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map(mode => (
                               <button
                                 key={mode}
                                 type="button"
                                 className={`crop-frame-handle ${mode}`}
                                 aria-label={`자르기 틀 ${mode}`}
-                                onMouseDown={(evt) => beginBoxDrag(evt, mode, page)}
+                                onMouseDown={(evt) => beginBoxDrag(evt, mode, page, boxEdit.multi ? segment.id : null)}
                                 onClick={(evt) => evt.stopPropagation()}
                               />
                             ))}
                           </>
                         )}
-                        {isSplitting && (
-                          <div
-                            className="split-guide"
-                            style={{ top: `${splitRatio * 100}%` }}
-                            onMouseDown={(evt) => {
-                              evt.stopPropagation();
-                              splitDraggingRef.current = true;
-                            }}
-                          />
-                        )}
                       </div>
-                    );
+                      );
+                    });
                     })}
-                    </div>
-                  </ReviewCanvasZoomShell>
+                    {boxEditDraftBox?.pageId === page.id && boxEditDraftBox.bbox && (
+                      <div
+                        className="review-bbox editing passage-segment-box passage-segment-draft"
+                        style={{
+                          left: `${(boxEditDraftBox.bbox.left / (page.width || 1)) * 100}%`,
+                          top: `${(boxEditDraftBox.bbox.top / (page.height || 1)) * 100}%`,
+                          width: `${(boxEditDraftBox.bbox.width / (page.width || 1)) * 100}%`,
+                          height: `${(boxEditDraftBox.bbox.height / (page.height || 1)) * 100}%`,
+                        }}
+                      >
+                        <div className="crop-frame-label">새 영역</div>
+                      </div>
+                    )}
+                      </div>
+                    </ReviewCanvasZoomShell>
+                    {boxEdit?.pageId === page.id && (
+                      <BoxEditPanel
+                        page={page}
+                        pages={pages}
+                        problem={problemsById.get(boxEdit.problemId)}
+                        displayNumber={orderMap.get(boxEdit.problemId)}
+                        originalBox={boxEdit.originalBox}
+                        box={boxEdit.box}
+                        originalSegments={boxEdit.originalSegments}
+                        segments={boxEdit.segments}
+                        selectedSegmentId={boxEdit.selectedSegmentId}
+                        multi={boxEdit.multi}
+                        addingSegment={boxEdit.addingSegment}
+                        mode={boxEdit.mode}
+                        mutating={mutating}
+                        aiAvailable={aiAvailable}
+                        aiBusy={aiBusy}
+                        onModeChange={setBoxEditMode}
+                        onToggleAddSegment={toggleBoxEditAddSegment}
+                        onSelectSegment={selectBoxEditSegment}
+                        onDeleteSegment={deleteBoxEditSegment}
+                        onMoveSegment={moveBoxEditSegment}
+                        onReset={resetBoxEdit}
+                        onCancel={cancelBoxEdit}
+                        onApply={applyBoxEdit}
+                        onManualSplit={() => beginManualPageSplit(page, [boxEdit.problemId], { initialBox: boxEdit.box })}
+                      />
+                    )}
+                  </div>
                 )}
               </div>
             );
           })}
         </div>
+        {!reviewEditorActive && (
+          <div className={`review-completion-bar ${reviewFlow.complete ? 'is-complete' : ''}`} aria-live="polite">
+            <div className="review-completion-progress" aria-label={`검수 ${reviewFlow.reviewed} / ${reviewFlow.total}`}>
+              <span>검수</span>
+              <strong>{reviewFlow.reviewed} / {reviewFlow.total}</strong>
+            </div>
+            <span className={`review-completion-state ${reviewFlow.complete ? 'done' : ''}`}>
+              {reviewFlow.complete ? '모두 확인됨' : `남은 ${reviewFlow.remaining}개`}
+            </span>
+            <span className="review-completion-help">
+              {reviewFlow.complete
+                ? '모든 확인이 끝났어요. 칠판 배치를 바로 확인해 보세요.'
+                : nextUnresolvedPageFocused
+                  ? reviewFlow.remaining === 1
+                    ? `마지막 페이지입니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하면 칠판이 열립니다.`
+                    : `현재 페이지에 별도 지문이 없는지 확인하세요. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하고 다음으로 이동합니다.`
+                : selectedActionIds.length > 0 && selectedUnresolvedProblemIds.length === 0
+                  ? '현재 선택 항목은 이미 정상입니다. 다음 미확인 대상으로 이동할 수 있습니다.'
+                : selectedUnresolvedProblemIds.length === 0 && nextUnresolvedIsPage
+                  ? `지문이 검출되지 않은 페이지를 확인해야 합니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 페이지 검수를 시작하세요.`
+                : reviewFlow.remaining === 1
+                  ? `마지막 항목입니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 확인하면 칠판이 열립니다.`
+                  : `확인하면 다음 항목이 자동으로 선택됩니다. ${PRIMARY_MODIFIER_LABEL}+Enter로 빠르게 진행하세요.`}
+            </span>
+            <div className="review-completion-actions">
+              {reviewFlow.complete ? (
+                <button className="btn primary review-completion-primary review-board-preview-button" type="button" onClick={() => onOpenBoard?.()}>
+                  {Icon.board} 칠판 미리보기
+                </button>
+              ) : selectedUnresolvedProblemIds.length > 0 ? (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={confirmSelectedAndAdvance}
+                  disabled={mutating}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 확인`}
+                >
+                  <span className="review-completion-primary-label">
+                    {Icon.check}
+                    {reviewFlow.remaining === selectedUnresolvedProblemIds.length
+                      ? '마지막 확인 · 칠판 보기'
+                      : selectedUnresolvedProblemIds.length === 1
+                        ? '확인하고 다음'
+                        : `${selectedUnresolvedProblemIds.length}개 확인하고 다음`}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
+                </button>
+              ) : nextUnresolvedPageFocused ? (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={() => confirmPageAndAdvance(nextUnresolvedProblemId)}
+                  disabled={mutating}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 지문 없음 확인 후 다음 검수 대상으로 이동`}
+                >
+                  <span className="review-completion-primary-label">
+                    {Icon.check} {reviewFlow.remaining === 1 ? '마지막 확인 · 칠판 보기' : '지문 없음 확인하고 다음'}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
+                </button>
+              ) : (
+                <button
+                  className="btn primary review-completion-primary"
+                  type="button"
+                  onClick={selectNextUnresolvedProblem}
+                  disabled={mutating || !nextUnresolvedProblemId}
+                  aria-keyshortcuts="Meta+Enter Control+Enter"
+                  title={`${PRIMARY_MODIFIER_LABEL}+Enter로 다음 확인 ${nextUnresolvedIsPage ? '페이지 이동' : '항목 선택'}`}
+                >
+                  <span className="review-completion-primary-label">
+                    {nextUnresolvedIsPage ? '페이지 검수 시작' : '다음 확인 항목'} {Icon.arrowRight}
+                  </span>
+                  <kbd className="review-completion-shortcut">{PRIMARY_MODIFIER_LABEL} ↵</kbd>
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3223,23 +5814,41 @@ function ReviewStage({
 
 // ─── LEFT: items rail ─────────────────────────────────────────────────────
 function ItemsRail({
-  items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
+  session, items, activeId, setActive, reorder, removeItem, addSample, bulkApply, handleFiles,
   pendingFiles, selectedPendingFileKey, onSelectPendingFile,
   removePendingFile, clearPendingFiles, processQueuedFiles, queueBusy, aiAvailable,
-  addMockSample, canAddDummy, recentSessions, restoringSessionId, onRestoreRecentSession,
-  onDownloadItemImage, downloadingItemId,
+  addMockSample, canAddDummy, recentSessions, restoringSessionId, recentSessionRestoreBlocked, onRestoreRecentSession,
+  onDownloadPublish, publishDownloadBusy,
+  onDownloadItemImage, downloadingItemId, reorderBusy, moveFeedback,
+  selectedItemIds, setSelectedItemIds,
+  onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
+  onReextractSharedPassages, canReextractSharedPassages, reextractSharedPassagesBusy,
+  collapsed, onToggleCollapsed,
+  splitMode, setSplitMode, editScope = null,
 }){
+  const editScopeIds = useMemo(() => new Set(editScope?.problemIds || []), [editScope]);
   const dragId = useRef(null);
-  const [draggingId, setDraggingId] = useState(null);
+  const [draggingIds, setDraggingIds] = useState(() => new Set());
   const [dropTarget, setDropTarget] = useState(null);
   const [dropZoneActive, setDropZoneActive] = useState(false);
+  const [materialFilter, setMaterialFilter] = useState('all');
+  const [dragPreview, setDragPreview] = useState(null);
+  const [pressedItemId, setPressedItemId] = useState(null);
+  const selectionAnchorRef = useRef(null);
+  const railSelectionSnapshotRef = useRef('');
   const railRef = useRef(null);
   const itemRefs = useRef({});
   const previousItemRects = useRef(new Map());
+  const itemLayoutAnimationsRef = useRef(new Map());
   const pointerDragRef = useRef(null);
   const suppressClickRef = useRef(false);
   const dropTargetRef = useRef(null);
   const railAutoScrollRef = useRef({ raf: null, clientX: null, clientY: null });
+  const dragVisualFrameRef = useRef(null);
+  const dragVisualOffsetRef = useRef({ x: 0, y: 0, tilt: 0 });
+  const dragPreviewRef = useRef(null);
+  const pendingKeyboardFocusRef = useRef(null);
+  const [reorderAnnouncement, setReorderAnnouncement] = useState('');
   const [recentSessionsCollapsed, setRecentSessionsCollapsed] = useState(() => {
     try {
       const stored = window.localStorage?.getItem(RECENT_SESSIONS_COLLAPSED_KEY);
@@ -3248,38 +5857,278 @@ function ItemsRail({
       return true;
     }
   });
+  const [recentSessionQuery, setRecentSessionQuery] = useState('');
+  const [recentSessionLimit, setRecentSessionLimit] = useState(RECENT_SESSIONS_PAGE_SIZE);
+  const filteredRecentSessions = useMemo(
+    () => filterRecentSessions(recentSessions, recentSessionQuery),
+    [recentSessions, recentSessionQuery]
+  );
+  const visibleRecentSessions = filteredRecentSessions.slice(0, recentSessionLimit);
   const hasSessionItems = items.length > 0;
+  const railReviewMode = globalThis.EDB_REVIEW_FILTERS?.sessionReviewMode?.(session) || 'problems';
+  const materialCounts = useMemo(() => ({
+    all: items.length,
+    questions: items.filter(item => !isPassageFragmentProblem(item)).length,
+    passages: items.filter(isPassageFragmentProblem).length,
+  }), [items]);
+  const materialFilterOptions = railReviewMode === 'page-as-is'
+    ? [
+        ['all', '전체', materialCounts.all],
+        ['questions', '페이지 원본', materialCounts.questions],
+      ]
+    : railReviewMode === 'shared-passages'
+      ? [
+          ['all', '전체', materialCounts.all],
+          ['passages', '공통 지문', materialCounts.passages],
+        ]
+      : [
+          ['all', '전체', materialCounts.all],
+          ['questions', '문항', materialCounts.questions],
+          ['passages', '공통 지문', materialCounts.passages],
+        ];
+  const visibleItemRows = useMemo(() => items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => editScope || materialFilter === 'all'
+      || (materialFilter === 'questions' && !isPassageFragmentProblem(item))
+      || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter, editScope]);
+  const filterActive = !editScope && materialFilter !== 'all';
   const itemOrderSignature = items.map(item => String(item.id)).join('|');
+  const draggingLayoutSignature = Array.from(draggingIds).join('|');
+  const dropTargetLayoutSignature = dropTarget
+    ? `${String(dropTarget.id)}:${dropTarget.position}`
+    : '';
+  const itemsById = useMemo(
+    () => new Map(items.map(item => [String(item.id), item])),
+    [items]
+  );
+  const displayedItemRows = useMemo(() => {
+    let displayIndex = 0;
+    return visibleItemRows.reduce((rows, row) => {
+      if (draggingIds.has(String(row.item.id))) return rows;
+      rows.push({ ...row, displayIndex });
+      displayIndex += 1;
+      return rows;
+    }, []);
+  }, [visibleItemRows, draggingIds]);
+  const orderedSelectedIds = useMemo(
+    () => items.map(item => String(item.id)).filter(id => selectedItemIds.has(id)),
+    [items, selectedItemIds]
+  );
+  const selectedItemCount = orderedSelectedIds.length;
+  const dragPreviewItem = dragPreview
+    ? itemsById.get(String(dragPreview.id))
+    : null;
+
+  useEffect(() => {
+    if (materialFilterOptions.some(([value]) => value === materialFilter)) return;
+    setMaterialFilter('all');
+  }, [railReviewMode, materialFilter]);
+
+  useEffect(() => {
+    const validIds = new Set(items.map(item => String(item.id)));
+    setSelectedItemIds(prev => {
+      const filtered = new Set(Array.from(prev).filter(id => validIds.has(String(id))));
+      return filtered.size === prev.size ? prev : filtered;
+    });
+    if (selectionAnchorRef.current && !validIds.has(String(selectionAnchorRef.current))) {
+      selectionAnchorRef.current = null;
+    }
+  }, [itemOrderSignature]);
 
   useLayoutEffect(() => {
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
     const nextRects = new Map();
     items.forEach(it => {
       const el = itemRefs.current[it.id];
-      if (!el) return;
+      if (!el) {
+        const preservedRect = previousItemRects.current.get(it.id);
+        if (draggingIds.has(String(it.id)) && preservedRect) {
+          nextRects.set(it.id, preservedRect);
+        }
+        return;
+      }
+      const previousAnimation = itemLayoutAnimationsRef.current.get(it.id);
+      if (previousAnimation) {
+        previousAnimation.cancel();
+        itemLayoutAnimationsRef.current.delete(it.id);
+      }
       const rect = el.getBoundingClientRect();
       const prevRect = previousItemRects.current.get(it.id);
       if (prevRect && !reduceMotion) {
         const dx = prevRect.left - rect.left;
         const dy = prevRect.top - rect.top;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
-          el.animate(
-            [
-              { transform: `translate(${dx}px, ${dy}px)` },
-              { transform: 'translate(0, 0)' },
-            ],
-            { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' }
+          const isMovedItem = String(moveFeedback?.id || '') === String(it.id);
+          const animation = el.animate(
+            isMovedItem
+              ? [
+                  { transform: `translate(${dx}px, ${dy}px) scale(.985)`, opacity: .78 },
+                  { transform: 'translate(0, 0) scale(1.018)', opacity: 1, offset: .72 },
+                  { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+                ]
+              : [
+                  { transform: `translate(${dx}px, ${dy}px)` },
+                  { transform: 'translate(0, 0)' },
+                ],
+            {
+              duration: isMovedItem ? 480 : 380,
+              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.22,1,.36,1)',
+            }
           );
+          itemLayoutAnimationsRef.current.set(it.id, animation);
+          const releaseAnimation = () => {
+            if (itemLayoutAnimationsRef.current.get(it.id) === animation) {
+              itemLayoutAnimationsRef.current.delete(it.id);
+            }
+          };
+          animation.onfinish = releaseAnimation;
+          animation.oncancel = releaseAnimation;
         }
       }
       nextRects.set(it.id, { top: rect.top, left: rect.left, width: rect.width, height: rect.height });
     });
     previousItemRects.current = nextRects;
-  }, [itemOrderSignature]);
+    const focusId = pendingKeyboardFocusRef.current;
+    if (focusId) {
+      pendingKeyboardFocusRef.current = null;
+      window.requestAnimationFrame(() => itemRefs.current[focusId]?.focus?.({ preventScroll: true }));
+    }
+  }, [itemOrderSignature, draggingLayoutSignature, dropTargetLayoutSignature]);
+
+  const selectRailItem = (itemId, event = {}) => {
+    const id = String(itemId);
+    const visibleIds = visibleItemRows.map(({ item }) => String(item.id));
+    const currentSelectionKey = visibleIds
+      .filter(visibleId => selectedItemIds.has(visibleId))
+      .join('|');
+    const railOwnsAnchor = railSelectionSnapshotRef.current === currentSelectionKey;
+    const anchorId = railOwnsAnchor
+      && selectionAnchorRef.current
+      && visibleIds.includes(String(selectionAnchorRef.current))
+      ? String(selectionAnchorRef.current)
+      : (
+          activeId
+          && selectedItemIds.has(String(activeId))
+          && visibleIds.includes(String(activeId))
+            ? String(activeId)
+            : id
+        );
+    const selection = applySelectionClick(
+      visibleIds,
+      Array.from(selectedItemIds),
+      anchorId,
+      id,
+      event
+    );
+    const next = new Set(selection.selectedIds);
+    selectionAnchorRef.current = selection.anchorId;
+    railSelectionSnapshotRef.current = selection.selectedIds.join('|');
+    setSelectedItemIds(next);
+    if (next.has(id)) {
+      setActive(id);
+    } else if (next.size) {
+      const remainingIds = Array.from(next);
+      setActive(remainingIds[remainingIds.length - 1]);
+    } else {
+      setActive(id);
+    }
+  };
+
+  const clearRailSelection = () => {
+    selectionAnchorRef.current = null;
+    railSelectionSnapshotRef.current = '';
+    setSelectedItemIds(new Set());
+  };
+
+  const removeSelectedItems = () => {
+    if (!orderedSelectedIds.length || reorderBusy) return;
+    removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });
+    clearRailSelection();
+    setReorderAnnouncement(`${orderedSelectedIds.length}개 문제를 삭제했습니다.`);
+  };
+
+  useLayoutEffect(() => {
+    const preview = dragPreviewRef.current;
+    if (!dragPreview || !preview) return;
+    const { x, y, tilt } = dragVisualOffsetRef.current;
+    preview.style.setProperty('--drag-preview-x', `${x}px`);
+    preview.style.setProperty('--drag-preview-y', `${y}px`);
+    preview.style.setProperty('--drag-preview-tilt', `${tilt}deg`);
+  }, [dragPreview]);
+
+  const updatePointerDragVisual = (clientX, clientY) => {
+    const drag = pointerDragRef.current;
+    if (!drag) return;
+    drag.lastClientX = Number(clientX);
+    drag.lastClientY = Number(clientY);
+    const unclampedX = drag.lastClientX - drag.grabOffsetX;
+    const maxX = Math.max(4, window.innerWidth - drag.previewWidth - 4);
+    dragVisualOffsetRef.current = {
+      x: Math.max(4, Math.min(maxX, unclampedX)),
+      y: drag.lastClientY - drag.grabOffsetY,
+      tilt: Math.max(-1.1, Math.min(1.1, (drag.lastClientX - drag.startX) / 140)),
+    };
+    if (dragVisualFrameRef.current) return;
+    dragVisualFrameRef.current = window.requestAnimationFrame(() => {
+      dragVisualFrameRef.current = null;
+      const { x, y, tilt } = dragVisualOffsetRef.current;
+      const activeDrag = pointerDragRef.current;
+      if (
+        activeDrag
+        && activeDrag.moved
+        && activeDrag.pointerId === drag.pointerId
+      ) {
+        const target = findPointerDropTarget(
+          activeDrag.lastClientX,
+          activeDrag.lastClientY,
+          activeDrag.sourceIdSet
+        );
+        setCurrentDropTarget(target);
+      }
+      const preview = dragPreviewRef.current;
+      if (!preview) return;
+      preview.style.setProperty('--drag-preview-x', `${x}px`);
+      preview.style.setProperty('--drag-preview-y', `${y}px`);
+      preview.style.setProperty('--drag-preview-tilt', `${tilt}deg`);
+    });
+  };
+
+  const resetPointerDragVisual = () => {
+    if (dragVisualFrameRef.current) {
+      window.cancelAnimationFrame(dragVisualFrameRef.current);
+      dragVisualFrameRef.current = null;
+    }
+    const preview = dragPreviewRef.current;
+    preview?.style.removeProperty('--drag-preview-x');
+    preview?.style.removeProperty('--drag-preview-y');
+    preview?.style.removeProperty('--drag-preview-tilt');
+    dragVisualOffsetRef.current = { x: 0, y: 0, tilt: 0 };
+  };
+
+  const captureDragPreviewRect = (sourceIds) => {
+    const preview = dragPreviewRef.current;
+    if (!preview) return;
+    const previewCard = preview.querySelector('.rail-drag-overlay-card');
+    const rect = (previewCard || preview).getBoundingClientRect();
+    sourceIds.forEach((sourceId, index) => {
+      const item = itemsById.get(String(sourceId));
+      if (!item) return;
+      const fanOffset = Math.min(index, 3) * 2;
+      previousItemRects.current.set(item.id, {
+        top: rect.top + fanOffset,
+        left: rect.left + fanOffset,
+        width: rect.width,
+        height: rect.height,
+      });
+    });
+  };
 
   const clearDragState = () => {
+    resetPointerDragVisual();
     dragId.current = null;
-    setDraggingId(null);
+    setDraggingIds(new Set());
+    setDragPreview(null);
+    setPressedItemId(null);
     dropTargetRef.current = null;
     setDropTarget(null);
   };
@@ -3291,39 +6140,40 @@ function ItemsRail({
     ));
   };
 
-  const updateDropTarget = (event, targetId) => {
-    if (!dragId.current || dragId.current === targetId) {
-      setCurrentDropTarget(null);
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    const position = dropPositionFromClientY(event.currentTarget.getBoundingClientRect(), event.clientY);
-    setCurrentDropTarget({ id: targetId, position });
-  };
-
-  const findPointerDropTarget = (_clientX, clientY, sourceId) => {
+  const findPointerDropTarget = (clientX, clientY, sourceIdSet) => {
     const rail = railRef.current;
     if (!rail) return null;
-    const drag = pointerDragRef.current;
-    const rows = drag?.id === sourceId ? drag.rows : [];
-    if (!rows.length) return null;
     const railRect = rail.getBoundingClientRect();
-    const contentY = clientY - railRect.top + rail.scrollTop;
-    const first = rows[0];
-    if (contentY < first.top) {
-      const id = first.id;
-      return id && id !== sourceId ? { id, position: 'before' } : null;
-    }
-    for (const candidate of rows) {
-      const id = candidate.id;
-      if (contentY < candidate.top + candidate.height / 2) {
-        return id && id !== sourceId ? { id, position: 'before' } : null;
+    if (
+      Number.isFinite(Number(clientX))
+      && (clientX < railRect.left || clientX > railRect.right)
+    ) return null;
+    let first = null;
+    let last = null;
+    for (const { item } of visibleItemRows) {
+      if (sourceIdSet?.has(String(item.id))) continue;
+      const el = itemRefs.current[item.id];
+      if (!el) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.height < 1) continue;
+      previousItemRects.current.set(item.id, {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      });
+      const candidate = { id: item.id, top: rect.top, height: rect.height };
+      if (!first) first = candidate;
+      last = candidate;
+      if (clientY < candidate.top + candidate.height / 2) {
+        return { id: candidate.id, position: 'before' };
       }
     }
-    const last = rows[rows.length - 1];
-    const id = last.id;
-    return id && id !== sourceId ? { id, position: 'after' } : null;
+    if (!first || !last) return null;
+    if (clientY < first.top) {
+      return { id: first.id, position: 'before' };
+    }
+    return { id: last.id, position: 'after' };
   };
 
   const stopRailAutoScroll = () => {
@@ -3335,16 +6185,21 @@ function ItemsRail({
 
   const stepRailAutoScroll = () => {
     const rail = railRef.current;
-    const sourceId = dragId.current;
+    const drag = pointerDragRef.current;
     const { clientX, clientY } = railAutoScrollRef.current;
-    if (!rail || !sourceId || clientY == null) {
+    if (!rail || !drag?.ids.length || clientY == null) {
       stopRailAutoScroll();
       return;
     }
-    const delta = edgeAutoScrollDelta(
-      rail.getBoundingClientRect(),
-      clientY,
+    const railRect = rail.getBoundingClientRect();
+    const edgePx = Math.min(
       RAIL_DRAG_AUTOSCROLL_EDGE_PX,
+      Math.max(18, railRect.height * 0.35)
+    );
+    const delta = edgeAutoScrollDelta(
+      railRect,
+      clientY,
+      edgePx,
       RAIL_DRAG_AUTOSCROLL_MAX_PX
     );
     if (!delta) {
@@ -3353,7 +6208,7 @@ function ItemsRail({
     }
     const previousTop = rail.scrollTop;
     rail.scrollTop = Math.max(0, Math.min(rail.scrollHeight - rail.clientHeight, previousTop + delta));
-    const target = findPointerDropTarget(clientX ?? 0, clientY, sourceId);
+    const target = findPointerDropTarget(clientX ?? 0, clientY, drag.sourceIdSet);
     setCurrentDropTarget(target);
     if (rail.scrollTop === previousTop) {
       railAutoScrollRef.current.raf = null;
@@ -3370,24 +6225,91 @@ function ItemsRail({
     }
   };
 
-  useEffect(() => () => stopRailAutoScroll(), []);
+  const removeRailDragWindowListeners = (drag = pointerDragRef.current) => {
+    if (!drag) return;
+    if (drag.windowPointerMove) {
+      window.removeEventListener('pointermove', drag.windowPointerMove);
+      drag.windowPointerMove = null;
+    }
+    if (drag.windowPointerEnd) {
+      window.removeEventListener('pointerup', drag.windowPointerEnd);
+      drag.windowPointerEnd = null;
+    }
+    if (drag.windowPointerCancel) {
+      window.removeEventListener('pointercancel', drag.windowPointerCancel);
+      drag.windowPointerCancel = null;
+    }
+    if (drag.windowBlur) {
+      window.removeEventListener('blur', drag.windowBlur);
+      drag.windowBlur = null;
+    }
+  };
+
+  useEffect(() => () => {
+    stopRailAutoScroll();
+    resetPointerDragVisual();
+    removeRailDragWindowListeners();
+    itemLayoutAnimationsRef.current.forEach(animation => animation.cancel());
+    itemLayoutAnimationsRef.current.clear();
+  }, []);
 
   const startPointerDrag = (event, itemId) => {
-    if (event.button !== 0 || event.target.closest?.('button')) return;
-    const rows = items.map(item => {
-      const el = itemRefs.current[item.id];
-      return el ? { id: item.id, top: el.offsetTop, height: el.offsetHeight } : null;
-    }).filter(Boolean);
-    pointerDragRef.current = {
-      id: itemId,
+    if (
+      reorderBusy
+      || filterActive
+      || event.button !== 0
+      || event.shiftKey
+      || event.ctrlKey
+      || event.metaKey
+      || event.target.closest?.('button')
+    ) return;
+    const id = String(itemId);
+    const sourceIds = selectedItemIds.has(id) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [id];
+    const rail = railRef.current;
+    if (!rail) return;
+    const sourceEl = itemRefs.current[id];
+    if (!sourceEl) return;
+    const sourceRect = sourceEl.getBoundingClientRect();
+    const drag = {
+      id,
+      ids: sourceIds,
+      sourceIdSet: new Set(sourceIds),
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+      grabOffsetX: Math.max(0, Math.min(sourceRect.width, event.clientX - sourceRect.left)),
+      grabOffsetY: Math.max(0, Math.min(sourceRect.height, event.clientY - sourceRect.top)),
+      previewWidth: sourceRect.width,
+      previewHeight: sourceRect.height,
       moved: false,
-      rows,
     };
-    dragId.current = itemId;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    drag.windowPointerMove = pointerEvent => movePointerDrag(pointerEvent);
+    drag.windowPointerEnd = pointerEvent => finishPointerDrag(pointerEvent);
+    drag.windowPointerCancel = pointerEvent => finishPointerDrag(pointerEvent);
+    drag.windowBlur = () => {
+      if (pointerDragRef.current !== drag) return;
+      pointerDragRef.current = null;
+      removeRailDragWindowListeners(drag);
+      stopRailAutoScroll();
+      clearDragState();
+    };
+    pointerDragRef.current = drag;
+    dragId.current = id;
+    setCurrentDropTarget(null);
+    setPressedItemId(id);
+    try {
+      rail.setPointerCapture?.(event.pointerId);
+    } catch (_err) {
+      // Window listeners below keep the drag functional if pointer capture is unavailable.
+    }
+    window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
+    window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
+    window.addEventListener('pointercancel', drag.windowPointerCancel, { passive: false });
+    window.addEventListener('blur', drag.windowBlur);
   };
 
   const movePointerDrag = (event) => {
@@ -3398,33 +6320,112 @@ function ItemsRail({
     if (!drag.moved) {
       if (Math.hypot(dx, dy) < 5) return;
       drag.moved = true;
-      setDraggingId(drag.id);
+      if (!selectedItemIds.has(drag.id)) {
+        selectionAnchorRef.current = drag.id;
+        railSelectionSnapshotRef.current = drag.id;
+        setSelectedItemIds(new Set([drag.id]));
+      }
+      const previewIndex = items.findIndex(item => String(item.id) === drag.id);
+      setDragPreview({
+        id: drag.id,
+        count: drag.ids.length,
+        index: Math.max(0, previewIndex),
+        width: drag.previewWidth,
+        height: drag.previewHeight,
+      });
+      setDraggingIds(new Set(drag.ids));
     }
+    updatePointerDragVisual(event.clientX, event.clientY);
     event.preventDefault();
     applyRailAutoScroll(event.clientX, event.clientY);
-    const target = findPointerDropTarget(event.clientX, event.clientY, drag.id);
-    setCurrentDropTarget(target);
   };
 
   const finishPointerDrag = (event) => {
     const drag = pointerDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const target = drag.moved
-      ? findPointerDropTarget(event.clientX, event.clientY, drag.id) || dropTargetRef.current
+    const cancelled = event.type === 'pointercancel';
+    const target = drag.moved && !cancelled
+      ? findPointerDropTarget(event.clientX, event.clientY, drag.sourceIdSet)
       : null;
     if (drag.moved) {
       event.preventDefault();
       suppressClickRef.current = true;
       window.setTimeout(() => { suppressClickRef.current = false; }, 0);
+      captureDragPreviewRect(drag.ids);
       if (target) {
         setActive(drag.id);
-        reorder(drag.id, target.id, target.position, { resetPlacement: true });
+        reorder(drag.id, target.id, target.position, {
+          resetPlacement: true,
+          sourceIds: drag.ids,
+        });
       }
     }
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    const rail = railRef.current;
     pointerDragRef.current = null;
+    removeRailDragWindowListeners(drag);
+    if (rail?.hasPointerCapture?.(event.pointerId)) {
+      rail.releasePointerCapture(event.pointerId);
+    }
     stopRailAutoScroll();
     clearDragState();
+  };
+
+  const moveItemByKeyboard = (item, direction) => {
+    if (reorderBusy || filterActive) return;
+    const itemId = String(item.id);
+    const sourceIds = selectedItemIds.has(itemId) && orderedSelectedIds.length > 1
+      ? orderedSelectedIds
+      : [itemId];
+    const command = sourceIds.length > 1
+      ? adjacentGroupReorderCommand(items, sourceIds, direction)
+      : adjacentReorderCommand(items, item.id, direction);
+    if (!command) {
+      setReorderAnnouncement(direction === 'up' ? '선택 묶음이 이미 맨 위입니다.' : '선택 묶음이 이미 맨 아래입니다.');
+      return;
+    }
+    pendingKeyboardFocusRef.current = item.id;
+    setActive(item.id);
+    const moved = reorder(item.id, command.targetId, command.position, {
+      resetPlacement: true,
+      sourceIds,
+    });
+    if (moved !== false) {
+      setReorderAnnouncement(sourceIds.length > 1
+        ? `${sourceIds.length}개 문제를 ${command.nextIndex + 1}번부터 함께 이동했습니다.`
+        : `${command.nextIndex + 1}번으로 이동했습니다: ${problemDisplayName(item, command.nextIndex)}.`);
+    }
+  };
+
+  const applyRailSelectionKeyboard = (item, event) => {
+    if (event.altKey) return false;
+    const visibleIds = visibleItemRows.map(({ item: rowItem }) => String(rowItem.id));
+    const isSelectAll = (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a';
+    const isRangeArrow = event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown');
+    if (!isSelectAll && !isRangeArrow && event.key !== 'Escape') return false;
+    const result = selectionKeyboardCommand(
+      visibleIds,
+      Array.from(selectedItemIds),
+      selectionAnchorRef.current,
+      String(item.id),
+      event.key,
+      event
+    );
+    event.preventDefault();
+    selectionAnchorRef.current = result.anchorId;
+    railSelectionSnapshotRef.current = result.selectedIds.join('|');
+    setSelectedItemIds(new Set(result.selectedIds));
+    if (result.focusId && result.selectedIds.includes(result.focusId)) {
+      setActive(result.focusId);
+      // Selection keeps the same DOM order, so focus now; deferred focus is
+      // reserved for reorder operations whose rows must render first.
+      itemRefs.current[result.focusId]?.focus?.({ preventScroll: true });
+    }
+    setReorderAnnouncement(
+      result.selectedIds.length
+        ? `${result.selectedIds.length}개 문제를 선택했습니다.`
+        : '문제 선택을 해제했습니다.'
+    );
+    return true;
   };
 
   const toggleRecentSessionsCollapsed = () => {
@@ -3444,8 +6445,10 @@ function ItemsRail({
     const el = itemRefs.current[activeId];
     const rail = railRef.current;
     if (!el || !rail) return;
-    const top = el.offsetTop;
-    const bot = top + el.offsetHeight;
+    const itemRect = el.getBoundingClientRect();
+    const railRect = rail.getBoundingClientRect();
+    const top = scrollContainerContentTop(itemRect, railRect, rail.scrollTop);
+    const bot = top + itemRect.height;
     const vTop = rail.scrollTop;
     const vBot = vTop + rail.clientHeight;
     if (top < vTop + 16) {
@@ -3455,34 +6458,150 @@ function ItemsRail({
     }
   }, [activeId]);
 
-  return (
-    <div className="col left">
-      <div className="col-hd">
-        <h2>자료</h2>
-        <span className="count">{items.length}</span>
-        <div className="spacer" />
-        <button className="icon-btn" title="전체를 2단계 원문 보존 변환" data-tooltip="모든 자료를 빠른 원문 보존 변환으로 지정" onClick={() => bulkApply('s2')} disabled={!items.length}>{Icon.aiBatch}</button>
-        <button
-          className="icon-btn"
-          title={canAddDummy ? '더미 추가' : '실제 세션 또는 대기열이 있을 때는 더미를 추가하지 않습니다'}
-          data-tooltip={canAddDummy ? '테스트용 더미 자료 추가' : '실제 세션 또는 대기열이 있을 때는 더미를 추가하지 않습니다'}
-          onClick={addMockSample}
-          disabled={!canAddDummy}
-        >{Icon.wand}</button>
-        <button className="icon-btn" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" onClick={addSample}>{Icon.upload}</button>
+  if (collapsed) {
+    return (
+      <div className="col left is-collapsed" id="workspace-rail" role="region" aria-label="자료 목록">
+        <div className="col-hd rail-mini-hd">
+          <button
+            className="icon-btn"
+            type="button"
+            title="자료 목록 펼치기"
+            data-tooltip="자료 목록 펼치기"
+            aria-label="자료 목록 펼치기"
+            aria-expanded="false"
+            onClick={onToggleCollapsed}
+          >{Icon.arrowRight}</button>
+        </div>
+        <div className="rail-mini-tools">
+          <button className="icon-btn" type="button" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" aria-label="파일 추가" onClick={addSample}>{Icon.upload}</button>
+          {!!pendingFiles?.length && (
+            <button
+              className="rail-mini-queue"
+              type="button"
+              title={`업로드 대기열 ${pendingFiles.length}개 · 펼쳐서 처리`}
+              data-tooltip={`업로드 대기열 ${pendingFiles.length}개 · 펼쳐서 처리`}
+              onClick={onToggleCollapsed}
+            >대기 {pendingFiles.length}</button>
+          )}
+          <span className="rail-mini-count" title={`자료 ${items.length}개`}>{items.length}</span>
+        </div>
+        <div className="items rail-mini-list" ref={railRef}>
+          {items.map((it, i) => (
+            <button
+              key={it.id}
+              type="button"
+              ref={el => {
+                if (el) itemRefs.current[it.id] = el;
+                else delete itemRefs.current[it.id];
+              }}
+              className={`rail-mini-item ${activeId === it.id ? 'active' : ''} ${hasPageChromeArtifactFlag(it) ? 'page-chrome-artifact' : ''}`}
+              aria-current={activeId === it.id ? 'true' : undefined}
+              aria-label={`${String(i + 1).padStart(2, '0')} ${problemDisplayName(it, i)}`}
+              data-tooltip={`${String(i + 1).padStart(2, '0')} · ${problemDisplayName(it, i)}`}
+              onClick={() => setActive(it.id)}
+            >
+              <span className="thumb"><TileImage item={it} forceMode="raw" /></span>
+              <span className="idx">
+                <span className={`status-dot ${reviewStatusClass(it.reviewStatus)}`} />
+                {String(i + 1).padStart(2, '0')}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
+    );
+  }
+
+  return (
+    <div className="col left" id="workspace-rail" role="region" aria-label="자료 목록">
+      <div className="col-hd">
+        <button
+          className="icon-btn rail-collapse-btn"
+          type="button"
+          title="자료 목록 접기"
+          data-tooltip="자료 목록 접기 · 썸네일만 표시"
+          aria-label="자료 목록 접기"
+          disabled={!!editScope}
+          aria-expanded="true"
+          onClick={onToggleCollapsed}
+        >{Icon.arrowLeft}</button>
+        <h2>자료 목록</h2>
+        <span className="count">{filterActive ? `${visibleItemRows.length}/${items.length}` : items.length}</span>
+        <div className="spacer" />
+        {hasSessionItems && <button
+          className="icon-btn rail-reextract-action"
+          type="button"
+          aria-label="현재 원본에서 공통 지문 다시 추출"
+          title={canReextractSharedPassages
+            ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
+            : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
+          data-tooltip={reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '원본에서 공통 지문 다시 추출'}
+          onClick={onReextractSharedPassages}
+          disabled={!!editScope || !canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
+        >{Icon.refresh}</button>}
+      </div>
+
+      {editScope && <div className="rail-edit-scope" role="status" aria-live="polite">
+        <strong>{editScope.label}</strong>
+        <span>{editScope.pageLabel} · {editScope.rangeLabel}</span>
+        <small>{editScope.problemIds.length ? '표시된 문제를 새 영역으로 바꿉니다.' : '현재 페이지에 새 문제를 추가합니다.'}</small>
+      </div>}
+      {hasSessionItems && !editScope && (
+        <div className="rail-control-stack">
+          <div className="material-filter" role="group" aria-label="자료 모아보기">
+            {materialFilterOptions.map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                className={materialFilter === value ? 'on' : ''}
+                aria-pressed={materialFilter === value}
+                onClick={() => {
+                  setMaterialFilter(value);
+                  const firstMatch = items.find(item => value === 'all'
+                    || (value === 'questions' && !isPassageFragmentProblem(item))
+                    || (value === 'passages' && isPassageFragmentProblem(item)));
+                  if (firstMatch) {
+                    selectionAnchorRef.current = String(firstMatch.id);
+                    setSelectedItemIds(new Set([String(firstMatch.id)]));
+                    setActive(firstMatch.id);
+                  } else {
+                    clearRailSelection();
+                  }
+                }}
+              >
+                <span>{label}</span><b>{count}</b>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div
         className="items"
         ref={railRef}
+        onPointerDownCapture={editScope ? evt => { evt.stopPropagation(); evt.preventDefault(); } : undefined}
+        onClickCapture={editScope ? evt => { evt.stopPropagation(); evt.preventDefault(); } : undefined}
+        onScroll={() => {
+          const drag = pointerDragRef.current;
+          if (!drag?.moved) return;
+          const target = findPointerDropTarget(
+            drag.lastClientX,
+            drag.lastClientY,
+            drag.sourceIdSet
+          );
+          setCurrentDropTarget(target);
+        }}
         onDragOver={e => {
           if (!dragId.current || e.dataTransfer?.types?.includes('Files')) return;
           e.preventDefault();
           applyRailAutoScroll(e.clientX, e.clientY);
         }}
       >
-        <div
+        {!editScope && (hasSessionItems || pendingFiles.length > 0) && <div className={`rail-primary-actions ${hasSessionItems ? 'has-items' : ''}`} role="group" aria-label="자료 추가와 일괄 처리">
+        <button
+          type="button"
           className={`drop-zone ${hasSessionItems ? 'is-compact' : ''} ${dropZoneActive ? 'is-active' : ''}`}
+          aria-label="파일 추가"
           onClick={addSample}
           onDragEnter={e => {
             if (!e.dataTransfer?.types?.includes('Files')) return;
@@ -3507,94 +6626,134 @@ function ItemsRail({
             if (files.length && handleFiles) handleFiles(files);
           }}
         >
-          {Icon.upload}
-          <strong style={hasSessionItems ? null : {marginTop:6}}>
+          {Icon.folderPlus}
+          <strong>
             {hasSessionItems ? '파일 추가' : '이미지·PDF·HWP 대기열에 추가'}
           </strong>
           <small>{hasSessionItems ? 'PNG 등록 / AI 인식' : '페이지 PNG로 바로 만들거나 문항을 AI 인식합니다'}</small>
-        </div>
+        </button>
+        {hasSessionItems && <button
+          className="btn rail-preserve-all"
+          type="button"
+          aria-label="전체를 2단계 원문 보존 변환"
+          title="전체 자료를 원문 보존 방식으로 지정"
+          data-tooltip="AI 실행 없이 전체 자료의 처리 방식을 원문 보존으로 지정합니다"
+          onClick={() => bulkApply('s2')}
+        >{Icon.filesCheck}<span>전체 보존</span></button>}
+        </div>}
 
-        {!!recentSessions?.length && (
+        {!hasSessionItems && pendingFiles.length === 0 && (
+          <div className="rail-empty-state">
+            {Icon.fileText}
+            <strong>추가한 자료가 여기에 모여요</strong>
+            <p>가운데에서 파일을 추가하거나 샘플로 시작하세요. 목록에서 문항을 선택하고 순서를 바꿀 수 있어요.</p>
+          </div>
+        )}
+
+        {!editScope && !!recentSessions?.length && (
           <div className={`session-history-card ${recentSessionsCollapsed ? 'is-collapsed' : ''}`}>
-            <div className="source-queue-head session-history-head">
+            <button
+              className="session-history-toggle"
+              type="button"
+              title={recentSessionsCollapsed ? '최근 작업 펼치기' : '최근 작업 접기'}
+              aria-expanded={!recentSessionsCollapsed}
+              aria-controls="recent-session-history-list"
+              onClick={toggleRecentSessionsCollapsed}
+            >
               <strong>최근 작업</strong>
-              <span>{recentSessions.length}개</span>
-              <div className="spacer" />
-              <button
-                className="icon-btn"
-                type="button"
-                title={recentSessionsCollapsed ? '최근 작업 펼치기' : '최근 작업 접기'}
-                data-tooltip={recentSessionsCollapsed ? '최근 작업 목록 펼치기' : '최근 작업 목록 접기'}
-                aria-expanded={!recentSessionsCollapsed}
-                aria-controls="recent-session-history-list"
-                onClick={toggleRecentSessionsCollapsed}
-              >
+              <span className="session-history-count">{recentSessions.length}개</span>
+              <span className="spacer" />
+              <span className="session-history-chevron" aria-hidden="true">
                 {recentSessionsCollapsed ? Icon.arrowDown : Icon.arrowUp}
-              </button>
-            </div>
+              </span>
+            </button>
             {!recentSessionsCollapsed && (
               <div className="session-history-list" id="recent-session-history-list">
-                {recentSessions.slice(0, 5).map(entry => {
+                <label className="session-history-search">
+                  <input
+                    type="search"
+                    aria-label="최근 작업 검색"
+                    placeholder="작업 이름으로 검색"
+                    value={recentSessionQuery}
+                    onChange={event => {
+                      setRecentSessionQuery(event.target.value);
+                      setRecentSessionLimit(RECENT_SESSIONS_PAGE_SIZE);
+                    }}
+                    onKeyDown={event => {
+                      if (event.key !== 'Escape') return;
+                      event.preventDefault();
+                      setRecentSessionQuery('');
+                      setRecentSessionLimit(RECENT_SESSIONS_PAGE_SIZE);
+                    }}
+                  />
+                </label>
+                {visibleRecentSessions.map(entry => {
                   const publish = normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry);
+                  const hasPublishActions = Boolean(publish && (
+                    publish.canDownload
+                    || publish.canOpenEdbFile
+                    || publish.canOpenOutputDir
+                    || publish.canOpenClassinHandoff
+                  ));
                   return (
                     <div className="session-history-row" key={entry.id}>
                       <div className="session-history-main" title={entry.outputDir || entry.sessionName}>
                         <div className="name">{entry.sessionName || '이름 없는 작업'}</div>
                         <div className="meta">
-                          {formatProblemCount({
-                            core: entry.coreProblemCount,
-                            supplemental: entry.supplementalItemCount,
-                          })}
+                          {recentSessionCountLabel(entry)}
                           {entry.updatedAt ? ` · ${formatPublishTime(entry.updatedAt)}` : ''}
                           {publish?.recordCountLabel ? ` · ${publish.recordCountLabel}` : ''}
                           {publish?.classinReviewStatusLabel ? ` · ${publish.classinReviewStatusLabel}` : ''}
                         </div>
                       </div>
                       <div className="session-history-actions">
-                        {publish && (
-                          <>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canDownload}
-                              onClick={() => downloadPublishSummary(publish)}
-                              title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : '최근 제작본 다운로드'}
-                            >
-                              {Icon.download}
-                            </button>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canOpenEdbFile}
-                              onClick={() => openPublishedEdb(publish)}
-                              title={publish.edbFileExists === false ? '최근 제작본 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
-                            >
-                              {Icon.board}
-                            </button>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canOpenOutputDir}
-                              onClick={() => openOutputFolder(publish.outputDir)}
-                              title={publish.outputDirExists === false ? '최근 작업 출력 폴더가 없습니다' : '최근 작업 출력 폴더 열기'}
-                            >
-                              {Icon.folder}
-                            </button>
-                            <button
-                              className="icon-btn"
-                              type="button"
-                              disabled={!publish.canOpenClassinHandoff}
-                              onClick={() => openClassinHandoff(publish)}
-                              title={publish.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
-                            >
-                              {Icon.check}
-                            </button>
-                          </>
+                        {hasPublishActions && (
+                          <details
+                            className="session-history-more"
+                            onToggle={event => {
+                              if (!event.currentTarget.open) return;
+                              event.currentTarget.querySelector('.session-history-menu')?.scrollIntoView({
+                                block: 'nearest',
+                                inline: 'nearest',
+                              });
+                            }}
+                          >
+                            <summary className="icon-btn" title="최근 제작 파일 작업" aria-label="최근 제작 파일 작업">
+                              {Icon.more}
+                            </summary>
+                            <div className="session-history-menu" role="group" aria-label="최근 제작 파일 작업">
+                              {publish.canDownload && (
+                                <button
+                                  className="btn"
+                                  type="button"
+                                  disabled={publishDownloadBusy}
+                                  onClick={() => onDownloadPublish?.(publish)}
+                                >
+                                  {Icon.download}<span>최근 제작본 다운로드</span>
+                                </button>
+                              )}
+                              {publish.canOpenEdbFile && (
+                                <button className="btn" type="button" onClick={() => openPublishedEdb(publish)}>
+                                  {Icon.board}<span>EDB 파일 열기</span>
+                                </button>
+                              )}
+                              {publish.canOpenOutputDir && (
+                                <button className="btn" type="button" onClick={() => openOutputFolder(publish.outputDir)}>
+                                  {Icon.folder}<span>출력 폴더 열기</span>
+                                </button>
+                              )}
+                              {publish.canOpenClassinHandoff && (
+                                <button className="btn" type="button" onClick={() => openClassinHandoff(publish)}>
+                                  {Icon.check}<span>ClassIn 검수 열기</span>
+                                </button>
+                              )}
+                            </div>
+                          </details>
                         )}
                         <button
                           className="btn"
                           type="button"
-                          disabled={restoringSessionId === entry.id}
+                          disabled={Boolean(restoringSessionId) || recentSessionRestoreBlocked || !onRestoreRecentSession}
                           onClick={() => onRestoreRecentSession?.(entry.id)}
                           title="이 작업을 다시 엽니다"
                         >
@@ -3604,6 +6763,23 @@ function ItemsRail({
                     </div>
                   );
                 })}
+                {!filteredRecentSessions.length && (
+                  <p className="session-history-empty" role="status">검색한 작업이 없습니다. 다른 이름으로 검색해 주세요.</p>
+                )}
+                {!!filteredRecentSessions.length && (
+                  <div className="session-history-footer">
+                    <span role="status" aria-live="polite">{visibleRecentSessions.length} / {filteredRecentSessions.length}개 표시</span>
+                    {visibleRecentSessions.length < filteredRecentSessions.length && (
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={() => setRecentSessionLimit(limit => limit + RECENT_SESSIONS_PAGE_SIZE)}
+                      >
+                        {Math.min(RECENT_SESSIONS_PAGE_SIZE, filteredRecentSessions.length - visibleRecentSessions.length)}개 더 보기
+                      </button>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -3623,7 +6799,6 @@ function ItemsRail({
               {pendingFiles.map((file, index) => {
                 const key = fileQueueKey(file);
                 const selected = selectedPendingFileKey === key;
-                const fastImage = !isDocumentLikeFile(file);
                 return (
                 <div
                   className={`source-queue-row ${selected ? 'is-selected' : ''}`}
@@ -3634,6 +6809,7 @@ function ItemsRail({
                   aria-label={`${file.name || '이름 없는 파일'} 미리보기`}
                   onClick={() => onSelectPendingFile?.(key)}
                   onKeyDown={e => {
+                    if (e.target !== e.currentTarget) return;
                     if (e.key !== 'Enter' && e.key !== ' ') return;
                     e.preventDefault();
                     onSelectPendingFile?.(key);
@@ -3641,39 +6817,13 @@ function ItemsRail({
                 >
                   <span className="idx">{String(index + 1).padStart(2, '0')}</span>
                   <div className="file">
-                    <div className="name">{file.name || '이름 없는 파일'}</div>
+                    <div className="name" title={file.name || '이름 없는 파일'}>{file.name || '이름 없는 파일'}</div>
                     <div className="meta">{sourceFileKindLabel(file)} · {formatBytes(file.size)}</div>
                   </div>
                   <button
-                    className="icon-btn queue-row-action"
-                    title="이 파일을 문제 파싱 없이 페이지 PNG로 등록"
-                    aria-label="이 파일 페이지 PNG 등록"
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.pagePng}
-                  </button>
-                  <button
-                    className="icon-btn queue-row-action"
-                    title="이 파일을 인식 없이 열고 직접 문제 영역을 그리기"
-                    aria-label="이 파일 수동 쪼개기"
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.pen}
-                  </button>
-                  <button
-                    className="icon-btn queue-row-action"
-                    title={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                    aria-label={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.aiBatch}
-                  </button>
-                  <button
-                    className="icon-btn"
+                    className="icon-btn queue-row-remove"
                     title="대기열에서 제거"
+                    aria-label="대기열에서 제거"
                     onClick={e => { e.stopPropagation(); removePendingFile(key); }}
                     disabled={queueBusy}
                   >
@@ -3683,48 +6833,26 @@ function ItemsRail({
               );})}
             </div>
             <div className="source-queue-actions">
+              <SplitModePicker
+                splitMode={splitMode}
+                setSplitMode={setSplitMode}
+                disabled={queueBusy}
+                compact
+                imageOnly={isImageOnlyFileBatch(pendingFiles)}
+              />
               <button
-                className="btn queue-action-card queue-action-page"
+                className="btn primary queue-split-action"
                 type="button"
-                title="대기열 전체를 문제 파싱 없이 페이지 PNG 자료로 등록"
-                onClick={() => processQueuedFiles('register')}
+                title={`${splitModeMeta(splitMode).description} · 끝나면 바로 칠판에 배치합니다`}
+                onClick={() => processQueuedFiles(normalizeSplitMode(splitMode))}
                 disabled={queueBusy}
               >
-                <span className="queue-action-icon">{Icon.pagePng}</span>
-                <span className="queue-action-copy">
-                  <strong>페이지 전체 넣기</strong>
-                  <small>한 페이지를 그대로 칠판에 배치</small>
-                </span>
-              </button>
-              <button
-                className="btn primary queue-action-card queue-action-ai"
-                type="button"
-                title={isImageOnlyFileBatch(pendingFiles) ? '이미지는 AI 보정 없이 빠르게 문항을 나눕니다' : '대기열 전체를 문제별로 문항 AI 인식'}
-                onClick={() => processQueuedFiles('recognize')}
-                disabled={queueBusy}
-              >
-                <span className="queue-action-icon">{Icon.aiBatch}</span>
-                <span className="queue-action-copy">
-                  <strong>{isImageOnlyFileBatch(pendingFiles) ? '빠른 문항 인식' : '문항 AI 인식'}</strong>
-                  <small>{isImageOnlyFileBatch(pendingFiles) ? '이미지 빠른 분할' : '문제별 자동 분리'}</small>
-                </span>
-              </button>
-              <button
-                className="btn queue-action-card queue-action-manual"
-                type="button"
-                title="대기열 전체를 인식 없이 열고 수동으로 문제 영역을 나누기"
-                onClick={() => processQueuedFiles('manual-split')}
-                disabled={queueBusy}
-              >
-                <span className="queue-action-icon">{Icon.pen}</span>
-                <span className="queue-action-copy">
-                  <strong>수동 쪼개기</strong>
-                  <small>가운데 미리보기에서 Ctrl+휠 확대</small>
-                </span>
+                {Icon[splitModeMeta(splitMode).icon] || Icon.check}
+                <span>{splitActionLabel(pendingFiles.length)}</span>
               </button>
               {!aiAvailable && (
                 <div className="source-queue-note full">
-                  Gemini 키 없음 · 기본 인식으로 실행
+                  AI 사용 꺼짐 또는 키 미설정 · 기본 인식으로 실행
                 </div>
               )}
             </div>
@@ -3732,77 +6860,195 @@ function ItemsRail({
           </div>
         )}
 
-        {items.map((it, i) => {
-          const dropPosition = dropTarget?.id === it.id ? dropTarget.position : null;
+        {!editScope && !!items.length && (
+          <div className={`problem-order-status ${selectedItemCount > 1 ? 'is-selection' : ''}`} id="problem-order-help">
+            {selectedItemCount > 1 ? (
+              <>
+                <strong>{selectedItemCount}개 선택</strong>
+                <span><kbd>Shift</kbd>+<kbd>↑</kbd><kbd>↓</kbd> 선택 · 드래그/{ALTERNATE_MODIFIER_LABEL} 이동</span>
+                <div className="rail-selection-tools" role="group" aria-label="선택 문제 일괄 작업">
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's1')} disabled={!!editScope || reorderBusy}>
+                    1단계
+                  </button>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's2')} disabled={!!editScope || reorderBusy}>
+                    원문 보존
+                  </button>
+                  <button className="btn" type="button" onClick={() => onApplySelectedStep?.(orderedSelectedIds, 's3')} disabled={!!editScope || reorderBusy}>
+                    고화질
+                  </button>
+                  <button className="btn" type="button" onClick={() => onClassifySelected?.(orderedSelectedIds, 'question')} disabled={!!editScope || reorderBusy}>
+                    문항
+                  </button>
+                  <button className="btn" type="button" onClick={() => onConfirmSelected?.(orderedSelectedIds)} disabled={!!editScope || reorderBusy}>
+                    {Icon.check} 확인
+                  </button>
+                  <button className="btn" type="button" onClick={() => onDownloadSelected?.(orderedSelectedIds)} disabled={!!editScope || reorderBusy}>
+                    {Icon.download} PNG
+                  </button>
+                  <button className="btn rail-selection-clear" type="button" onClick={clearRailSelection} disabled={!!editScope || reorderBusy}>
+                    해제
+                  </button>
+                  <button className="btn danger rail-selection-delete" type="button" onClick={removeSelectedItems} disabled={!!editScope || reorderBusy}>
+                    {Icon.trash} 삭제
+                  </button>
+                </div>
+              </>
+            ) : filterActive ? (
+              <span>모아보기 중 · 순서 변경은 전체 보기에서</span>
+            ) : (
+              <>
+                <span className="problem-order-icon" aria-hidden="true">{Icon.grip}</span>
+                <span
+                  className="problem-order-copy"
+                  title={`Shift 범위 선택 · ${PRIMARY_MODIFIER_NAME} 개별 선택 · 드래그 또는 ${ALTERNATE_MODIFIER_NAME}+↑↓ 이동`}
+                >
+                  {PRIMARY_MODIFIER_LABEL}/Shift 선택 <span aria-hidden="true">·</span> 끌어 이동
+                </span>
+              </>
+            )}
+            {reorderBusy && <strong role="status">순서 저장 중…</strong>}
+          </div>
+        )}
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {reorderAnnouncement}
+        </span>
+        {dragPreview && dragPreviewItem && ReactDOM.createPortal(
+          <div
+            ref={dragPreviewRef}
+            className="rail-drag-overlay editor-basic-mode"
+            style={{
+              '--drag-preview-width': `${dragPreview.width}px`,
+              '--drag-preview-height': `${dragPreview.height}px`,
+            }}
+            data-drag-count={dragPreview.count}
+            aria-hidden="true"
+          >
+            <div className="item rail-drag-overlay-card">
+              <div className="grip">
+                <span className="grip-icon">{Icon.grip}</span>
+                <span className="idx">{String(dragPreview.index + 1).padStart(2, '0')}</span>
+              </div>
+              <div className="thumb">
+                <TileImage item={dragPreviewItem} forceMode="raw" />
+              </div>
+              <div className="meta">
+                <div className="name">
+                  <span
+                    className={`status-dot ${reviewStatusClass(dragPreviewItem.reviewStatus)}`}
+                  />
+                  {problemDisplayName(dragPreviewItem, dragPreview.index)}
+                </div>
+                <div className="sub">
+                  {dragPreviewItem.step === 's1' && <span className="tag s1">1단계</span>}
+                  {dragPreviewItem.step === 's2' && <span className="tag s2">보존</span>}
+                  {dragPreviewItem.step === 's3' && <span className="tag s3">고화질</span>}
+                  {dragPreviewItem.step === 'raw' && <span className="tag">대기</span>}
+                  <span className="source-label">{problemSourceLabel(dragPreviewItem)}</span>
+                </div>
+              </div>
+            </div>
+            {dragPreview.count > 1 && (
+              <span className="rail-drag-count">{dragPreview.count}개 이동</span>
+            )}
+          </div>,
+          document.body
+        )}
+
+        {displayedItemRows.map(({ item: it, displayIndex: i }) => {
+          const itemId = String(it.id);
+          const isSelected = selectedItemIds.has(itemId);
+          const dropPosition = (
+            String(dropTarget?.id || '') === itemId
+              ? dropTarget.position
+              : null
+          );
           const isDownloading = downloadingItemId === it.id;
           const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
           const hasPageChrome = hasPageChromeArtifactFlag(it);
+          const originalNumber = originalProblemNumberInfo(it);
+          const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
+          const moveDirection = isJustMoved ? moveFeedback.direction : null;
           const downloadTitle = isDownloading
             ? '다운로드 준비 중'
             : canDownloadItem
               ? '이 자료 PNG 다운로드'
               : '다운로드할 이미지가 아직 없습니다';
           return (
+          <React.Fragment key={it.id}>
+          {dropPosition === 'before' && (
+            <div
+              className="rail-drop-slot"
+              data-drop-position="before"
+              aria-hidden="true"
+            />
+          )}
           <div
-            key={it.id}
             ref={el => {
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${draggingId === it.id ? 'dragging' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${pressedItemId === itemId ? 'is-pressed' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
-            onClick={() => {
-              if (suppressClickRef.current) return;
-              setActive(it.id);
+            data-edit-target={editScopeIds.has(itemId) ? "true" : undefined}
+            role="group"
+            tabIndex={editScope ? -1 : 0}
+            aria-current={activeId === it.id ? 'true' : undefined}
+            aria-busy={reorderBusy ? 'true' : undefined}
+            aria-roledescription={editScope ? '자르기 적용 범위' : filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
+            aria-keyshortcuts={editScope ? undefined : filterActive ? 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Enter Space Delete Backspace' : 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
+            aria-posinset={i + 1}
+            aria-setsize={displayedItemRows.length}
+            aria-describedby={editScope ? undefined : "problem-order-help"}
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${editScopeIds.has(itemId) ? ', 교체 대상' : ''}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
+            onClick={e => {
+              if (editScope || suppressClickRef.current) return;
+              selectRailItem(it.id, e);
             }}
-            onPointerDown={e => startPointerDrag(e, it.id)}
-            onPointerMove={movePointerDrag}
-            onPointerUp={finishPointerDrag}
-            onPointerCancel={finishPointerDrag}
-            onDragStart={e => {
-              dragId.current = it.id;
-              setDraggingId(it.id);
-              e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', it.id);
-            }}
-            onDragEnter={e => updateDropTarget(e, it.id)}
-            onDragOver={e => {
-              applyRailAutoScroll(e.clientX, e.clientY);
-              updateDropTarget(e, it.id);
-            }}
-            onDragLeave={e => {
-              if (e.currentTarget.contains(e.relatedTarget)) return;
-              if (dropTargetRef.current?.id === it.id) setCurrentDropTarget(null);
-            }}
-            onDrop={e => {
-              e.preventDefault();
-              const sourceId = e.dataTransfer.getData('text/plain') || dragId.current;
-              const position = dropPositionFromClientY(e.currentTarget.getBoundingClientRect(), e.clientY);
-              if (sourceId && sourceId !== it.id) {
-                setActive(sourceId);
-                reorder(sourceId, it.id, position, { resetPlacement: true });
+            onKeyDown={e => {
+              if (e.target !== e.currentTarget) return;
+              if (editScope) return;
+              if (applyRailSelectionKeyboard(it, e)) return;
+              if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+                e.preventDefault();
+                moveItemByKeyboard(it, e.key === 'ArrowUp' ? 'up' : 'down');
+                return;
               }
-              stopRailAutoScroll();
-              clearDragState();
-            }}
-            onDragEnd={() => {
-              stopRailAutoScroll();
-              clearDragState();
+              if ((e.key === 'Delete' || e.key === 'Backspace') && selectedItemCount > 0) {
+                e.preventDefault();
+                removeSelectedItems();
+                return;
+              }
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                selectRailItem(it.id, e);
+              }
             }}
           >
-            <div className="grip" title="끌어 옮기기">
+            <div
+              className="grip"
+              title="잡고 드래그해 순서 이동"
+              data-tooltip="잡고 드래그해 순서 이동"
+              aria-hidden="true"
+              onPointerDown={e => startPointerDrag(e, it.id)}
+            >
+              <span className="grip-icon">{Icon.grip}</span>
               <span className="idx">{String(i+1).padStart(2,'0')}</span>
+              {isJustMoved && (
+                <span className={`move-cue move-${moveDirection}`}>
+                  {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
+                </span>
+              )}
             </div>
             <div className="thumb">
               <TileImage item={it} forceMode="raw" />
             </div>
             <div className="meta">
-              <div className="name">
+              <div className={`name original-number-${originalNumber.status}`} title={`${originalNumber.description}\n자료명: ${it.name || ''}`}>
                 <span
                   className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
                   title={it.statusReason || it.statusLabel}
                 />
-                {problemDisplayName(it, i)}
+                <span className="original-number-label">{originalNumber.status === 'known' || originalNumber.status === 'inferred' ? problemDisplayName(it, i) : originalNumber.label}</span>
               </div>
               <div className="sub">
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
@@ -3815,12 +7061,40 @@ function ItemsRail({
             </div>
             <div className="actions">
               <button
+                className="icon-btn item-move-action"
+                type="button"
+                title="한 칸 위로"
+                data-tooltip="한 칸 위로 이동"
+                aria-label={`${problemDisplayName(it, i)} 한 칸 위로 이동`}
+                disabled={!!editScope || reorderBusy || filterActive || i === 0}
+                onClick={e => {
+                  e.stopPropagation();
+                  moveItemByKeyboard(it, 'up');
+                }}
+              >
+                {Icon.chevronUp}
+              </button>
+              <button
+                className="icon-btn item-move-action"
+                type="button"
+                title="한 칸 아래로"
+                data-tooltip="한 칸 아래로 이동"
+                aria-label={`${problemDisplayName(it, i)} 한 칸 아래로 이동`}
+                disabled={!!editScope || reorderBusy || filterActive || i === items.length - 1}
+                onClick={e => {
+                  e.stopPropagation();
+                  moveItemByKeyboard(it, 'down');
+                }}
+              >
+                {Icon.chevronDown}
+              </button>
+              <button
                 className="icon-btn item-download-action"
                 type="button"
                 title={downloadTitle}
                 data-tooltip={downloadTitle}
                 aria-label={`${problemDisplayName(it, i)} PNG 다운로드`}
-                disabled={!canDownloadItem || isDownloading}
+                disabled={!!editScope || !canDownloadItem || isDownloading}
                 onClick={e => {
                   e.stopPropagation();
                   if (!canDownloadItem || isDownloading) return;
@@ -3829,36 +7103,167 @@ function ItemsRail({
               >
                 {Icon.download}
               </button>
-              <button className="icon-btn" title="삭제" onClick={e => { e.stopPropagation(); removeItem(it.id); }}>
+              <button
+                className="icon-btn item-delete-action"
+                type="button"
+                disabled={!!editScope || reorderBusy}
+                title={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '삭제'}
+                data-tooltip={isSelected && selectedItemCount > 1 ? `선택한 ${selectedItemCount}개 삭제` : '이 자료 삭제'}
+                aria-label={isSelected && selectedItemCount > 1
+                  ? `선택한 ${selectedItemCount}개 삭제`
+                  : `${problemDisplayName(it, i)} 삭제`}
+                onClick={e => {
+                  e.stopPropagation();
+                  if (isSelected && selectedItemCount > 1) removeSelectedItems();
+                  else {
+                    removeItem(it.id);
+                    setSelectedItemIds(prev => {
+                      const next = new Set(prev);
+                      next.delete(itemId);
+                      return next;
+                    });
+                  }
+                }}
+              >
                 {Icon.trash}
               </button>
             </div>
           </div>
+          {dropPosition === 'after' && (
+            <div
+              className="rail-drop-slot"
+              data-drop-position="after"
+              aria-hidden="true"
+            />
+          )}
+          </React.Fragment>
         );})}
+        {hasSessionItems && visibleItemRows.length === 0 && (
+          <div className="material-filter-empty">
+            <strong>해당 자료가 없습니다</strong>
+            <small>분류를 수정하거나 전체 보기로 돌아가세요.</small>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 // ─── CENTER: big scrollable board stage ──
-function BoardStage({ items, activeId, setActive, boardColor, boardColumns, fileName, addSample, setPlacement, reorder }){
+function buildClassinPageBands(layout, pageH, classinPageCount){
+  const pageCount = Math.min(Math.max(1, classinPageCount), 200);
+  const starts = Array.from({ length: pageCount }, () => []);
+  const covered = new Array(pageCount).fill(false);
+  layout.positions.forEach((placement, index) => {
+    if (!placement) return;
+    // Labels follow the visible problem, including a manual vertical move,
+    // rather than the beginning of its reserved row.
+    const rowStartPages = Math.max(0, Number(placement.startPages) || 0);
+    const renderedHeightPages = Math.max(0, Number(placement.renderedHeightPages) || 0);
+    const verticalRoomPages = Math.max(0, (Number(placement.rowHeightPages) || 0) - renderedHeightPages);
+    const visualStartPages = rowStartPages + normalizePlacementYRatio(placement.yRatio) * verticalRoomPages;
+    const startPage = Math.floor((visualStartPages + PLACEMENT_EPSILON_PAGES) / DEFAULT_SLOT_HEIGHT_PAGES);
+    const endPage = Math.ceil((visualStartPages + renderedHeightPages - PLACEMENT_EPSILON_PAGES) / DEFAULT_SLOT_HEIGHT_PAGES) - 1;
+    if (startPage < pageCount) starts[startPage].push(String(index + 1).padStart(2, '0'));
+    for (let page = startPage; page <= Math.min(endPage, pageCount - 1); page += 1) covered[page] = true;
+  });
+  return starts.map((numbers, index) => ({
+    page: index + 1,
+    top: index * DEFAULT_SLOT_HEIGHT_PAGES * pageH,
+    offsetPages: index * DEFAULT_SLOT_HEIGHT_PAGES,
+    label: numbers.length
+      ? `${numbers.slice(0, 3).join('·')}${numbers.length > 3 ? ` +${numbers.length - 3}` : ''}번`
+      : covered[index] ? '앞 문항 이어짐' : '판서 공간',
+  }));
+}
+
+function BoardStage({
+  items, activeId, setActive, boardColor, boardColumns, layoutGapMode, fileName, addSample,
+  setPlacement, reorder, moveFeedback, selectedIds, setSelectedIds, savedScrollTop, onSaveScrollTop,
+  reducePlacementGap, interactionBusy = false,
+  focusMode = false, reviewAttentionCount = 0, onOpenPendingReview,
+  panelCollapsed = false, onOpenPanel, panelReopenRef,
+  recentSessions = [], onRestoreRecentSession, restoringSessionId, recentSessionRestoreBlocked = false,
+  handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null,
+  aiEnabled = true, userSettings = null,
+  onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
+}){
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
   const previousTileRects = useRef(new Map());
   const previousBoardOrder = useRef('');
   const syncLock = useRef(0);
+  const syncLockOriginIdRef = useRef(null);
   const positionDragRef = useRef(null);
+  const positionDragFrameRef = useRef(null);
   const suppressClickRef = useRef(null);
+  const selectionAnchorRef = useRef(null);
   const boardDropTargetRef = useRef(null);
-  const autoScrollRef = useRef({ raf: null, clientY: null });
+  const autoScrollRef = useRef({
+    raf: null,
+    clientX: null,
+    clientY: null,
+    direction: 0,
+    edgeEnteredAt: null,
+    lastFrameAt: null,
+  });
+  const scrollSyncFrameRef = useRef(null);
+  const restoredScrollRef = useRef(false);
+  const previewFocusRequestRef = useRef(null);
+  const boardScrollTopRef = useRef(Number(savedScrollTop) || 0);
   const [positioningId, setPositioningId] = useState(null);
   const [boardDropTarget, setBoardDropTarget] = useState(null);
   const [dragMagnet, setDragMagnet] = useState(null);
-  const [pageH, setPageH] = useState(400);
+  const [smartMove, setSmartMove] = useStoredPreference('edb.boardSmartMove', false, isStoredBoolean);
+  const [basePageH, setBasePageH] = useState(400 / DEFAULT_SLOT_HEIGHT_PAGES);
+  const [manualPreviewZoom, setPreviewZoom] = useState(1);
+  const [previewFitActive, setPreviewFitActive] = useState(false);
+  const [estimateDetailsOpen, setEstimateDetailsOpen] = useState(false);
+  const estimateToggleRef = useRef(null);
+  const estimateDetailsRef = useRef(null);
+  const closeEstimateDetails = () => {
+    setEstimateDetailsOpen(false);
+    estimateToggleRef.current?.focus({ preventScroll: true });
+  };
+  useLayoutEffect(() => {
+    if (!estimateDetailsOpen) return;
+    const panel = estimateDetailsRef.current;
+    const placeDetails = () => {
+      const rect = estimateToggleRef.current?.getBoundingClientRect();
+      if (!rect || !panel) return;
+      panel.style.setProperty('--estimate-left', `${Math.max(12, Math.min(rect.left, window.innerWidth - 372))}px`);
+      panel.style.setProperty('--estimate-top', `${Math.max(12, Math.min(rect.bottom + 8, window.innerHeight - 240))}px`);
+    };
+    placeDetails();
+    panel?.focus({ preventScroll: true });
+    const onKeyDown = event => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeEstimateDetails();
+    };
+    const onPointerDown = event => {
+      if (panel?.contains(event.target) || estimateToggleRef.current?.contains(event.target)) return;
+      closeEstimateDetails();
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('resize', placeDetails);
+    window.addEventListener('scroll', placeDetails, true);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('resize', placeDetails);
+      window.removeEventListener('scroll', placeDetails, true);
+    };
+  }, [estimateDetailsOpen]);
   const [contentW, setContentW] = useState(0);
   const columnCount = normalizeBoardColumns(boardColumns);
-  const boardOrderSignature = items.map(item => String(item.id)).join('|');
+  const boardOrderSignature = useMemo(
+    () => items.map(item => String(item.id)).join('|'),
+    [items]
+  );
 
   const captureBoardTileRects = () => {
     const nextRects = new Map();
@@ -3870,31 +7275,73 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     previousTileRects.current = nextRects;
   };
 
-  // measure page (viewport) height
+  // One ClassIn page is 1.2 layout units. Measure usable viewport height only
+  // for explicit "fit selected item"; normal page proportions follow width.
+  // Both preview modes are display-only and never reach export data.
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const measure = () => setPageH(el.clientHeight || 400);
+    const measure = () => {
+      const style = window.getComputedStyle(el);
+      const height = el.clientHeight || 400;
+      const nextBasePageH = boardPreviewBasePageHeight(
+        height,
+        Number.parseFloat(style.paddingTop) || 0,
+        Number.parseFloat(style.paddingBottom) || 0
+      );
+      const drag = positionDragRef.current;
+      if (drag && height !== drag.viewportHeight) cancelPositionDrag({ pointerId: drag.pointerId });
+      setBasePageH(previous => (
+        Math.abs(previous - nextBasePageH) < 0.25 ? previous : nextBasePageH
+      ));
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [Boolean(items.length)]);
 
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    const measure = () => setContentW(el.clientWidth || 0);
+    const measure = () => {
+      const width = el.clientWidth || 0;
+      const drag = positionDragRef.current;
+      if (drag && width !== drag.contentWidth) cancelPositionDrag({ pointerId: drag.pointerId });
+      setContentW(previous => Math.abs(previous - width) < 0.25 ? previous : width);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [Boolean(items.length)]);
 
-  // Compute board positions with row height shared by neighboring columns.
+  // Reflow is independent of display-only preview zoom. Keep it stable while
+  // zooming so large science/physics sets do not recompute every placement.
+  const layoutItems = useMemo(
+    () => reflowItemsForBoardOrder(
+      items,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      columnCount,
+      layoutGapMode
+    ),
+    [items, columnCount, layoutGapMode]
+  );
+  const fitPreviewItem = useMemo(
+    () => layoutItems.find(item => String(item.id) === String(activeId)),
+    [layoutItems, activeId]
+  );
+  const previewZoom = previewFitActive && fitPreviewItem
+    ? boardPreviewZoomForRenderedHeight(itemRenderedHeightPages(fitPreviewItem))
+    : manualPreviewZoom;
+  const previewBasePageH = previewFitActive && fitPreviewItem
+    ? basePageH
+    : contentW * EDB_CANVAS_PAGE_HEIGHT_PX / EDB_CANVAS_WIDTH_PX;
+  const pageH = Math.max(previewFitActive ? Number.EPSILON : 24, previewBasePageH * previewZoom);
+
+  // Compute pixel positions with row height shared by neighboring columns.
   const layout = useMemo(() => {
     const EPS = 0.001;
-    const layoutItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, columnCount);
     const positions = layoutItems.map((it) => {
       const startPages = Math.max(0, it.startYPages || 0);
       const heightPages = itemHeightPages(it);
@@ -3903,10 +7350,9 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       const top = startPages * pageH;
       const height = heightPages * pageH;
       const rowHeightPages = Math.max(0, snappedNext - startPages);
-      const rawMagnetColumnIndex = Number(it.placementMagnetColumnIndex ?? it.placement_magnet_column_index);
-      const displayColumnIndex = Number.isFinite(rawMagnetColumnIndex)
-        ? Math.max(0, Math.min((it.boardColumnCount || columnCount) - 1, Math.round(rawMagnetColumnIndex)))
-        : (it.boardColumnIndex || 0);
+      const displayColumnIndex = normalizePlacementMagnetColumnIndex(
+        it, it.boardColumnCount || columnCount
+      ) ?? (it.boardColumnIndex || 0);
       return {
         top,
         height,
@@ -3936,10 +7382,57 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     const totalH = endTop + endH;
     const totalPages = Math.max(1, Math.ceil(totalH / pageH));
     return { items: layoutItems, positions, endTop, endH, totalH, totalPages, usesPlacement: true };
-  }, [items, pageH, columnCount]);
+  }, [layoutItems, pageH, columnCount]);
 
+  const previewEstimate = useMemo(
+    () => deriveBoardPreviewEstimate(layout.items, activeId, DEFAULT_SLOT_HEIGHT_PAGES),
+    [layout.items, activeId]
+  );
   const [currentPage, setCurrentPage] = useState(1);
-  const visibleCurrentPage = Math.min(currentPage, layout.totalPages);
+  const visibleCurrentPage = Math.min(
+    currentPage,
+    Math.max(1, previewEstimate.classinPageCount)
+  );
+
+  useLayoutEffect(() => {
+    if (restoredScrollRef.current || !scrollRef.current) return;
+    restoredScrollRef.current = true;
+    syncLock.current = Date.now();
+    syncLockOriginIdRef.current = activeId == null ? null : String(activeId);
+    scrollRef.current.scrollTop = Math.max(0, boardScrollTopRef.current);
+    setCurrentPage(Math.min(
+      Math.max(1, previewEstimate.classinPageCount),
+      classinBoardPageNumberAtOffset(scrollRef.current.scrollTop / pageH)
+    ));
+  }, [previewEstimate.classinPageCount, pageH]);
+
+  useEffect(() => () => {
+    onSaveScrollTop?.(boardScrollTopRef.current);
+  }, [onSaveScrollTop]);
+  const [pageGuides, setPageGuides] = useState(() => {
+    try {
+      return window.localStorage?.getItem(BOARD_PAGE_GUIDES_KEY) !== '0';
+    } catch (_err) {
+      return true;
+    }
+  });
+  const togglePageGuides = () => {
+    setPageGuides(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem(BOARD_PAGE_GUIDES_KEY, next ? '1' : '0'); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  };
+  // One band per board page, labelled with the problems that start on it.
+  const pageBands = useMemo(() => buildClassinPageBands(layout, pageH, previewEstimate.classinPageCount), [layout, pageH, previewEstimate.classinPageCount]);
+  const goToPage = (pageNumber) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const nextPage = Math.max(1, Math.min(Math.max(1, previewEstimate.classinPageCount), pageNumber));
+    setCurrentPage(nextPage);
+    // Land just above the page line so its header chip stays in view.
+    smoothScrollTo(container, Math.max(0, (nextPage - 1) * DEFAULT_SLOT_HEIGHT_PAGES * pageH + BOARD_PAGE_SCROLL_OFFSET_PX));
+  };
 
   useLayoutEffect(() => {
     const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== boardOrderSignature);
@@ -3954,12 +7447,22 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
         const dx = previous.left - rect.left;
         const dy = previous.top - rect.top;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+          const isMovedItem = String(moveFeedback?.id || '') === String(item.id);
           el.animate(
-            [
-              { transform: `translate(${dx}px, ${dy}px)`, opacity: 0.72 },
-              { transform: 'translate(0, 0)', opacity: 1 },
-            ],
-            { duration: 360, easing: 'cubic-bezier(.2,.82,.2,1)' }
+            isMovedItem
+              ? [
+                  { transform: `translate(${dx}px, ${dy}px) scale(.97)`, opacity: .68 },
+                  { transform: 'translate(0, 0) scale(1.025)', opacity: 1, offset: .76 },
+                  { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+                ]
+              : [
+                  { transform: `translate(${dx}px, ${dy}px)`, opacity: .76 },
+                  { transform: 'translate(0, 0)', opacity: 1 },
+                ],
+            {
+              duration: isMovedItem ? 520 : 380,
+              easing: isMovedItem ? 'cubic-bezier(.16,1,.3,1)' : 'cubic-bezier(.2,.82,.2,1)',
+            }
           );
         }
       }
@@ -3968,7 +7471,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     previousTileRects.current = nextRects;
     previousBoardOrder.current = boardOrderSignature;
 
-    if (!orderChanged || !activeId) return;
+    if (!orderChanged || !activeId || previewFitActive) return;
     const activeIndex = items.findIndex(item => item.id === activeId);
     const container = scrollRef.current;
     const activePlacement = layout.positions[activeIndex];
@@ -3976,80 +7479,222 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     window.requestAnimationFrame(() => {
       smoothScrollTo(container, Math.max(0, activePlacement.top - 12), reduceMotion ? 0 : 420);
     });
-  }, [boardOrderSignature, pageH, contentW, columnCount]);
+  }, [boardOrderSignature, pageH, contentW, columnCount, previewFitActive]);
 
   // when activeId changes externally, scroll the board to it
   useEffect(() => {
-    if (Date.now() - syncLock.current < 450) return;
+    if (previewFitActive) return;
+    // Suppress only the selection generated by this board's own scroll/click.
+    // A rail selection must still navigate immediately after restoring scroll.
+    if (Date.now() - syncLock.current < 450
+      && activeId != null && syncLockOriginIdRef.current === String(activeId)) return;
+    syncLockOriginIdRef.current = null;
     const container = scrollRef.current;
     const idx = items.findIndex(x => x.id === activeId);
     if (!container || idx < 0) return;
-    const target = Math.max(0, layout.positions[idx].top - 8);
+    const position = layout.positions[idx];
+    const target = Math.max(0, position.top + (position.yRatio || 0) * Math.max(0, (position.rowHeightPages || 0) - (position.renderedHeightPages || 0)) * pageH - 8);
     if (Math.abs(container.scrollTop - target) < 6) return;
     smoothScrollTo(container, target);
-  }, [activeId, boardOrderSignature, pageH, columnCount]);
+  }, [activeId, boardOrderSignature, pageH, columnCount, previewFitActive]);
 
-  const onScroll = () => {
+  const syncBoardScrollState = () => {
     const c = scrollRef.current;
     if (!c) return;
-    const nextPage = Math.min(layout.totalPages, Math.floor(c.scrollTop / pageH) + 1);
+    const nextPage = Math.min(
+      Math.max(1, previewEstimate.classinPageCount),
+      classinBoardPageNumberAtOffset(c.scrollTop / pageH)
+    );
     setCurrentPage(prev => prev === nextPage ? prev : nextPage);
+    // Intermediate frames of a selection-driven scroll must keep its target
+    // selected; direct wheel or pointer input cancels that scroll below.
+    if (positionDragRef.current || previewFitActive || c.__scrollResolve) return;
     const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
     const id = items[nearestIdx]?.id;
     if (id && id !== activeId){
       syncLock.current = Date.now();
+      syncLockOriginIdRef.current = String(id);
       setActive(id);
     }
   };
 
-  const onTileClick = (id) => {
+  const onScroll = () => {
+    boardScrollTopRef.current = scrollRef.current?.scrollTop || 0;
+    if (scrollSyncFrameRef.current != null) return;
+    scrollSyncFrameRef.current = window.requestAnimationFrame(() => {
+      scrollSyncFrameRef.current = null;
+      syncBoardScrollState();
+    });
+  };
+
+  useEffect(() => () => {
+    if (scrollSyncFrameRef.current != null) {
+      window.cancelAnimationFrame(scrollSyncFrameRef.current);
+      scrollSyncFrameRef.current = null;
+    }
+  }, []);
+
+  const onTileClick = (id, event = {}) => {
     if (suppressClickRef.current === id) return;
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = String(id);
+    const orderedIds = items.map(item => String(item.id));
+    const result = applySelectionClick(
+      orderedIds,
+      Array.from(selectedIds || []),
+      selectionAnchorRef.current || activeId,
+      id,
+      event
+    );
+    selectionAnchorRef.current = result.anchorId;
+    setSelectedIds?.(new Set(result.selectedIds));
     setActive(id);
   };
 
-  const fitActiveTileInView = () => {
+  const focusActiveTileAtPreviewZoom = (value) => {
     const container = scrollRef.current;
     const idx = items.findIndex(x => x.id === activeId);
     if (!container || idx < 0) return;
-    const target = Math.max(0, layout.positions[idx].top - 8);
+    const nextZoom = normalizeBoardPreviewZoom(value);
     syncLock.current = Date.now();
-    smoothScrollTo(container, target);
+    syncLockOriginIdRef.current = String(activeId);
+    setPreviewFitActive(false);
+    setPreviewZoom(nextZoom);
+    previewFocusRequestRef.current = String(activeId);
+    if (Math.abs(nextZoom - previewZoom) < 0.001) {
+      const tileTop = tileRefs.current[activeId]?.offsetTop ?? layout.positions[idx].top;
+      smoothScrollTo(container, Math.max(0, tileTop - 8));
+      return;
+    }
   };
+
+  const fitActiveTileInView = () => {
+    const idx = items.findIndex(x => x.id === activeId);
+    const placement = layout.positions[idx];
+    const container = scrollRef.current;
+    if (!placement || !container) return;
+    syncLock.current = Date.now();
+    syncLockOriginIdRef.current = String(activeId);
+    previewFocusRequestRef.current = String(activeId);
+    setPreviewFitActive(true);
+    if (previewFitActive) {
+      const tileTop = tileRefs.current[activeId]?.offsetTop ?? placement.top;
+      smoothScrollTo(container, Math.max(0, tileTop - 8), 0);
+    }
+  };
+
+  useLayoutEffect(() => {
+    const requestedId = previewFocusRequestRef.current || (previewFitActive ? String(activeId || '') : '');
+    if (!requestedId || !scrollRef.current) return;
+    const idx = items.findIndex(item => String(item.id) === requestedId);
+    const placement = layout.positions[idx];
+    if (!placement) return;
+    previewFocusRequestRef.current = null;
+    syncLock.current = Date.now();
+    syncLockOriginIdRef.current = requestedId;
+    const tileTop = tileRefs.current[requestedId]?.offsetTop ?? placement.top;
+    smoothScrollTo(scrollRef.current, Math.max(0, tileTop - 8), 0);
+  }, [pageH, boardOrderSignature, activeId, previewFitActive, layout.positions, contentW]);
 
   const setCurrentBoardDropTarget = (target) => {
     boardDropTargetRef.current = target;
     setBoardDropTarget(prev => (
-      prev?.id === target?.id && prev?.position === target?.position ? prev : target
+      prev?.id === target?.id && prev?.position === target?.position
+        && prev?.mode === target?.mode && prev?.removableGapPages === target?.removableGapPages ? prev : target
     ));
   };
 
-  const findBoardDropTarget = (clientY, sourceId) => {
+  const findBoardDropTarget = (clientX, clientY, sourceId) => {
     const content = contentRef.current;
-    if (!content || !items.length) return null;
-    const rect = content.getBoundingClientRect();
-    const contentY = clientY - rect.top;
-    let lastCandidateId = null;
-    for (let index = 0; index < layout.positions.length; index += 1) {
-      const placement = layout.positions[index];
+    const scroll = scrollRef.current;
+    if (!content || !scroll || !items.length) return null;
+    const scrollRect = scroll.getBoundingClientRect();
+    if (
+      Number.isFinite(Number(clientX))
+      && (clientX < scrollRect.left || clientX > scrollRect.right)
+    ) {
+      return null;
+    }
+    const contentRect = content.getBoundingClientRect();
+    const candidates = [];
+    for (let index = 0; index < items.length; index += 1) {
       const item = items[index];
       if (!item?.id || item.id === sourceId) continue;
-      lastCandidateId = item.id;
-      const midpoint = placement.top + (placement.height / 2);
-      if (contentY < midpoint) {
-        return { id: item.id, position: 'before' };
+      const placement = layout.positions[index];
+      const tileRect = tileRefs.current[item.id]?.getBoundingClientRect?.();
+      const fallbackRect = placement ? {
+        top: contentRect.top + placement.top,
+        bottom: contentRect.top + placement.top + placement.height,
+        left: contentRect.left,
+        right: contentRect.right,
+        width: contentRect.width,
+        height: placement.height,
+      } : null;
+      const rect = tileRect && tileRect.height > 0 ? tileRect : fallbackRect;
+      if (rect) candidates.push({ id: item.id, index, rect });
+    }
+    if (!candidates.length) return null;
+
+    let candidateIndex = 0;
+    while (candidateIndex < candidates.length) {
+      const first = candidates[candidateIndex];
+      const row = [first];
+      candidateIndex += 1;
+      while (
+        candidateIndex < candidates.length
+        && Math.abs(candidates[candidateIndex].rect.top - first.rect.top) <= 12
+      ) {
+        row.push(candidates[candidateIndex]);
+        candidateIndex += 1;
+      }
+      const rowTop = Math.min(...row.map(candidate => candidate.rect.top));
+      const rowBottom = Math.max(...row.map(candidate => candidate.rect.bottom));
+      if (clientY < rowTop) {
+        return { id: row[0].id, position: 'before' };
+      }
+      if (clientY <= rowBottom) {
+        const horizontal = row.slice().sort((a, b) => a.rect.left - b.rect.left || a.index - b.index);
+        for (const candidate of horizontal) {
+          if (clientX < candidate.rect.left + candidate.rect.width / 2) {
+            return { id: candidate.id, position: 'before' };
+          }
+        }
+        return { id: horizontal[horizontal.length - 1].id, position: 'after' };
       }
     }
-    return lastCandidateId ? { id: lastCandidateId, position: 'after' } : null;
+    return { id: candidates[candidates.length - 1].id, position: 'after' };
   };
 
-  const updateBoardDropTarget = (clientY, sourceId, force = false) => {
+  const findSmartBoardDropTarget = (clientX, clientY, drag) => {
+    const scrollDeltaY = (scrollRef.current?.scrollTop || 0) - drag.startScrollTop;
+    const candidates = layout.items.map(item => {
+      const rect = item.id === drag.id
+        ? { ...drag.sourceRect, top: drag.sourceRect.top - scrollDeltaY, bottom: drag.sourceRect.bottom - scrollDeltaY }
+        : tileRefs.current[item.id]?.getBoundingClientRect?.();
+      return { id: item.id, rect };
+    });
+    const target = resolveSmartBoardDropTarget(candidates, clientX, clientY, drag.id);
+    if (target?.mode !== 'gap') return target;
+    return { ...target, removableGapPages: derivePlacementGapActionFromLayout(layout.items, target.id).removableGapPages };
+  };
+
+  const updateBoardDropTarget = (clientX, clientY, sourceId, force = false) => {
     const drag = positionDragRef.current;
-    if (!force && drag && Math.abs(clientY - drag.startY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
+    if (drag?.smartMode) {
+      const target = drag.moved ? findSmartBoardDropTarget(clientX, clientY, drag) : null;
+      setCurrentBoardDropTarget(target);
+      return target;
+    }
+    if (drag && !drag.reorderMode) {
       setCurrentBoardDropTarget(null);
       return null;
     }
-    const target = findBoardDropTarget(clientY, sourceId);
+    const dragDistanceY = drag?.contentDy ?? (drag ? clientY - drag.startY : 0);
+    if (!force && drag && Math.abs(dragDistanceY) < BOARD_DRAG_REORDER_THRESHOLD_PX) {
+      setCurrentBoardDropTarget(null);
+      return null;
+    }
+    const target = findBoardDropTarget(clientX, clientY, sourceId);
     setCurrentBoardDropTarget(target);
     return target;
   };
@@ -4058,34 +7703,116 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     if (autoScrollRef.current.raf) {
       cancelAnimationFrame(autoScrollRef.current.raf);
     }
-    autoScrollRef.current = { raf: null, clientY: null };
+    autoScrollRef.current = {
+      raf: null,
+      clientX: null,
+      clientY: null,
+      direction: 0,
+      edgeEnteredAt: null,
+      lastFrameAt: null,
+    };
   };
 
-  const stepBoardAutoScroll = () => {
+  const updatePositionDragVisual = (drag, clientX, clientY) => {
+    const scroll = scrollRef.current;
+    if (!drag || !scroll) return;
+    drag.lastClientX = clientX;
+    drag.lastClientY = clientY;
+    const rawDx = clientX - drag.startX;
+    const scrollDeltaY = scroll.scrollTop - drag.startScrollTop;
+    const contentDy = clientY - drag.startY + scrollDeltaY;
+    const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + rawDx));
+    const rawVisualDx = nextLeft - drag.startLeft;
+    const vertical = verticalBoardDragPatch(drag.item, drag.rowSpanPages, drag.startTopOffset / drag.pageH, contentDy / drag.pageH);
+    const rawXRatio = drag.maxLeft > 0
+      ? nextLeft / drag.maxLeft
+      : DEFAULT_PLACEMENT_X_RATIO;
+    drag.currentDxPx = rawVisualDx;
+    drag.contentDy = contentDy;
+    const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
+    const nextXRatio = magnet.ratio;
+    const visualDx = drag.reorderMode || drag.smartMode ? rawVisualDx : nextXRatio * drag.maxLeft - drag.startLeft;
+    drag.pendingPlacement = {
+      xRatio: nextXRatio,
+      yRatio: vertical.yRatio,
+      extraSlots: vertical.extraSlots,
+      magnetColumnIndex: magnet.snapped ? magnet.index : null,
+    };
+    const visualDy = drag.reorderMode || drag.smartMode ? contentDy : vertical.offsetPages * drag.pageH - drag.startTopOffset;
+    drag.tile.style.transform = `translate3d(${visualDx}px, ${visualDy}px, 0)`;
+    drag.tile.style.zIndex = '12';
+    const magnetKey = !drag.smartMode && magnet.snapped ? `${magnet.index}:${magnet.ratio}` : '';
+    if (magnetKey !== drag.lastMagnetKey) {
+      drag.lastMagnetKey = magnetKey;
+      setDragMagnet(magnet.snapped ? {
+        index: magnet.index,
+        ratio: magnet.ratio,
+        distancePx: magnet.distancePx,
+      } : null);
+    }
+  };
+
+  const stepBoardAutoScroll = (timestamp) => {
     const drag = positionDragRef.current;
     const scroll = scrollRef.current;
+    const clientX = autoScrollRef.current.clientX;
     const clientY = autoScrollRef.current.clientY;
     if (!drag || !scroll || clientY == null) {
       stopBoardAutoScroll();
       return;
     }
     const rect = scroll.getBoundingClientRect();
-    const delta = edgeAutoScrollDelta(
+    if (clientX < rect.left || clientX > rect.right) {
+      stopBoardAutoScroll();
+      return;
+    }
+    const baseDelta = edgeAutoScrollDelta(
       rect,
       clientY,
       BOARD_DRAG_AUTOSCROLL_EDGE_PX,
       BOARD_DRAG_AUTOSCROLL_MAX_PX
     );
-    if (delta) {
-      scroll.scrollTop = Math.max(0, Math.min(scroll.scrollHeight - scroll.clientHeight, scroll.scrollTop + delta));
-      updateBoardDropTarget(clientY, drag.id);
+    const direction = Math.sign(baseDelta);
+    if (!direction) {
+      autoScrollRef.current.direction = 0;
+      autoScrollRef.current.edgeEnteredAt = null;
+      autoScrollRef.current.lastFrameAt = null;
+      autoScrollRef.current.raf = null;
+      return;
+    }
+    if (direction !== autoScrollRef.current.direction) {
+      autoScrollRef.current.direction = direction;
+      autoScrollRef.current.edgeEnteredAt = timestamp;
+      autoScrollRef.current.lastFrameAt = timestamp;
+    }
+    const edgeEnteredAt = autoScrollRef.current.edgeEnteredAt ?? timestamp;
+    const lastFrameAt = autoScrollRef.current.lastFrameAt ?? timestamp;
+    const delta = acceleratedEdgeAutoScrollDelta(
+      rect,
+      clientY,
+      BOARD_DRAG_AUTOSCROLL_EDGE_PX,
+      BOARD_DRAG_AUTOSCROLL_MAX_PX,
+      Math.max(0, timestamp - edgeEnteredAt),
+      Math.max(4, timestamp - lastFrameAt || (1000 / 60))
+    );
+    autoScrollRef.current.lastFrameAt = timestamp;
+    const previousTop = scroll.scrollTop;
+    const nextTop = Math.max(
+      0,
+      Math.min(scroll.scrollHeight - scroll.clientHeight, previousTop + delta)
+    );
+    scroll.scrollTop = nextTop;
+    if (Math.abs(nextTop - previousTop) > 0.01) {
+      updatePositionDragVisual(drag, clientX ?? drag.lastClientX, clientY);
+      updateBoardDropTarget(clientX ?? drag.lastClientX, clientY, drag.id);
       autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
     } else {
       autoScrollRef.current.raf = null;
     }
   };
 
-  const applyBoardAutoScroll = (clientY) => {
+  const applyBoardAutoScroll = (clientX, clientY) => {
+    autoScrollRef.current.clientX = clientX;
     autoScrollRef.current.clientY = clientY;
     if (!autoScrollRef.current.raf) {
       autoScrollRef.current.raf = requestAnimationFrame(stepBoardAutoScroll);
@@ -4096,27 +7823,45 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
 
   const removePositionDragWindowListeners = (drag = positionDragRef.current) => {
     if (!drag) return;
+    if (positionDragFrameRef.current != null) {
+      window.cancelAnimationFrame(positionDragFrameRef.current);
+      positionDragFrameRef.current = null;
+    }
     if (drag.windowPointerMove) {
       window.removeEventListener('pointermove', drag.windowPointerMove);
       drag.windowPointerMove = null;
     }
     if (drag.windowPointerEnd) {
       window.removeEventListener('pointerup', drag.windowPointerEnd);
-      window.removeEventListener('pointercancel', drag.windowPointerEnd);
       drag.windowPointerEnd = null;
     }
+    if (drag.windowPointerCancel) {
+      window.removeEventListener('pointercancel', drag.windowPointerCancel);
+      drag.windowPointerCancel = null;
+    }
+    window.removeEventListener('blur', drag.windowBlur);
+    window.removeEventListener('keydown', drag.windowKeyDown);
+    drag.captureTarget?.removeEventListener('lostpointercapture', drag.windowPointerCancelCapture);
   };
 
   useEffect(() => () => removePositionDragWindowListeners(), []);
 
   const beginPositionDrag = (evt, item, placement) => {
-    if (evt.button !== 0 || !contentRef.current) return;
+    if (evt.button !== 0 || interactionBusy || !contentRef.current || positionDragRef.current) return;
+    const tile = tileRefs.current[item.id];
+    if (!tile) return;
+    evt.preventDefault();
+    cancelSmoothScroll(scrollRef.current);
     const contentRect = contentRef.current.getBoundingClientRect();
-    const tileRect = evt.currentTarget.getBoundingClientRect();
+    const tileRect = tile.getBoundingClientRect();
+    const scroll = scrollRef.current;
     const maxLeft = Math.max(1, contentRect.width - tileRect.width);
     const maxTopOffset = Math.max(0, (placement.snappedNext * pageH) - placement.top - tileRect.height);
     const startXRatio = normalizePlacementXRatio(placement.xRatio);
     const startYRatio = normalizePlacementYRatio(placement.yRatio);
+    const layoutItem = layout.items.find(candidate => candidate.id === item.id) || item;
+    const rowSpanPages = placement.snappedNext - placement.startPages;
+    const maximumOffset = verticalBoardDragPatch(layoutItem, rowSpanPages, 0, Number.MAX_VALUE).offsetPages;
     const startMagnet = nearestBoardColumnMagnet(
       startXRatio,
       placement.columnCount || columnCount,
@@ -4127,8 +7872,22 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       id: item.id,
       pointerId: evt.pointerId,
       captureTarget: evt.currentTarget,
+      tile,
+      item: layoutItem,
+      pageH,
+      viewportHeight: scroll?.clientHeight || 400,
+      rowSpanPages,
+      contentWidth: contentRef.current.clientWidth,
+      reorderMode: evt.altKey,
+      smartMode: smartMove && !evt.altKey,
+      sourceRect: { left: tileRect.left, right: tileRect.right, top: tileRect.top, bottom: tileRect.bottom, width: tileRect.width, height: tileRect.height },
+      contentHeight: contentRef.current.style.height,
+      extendedContentHeight: `${layout.totalH + Math.max(0, maximumOffset * pageH - maxTopOffset)}px`,
       startX: evt.clientX,
       startY: evt.clientY,
+      lastClientX: evt.clientX,
+      lastClientY: evt.clientY,
+      startScrollTop: scroll?.scrollTop || 0,
       startLeft: startXRatio * maxLeft,
       startTopOffset: startYRatio * maxTopOffset,
       maxLeft,
@@ -4138,19 +7897,35 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       startMagnetColumnIndex: startMagnet.snapped ? startMagnet.index : null,
       lastXRatio: startXRatio,
       lastYRatio: startYRatio,
+      lastMagnetKey: '',
+      contentDy: 0,
+      pendingPlacement: null,
       moved: false,
     };
     drag.windowPointerMove = event => movePositionDrag(event);
     drag.windowPointerEnd = event => endPositionDrag(event);
+    drag.windowPointerCancel = event => cancelPositionDrag(event);
+    drag.windowBlur = () => cancelPositionDrag({ pointerId: drag.pointerId });
+    drag.windowKeyDown = event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancelPositionDrag({ pointerId: drag.pointerId });
+      }
+    };
+    drag.windowPointerCancelCapture = () => cancelPositionDrag({ pointerId: drag.pointerId });
     positionDragRef.current = drag;
     setPositioningId(item.id);
     setCurrentBoardDropTarget(null);
     syncLock.current = Date.now();
+    syncLockOriginIdRef.current = String(item.id);
     setActive(item.id);
     evt.currentTarget.setPointerCapture?.(evt.pointerId);
+    evt.currentTarget.addEventListener('lostpointercapture', drag.windowPointerCancelCapture);
     window.addEventListener('pointermove', drag.windowPointerMove, { passive: false });
     window.addEventListener('pointerup', drag.windowPointerEnd, { passive: false });
-    window.addEventListener('pointercancel', drag.windowPointerEnd, { passive: false });
+    window.addEventListener('pointercancel', drag.windowPointerCancel, { passive: false });
+    window.addEventListener('blur', drag.windowBlur);
+    window.addEventListener('keydown', drag.windowKeyDown);
   };
 
   const movePositionDrag = (evt) => {
@@ -4159,56 +7934,87 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     const dx = evt.clientX - drag.startX;
     const dy = evt.clientY - drag.startY;
     if (!drag.moved && Math.hypot(dx, dy) < 4) return;
-    drag.moved = true;
     evt.preventDefault();
-    applyBoardAutoScroll(evt.clientY);
-    updateBoardDropTarget(evt.clientY, drag.id);
-    const nextLeft = Math.max(0, Math.min(drag.maxLeft, drag.startLeft + dx));
-    const nextTopOffset = Math.max(0, Math.min(drag.maxTopOffset, drag.startTopOffset + dy));
-    const rawXRatio = drag.maxLeft > 0 ? nextLeft / drag.maxLeft : DEFAULT_PLACEMENT_X_RATIO;
-    drag.currentDxPx = dx;
-    const magnet = resolveBoardDragMagnet(rawXRatio, drag, contentW);
-    const nextXRatio = magnet.ratio;
-    const nextYRatio = drag.maxTopOffset > 0 ? nextTopOffset / drag.maxTopOffset : DEFAULT_PLACEMENT_Y_RATIO;
-    setDragMagnet(magnet.snapped ? {
-      index: magnet.index,
-      ratio: magnet.ratio,
-      distancePx: magnet.distancePx,
-    } : null);
-    if (
-      Math.abs(nextXRatio - drag.lastXRatio) < 0.002 &&
-      Math.abs(nextYRatio - drag.lastYRatio) < 0.002
-    ) {
-      return;
+    if (!drag.moved && !drag.reorderMode && !drag.smartMode && contentRef.current) {
+      contentRef.current.style.height = drag.extendedContentHeight;
     }
-    drag.lastXRatio = nextXRatio;
-    drag.lastYRatio = nextYRatio;
-    setPlacement?.(drag.id, {
-      xRatio: nextXRatio,
-      yRatio: nextYRatio,
-      magnetColumnIndex: magnet.snapped ? magnet.index : null,
+    drag.moved = true;
+    drag.lastClientX = evt.clientX;
+    drag.lastClientY = evt.clientY;
+    if (positionDragFrameRef.current != null) return;
+    positionDragFrameRef.current = window.requestAnimationFrame(() => {
+      positionDragFrameRef.current = null;
+      if (positionDragRef.current !== drag) return;
+      updatePositionDragVisual(drag, drag.lastClientX, drag.lastClientY);
+      applyBoardAutoScroll(drag.lastClientX, drag.lastClientY);
+      updateBoardDropTarget(drag.lastClientX, drag.lastClientY, drag.id);
     });
   };
 
   const endPositionDrag = (evt) => {
     const drag = positionDragRef.current;
     if (!drag || drag.pointerId !== evt.pointerId) return;
-    const canReorder = drag.moved && Math.abs(evt.clientY - drag.startY) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
-    const target = canReorder
-      ? findBoardDropTarget(evt.clientY, drag.id) || boardDropTargetRef.current
-      : null;
+    const viewport = scrollRef.current?.getBoundingClientRect();
+    if (interactionBusy || (viewport && (evt.clientX < viewport.left || evt.clientX > viewport.right || evt.clientY < viewport.top || evt.clientY > viewport.bottom))) {
+      cancelPositionDrag(evt);
+      return;
+    }
+    const finalScrollTop = scrollRef.current?.scrollTop || 0;
+    updatePositionDragVisual(drag, evt.clientX, evt.clientY);
+    const canReorder = drag.reorderMode && drag.moved && Math.abs(drag.contentDy) >= BOARD_DRAG_REORDER_THRESHOLD_PX;
+    const target = drag.smartMode && drag.moved
+      ? findSmartBoardDropTarget(evt.clientX, evt.clientY, drag)
+      : canReorder ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id) : null;
+    const reorderedPreview = target?.id && target.mode !== 'gap'
+      ? reorderItemsForDrop(items, drag.id, target.id, target.position)
+      : items;
+    const orderChanged = reorderedPreview !== items
+      && reorderedPreview.map(item => String(item.id)).join('|') !== boardOrderSignature;
     if (drag.moved) {
       suppressClickRef.current = drag.id;
       window.setTimeout(() => {
         if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
       }, 0);
-      if (target && target.id && target.id !== drag.id) {
+      if (target?.mode === 'gap') {
+        if (target.removableGapPages > PLACEMENT_EPSILON_PAGES) reducePlacementGap?.(target.id);
+      } else if (orderChanged) {
         reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
+      } else if (!drag.reorderMode && !target && drag.pendingPlacement) {
+        setPlacement?.(drag.id, drag.pendingPlacement);
       }
     }
+    drag.tile.style.transform = '';
+    drag.tile.style.zIndex = '';
     removePositionDragWindowListeners(drag);
     const captureTarget = drag.captureTarget || evt.currentTarget;
-    captureTarget?.releasePointerCapture?.(evt.pointerId);
+    if (captureTarget?.hasPointerCapture?.(evt.pointerId)) captureTarget.releasePointerCapture(evt.pointerId);
+    if (contentRef.current) contentRef.current.style.height = drag.contentHeight;
+    positionDragRef.current = null;
+    setPositioningId(null);
+    setCurrentBoardDropTarget(null);
+    setDragMagnet(null);
+    stopBoardAutoScroll();
+    window.requestAnimationFrame(() => {
+      if (scrollRef.current && !positionDragRef.current) scrollRef.current.scrollTop = finalScrollTop;
+      captureBoardTileRects();
+    });
+  };
+
+  const cancelPositionDrag = (evt) => {
+    const drag = positionDragRef.current;
+    if (!drag || drag.pointerId !== evt.pointerId) return;
+    if (drag.moved) {
+      suppressClickRef.current = drag.id;
+      window.setTimeout(() => {
+        if (suppressClickRef.current === drag.id) suppressClickRef.current = null;
+      }, 0);
+    }
+    drag.tile.style.transform = '';
+    drag.tile.style.zIndex = '';
+    removePositionDragWindowListeners(drag);
+    if (drag.captureTarget?.hasPointerCapture?.(evt.pointerId)) drag.captureTarget.releasePointerCapture(evt.pointerId);
+    if (contentRef.current) contentRef.current.style.height = drag.contentHeight;
+    if (scrollRef.current) scrollRef.current.scrollTop = drag.startScrollTop;
     positionDragRef.current = null;
     setPositioningId(null);
     setCurrentBoardDropTarget(null);
@@ -4216,6 +8022,12 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
     stopBoardAutoScroll();
     window.requestAnimationFrame(captureBoardTileRects);
   };
+
+  useEffect(() => {
+    // Window pointer listeners close over the start render. If a background
+    // result or save replaces the items, cancel instead of committing old data.
+    if (positionDragRef.current) cancelPositionDrag({ pointerId: positionDragRef.current.pointerId });
+  }, [interactionBusy, items]);
 
   let processedCount = 0;
   let aiCount = 0;
@@ -4244,44 +8056,232 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
       }))
     : [];
 
-  // page-boundary divider lines (between page N and N+1)
-  const dividers = [];
-  for (let i = 1; i < Math.min(layout.totalPages, 200); i++){
-    dividers.push(i * pageH);
-  }
-
+  const activeMaxTopOffsetPages = activePlacement
+    ? Math.max(
+        0,
+        activePlacement.snappedNext
+          - activePlacement.startPages
+          - activePlacement.renderedHeightPages
+      )
+    : 0;
+  const activeRenderedTopPages = activePlacement
+    ? activePlacement.startPages
+      + normalizePlacementYRatio(activePlacement.yRatio) * activeMaxTopOffsetPages
+    : 0;
+  const activeRenderedBottomPages = activePlacement
+    ? activeRenderedTopPages + activePlacement.renderedHeightPages
+    : 0;
+  const activeTrailingGapPages = activePlacement
+    ? Math.max(0, activePlacement.snappedNext - activeRenderedBottomPages)
+    : 0;
+  const activeGuideWidth = contentW > 0
+    ? Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
+    : 0;
+  const activeGuideLeft = activePlacement && activeGuideWidth > 0
+    ? normalizePlacementXRatio(activePlacement.xRatio)
+      * Math.max(0, contentW - activeGuideWidth)
+    : 0;
   return (
-    <div className="col center">
+    <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="칠판 미리보기">
       <div className="stage">
-        <div className="stage-toolbar">
-          <span className="name">실시간 칠판 미리보기</span>
-          <span className="pill"><span className="dotc" /> {fileName.length > 32 ? fileName.slice(0,30)+'…' : fileName}</span>
-          <div className="spacer" />
-          <button
-            className="btn ghost stage-fit-btn"
-            type="button"
-            title="화면 맞춤"
-            data-tooltip="현재 칠판을 화면 안에 맞춰 보기"
-            disabled={!items.length}
-            onClick={fitActiveTileInView}
-          >화면 맞춤</button>
-        </div>
-
+        {items.length === 0 ? (
+          <HomeDashboard
+            onUpload={triggerUpload || addSample}
+            onFilesDropped={handleFiles}
+            onAddMockSample={addMockSample}
+            canAddDummy={canAddDummy}
+            recentSessions={recentSessions}
+            onRestoreRecentSession={onRestoreRecentSession}
+            restoringSessionId={restoringSessionId}
+            recentSessionRestoreBlocked={recentSessionRestoreBlocked}
+            runtimeDiagnostics={runtimeDiagnostics}
+            aiEnabled={aiEnabled}
+            hasApiKey={Boolean(userSettings?.hasGeminiApiKey)}
+          />
+        ) : (
+          <>
+          <div className="stage-toolbar stage-unified-toolbar" role="group" aria-label="칠판 도구">
+            <button className="stage-estimate-summary stage-estimate-details-toggle" type="button"
+              ref={estimateToggleRef} aria-label="배치 정보"
+              title="페이지 정보 · 자세한 배치 정보 열기"
+              aria-expanded={estimateDetailsOpen}
+              aria-controls={estimateDetailsOpen ? 'stage-estimate-details' : undefined}
+              aria-haspopup="dialog"
+              onClick={() => estimateDetailsOpen ? closeEstimateDetails() : setEstimateDetailsOpen(true)}>
+              <span className="stage-estimate-copy">
+              <span className="stage-estimate-primary" title="현재 배치 기준 예상 분량입니다. 내보내기 결과와 다를 수 있습니다.">
+                <span className="stage-estimate-brand">ClassIn </span>전체 {previewEstimate.classinPageCount}쪽
+              </span>
+              {previewEstimate.active && (
+                <span className="stage-estimate-selection">
+                  선택 {activeIndex + 1}번 · {previewEstimate.active.classinStartPage === previewEstimate.active.classinEndPage
+                    ? `${previewEstimate.active.classinStartPage}쪽`
+                    : `${previewEstimate.active.classinStartPage}–${previewEstimate.active.classinEndPage}쪽`}
+                  {selectedIds?.size > 1 ? ` · ${selectedIds.size}개 선택 중` : ''}
+                </span>
+              )}
+              </span>
+              {estimateDetailsOpen ? Icon.chevronUp : Icon.chevronDown}
+            </button>
+            <div className="stage-unified-actions">
+              {reviewAttentionCount > 0 && <button className="btn ghost stage-review-shortcut" type="button"
+                disabled={interactionBusy} onClick={onOpenPendingReview}>검수 {reviewAttentionCount}</button>}
+              <div className="stage-preview-controls" role="group" aria-label="미리보기 배율">
+                <button className="btn icon ghost" type="button" title="미리보기 축소" aria-label="미리보기 축소"
+                  disabled={previewZoom <= BOARD_PREVIEW_ZOOM_MIN + 0.001}
+                  onClick={() => focusActiveTileAtPreviewZoom(previewZoom - BOARD_PREVIEW_ZOOM_STEP)}>{Icon.zoomOut}</button>
+                <button className="btn ghost stage-preview-zoom-value" type="button" title="미리보기 배율만 100%로 복원"
+                  onClick={() => focusActiveTileAtPreviewZoom(1)}>{Math.round(previewZoom * 100)}%</button>
+                <button className="btn icon ghost" type="button" title="미리보기 확대" aria-label="미리보기 확대"
+                  disabled={previewZoom >= BOARD_PREVIEW_ZOOM_MAX - 0.001}
+                  onClick={() => focusActiveTileAtPreviewZoom(previewZoom + BOARD_PREVIEW_ZOOM_STEP)}>{Icon.zoomIn}</button>
+                <button className="btn ghost stage-fit-btn" type="button" title="선택 문항 전체 보기"
+                  aria-label="선택 문항 맞춤" aria-pressed={previewFitActive}
+                  disabled={!activePlacement} onClick={fitActiveTileInView}>맞춤</button>
+              </div>
+              <button className={`btn ghost stage-smart-move ${smartMove ? 'on' : ''}`} type="button"
+                aria-pressed={smartMove} disabled={interactionBusy || Boolean(positioningId)}
+                aria-describedby="smart-move-help" title="스마트 이동: 문제 위는 순서 변경, 문제 옆은 뒤 여백 당기기"
+                onClick={() => setSmartMove(previous => !previous)}>
+                {Icon.grip}<span>스마트 이동</span><span className="stage-smart-state">{smartMove ? 'ON' : 'OFF'}</span>
+              </button>
+              <ToolbarActionMenu id="board-tools" label="칠판 도구 더보기" items={[
+                { id: 'guides', icon: Icon.rows3, label: pageGuides ? '페이지 구분 숨기기' : '페이지 구분 보이기',
+                  description: '점선에 ClassIn 쪽수와 내부 높이를 표시합니다', onSelect: togglePageGuides },
+                { id: 'gap', icon: Icon.arrowUp, label: '선택 줄 여백 당기기',
+                  description: smartMove ? '선택 줄 뒤의 빈공간을 줄이고 아래 문제를 위로 당깁니다' : '스마트 이동을 켜면 사용할 수 있습니다',
+                  disabled: !smartMove || interactionBusy || Boolean(positioningId) || !activeId || !derivePlacementGapActionFromLayout(layout.items, activeId).ids.length,
+                  onSelect: () => reducePlacementGap?.(activeId) },
+                ...(sourcePageCount && onRecognizeSession ? [{ id: 'recognize', icon: Icon.aiBatch,
+                  label: '원본 전체에서 문항 다시 찾기', disabled: !canRecognizeSession,
+                  description: !canRecognizeSession && recognitionDisabledReason ? recognitionDisabledReason
+                    : `원본 ${sourcePageCount}페이지 전체 · ${sessionEditState?.dirty ? '변경한 수업을 먼저 저장합니다' : '현재 수업을 저장한 뒤 인식 결과를 확인합니다'}`,
+                  onSelect: onRecognizeSession }] : []),
+              ]} />
+              {focusMode && panelCollapsed && <button ref={panelReopenRef} className="btn ghost focus-panel-reopen"
+                type="button" aria-controls="workspace-panel" aria-expanded="false" aria-label="편집·설정 펼치기"
+                onClick={onOpenPanel}>{Icon.align}<span>편집·설정</span></button>}
+            </div>
+            {estimateDetailsOpen && ReactDOM.createPortal(
+              <div
+                className="stage-estimate-details"
+                id="stage-estimate-details"
+                role="dialog"
+                aria-labelledby="stage-estimate-details-title"
+                tabIndex={-1}
+                ref={estimateDetailsRef}
+              >
+                <div className="stage-estimate-details-header">
+                  <strong id="stage-estimate-details-title">배치 정보</strong>
+                  <button className="btn icon ghost" type="button" aria-label="배치 정보 닫기" onClick={closeEstimateDetails}>{Icon.close}</button>
+                </div>
+                <p className="stage-estimate-note">현재 배치 기준 예상 분량입니다. 최종 분량과 파일 수는 내보내기에서 확인하세요.</p>
+                <dl className="stage-estimate-facts">
+                  <div><dt>ClassIn 전체</dt><dd>{previewEstimate.classinPageCount}쪽</dd></div>
+                  {previewEstimate.active && <>
+                    <div><dt>선택 {activeIndex + 1}번</dt><dd>{previewEstimate.active.classinStartPage}–{previewEstimate.active.classinEndPage}쪽</dd></div>
+                    {previewEstimate.active.classinNextPage !== null && <div><dt>다음 문항 시작</dt><dd>{previewEstimate.active.classinNextPage}쪽</dd></div>}
+                  </>}
+                  {selectedIds?.size > 1 && <div><dt>선택 범위</dt><dd>{selectedIds.size}개 · 현재 문항 기준</dd></div>}
+                  <div><dt>전체 여백</dt><dd>{formatClassinPageAmount(previewEstimate.blankHeightPages)}</dd></div>
+                  <div><dt>간격 방식</dt><dd>{normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : 'ClassIn 쪽 맞춤'}</dd></div>
+                  <div><dt>배치</dt><dd>{activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}</dd></div>
+                  <div><dt>처리 상태</dt><dd>{processedCount}/{items.length}개 처리됨 · 미처리 {rawCount}개</dd></div>
+                  <div><dt>처리 방식</dt><dd>그대로 {s1Count} · 원문 보존 {aiCount} · 고화질 {reconstructCount}</dd></div>
+                  {activePlacement && <div><dt>선택 행 높이</dt><dd>{formatClassinPageAmount(activePlacement.rowHeightPages)}</dd></div>}
+                  {previewEstimate.autoScaleAdjustedCount > 0 && <div><dt>경계 공백 방지</dt><dd>{previewEstimate.autoScaleAdjustedCount}개</dd></div>}
+                  {previewEstimate.active && <div><dt>자동 축소</dt><dd>{previewEstimate.active.autoScaleAdjusted
+                    ? `적용 · ${(previewEstimate.active.autoScaleReductionRatio * 100).toFixed(1)}% 줄임`
+                    : '미적용'}</dd></div>}
+                </dl>
+                <details className="stage-estimate-diagnostics">
+                  <summary>진단 수치</summary>
+                  <dl className="stage-estimate-facts">
+                    <div><dt>사용률</dt><dd>{Math.round(previewEstimate.utilizationRatio * 100)}%</dd></div>
+                    <div><dt>내부 높이 기준 화면 수</dt><dd>약 {previewEstimate.displayPageCount}개</dd></div>
+                    <div><dt>예약 높이 / 사용 높이</dt><dd>{previewEstimate.reservedEndPages.toFixed(2)}p / {previewEstimate.usedHeightPages.toFixed(2)}p</dd></div>
+                    {previewEstimate.active && <div><dt>선택 시작 / 표시 끝</dt><dd>{previewEstimate.active.startPages.toFixed(2)}p / {previewEstimate.active.renderedBottomPages.toFixed(2)}p</dd></div>}
+                  </dl>
+                  <p className="stage-estimate-note">내부 높이 1.2p가 ClassIn 1쪽입니다.</p>
+                </details>
+                <p className="stage-estimate-note">스마트 이동 ON: 누른 채 문제 위로 놓으면 순서 변경, 옆으로 놓으면 뒤 여백 당기기. {ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소.</p>
+              </div>, document.body
+            )}
+          </div>
         <div className="stage-wrap">
           <div className="stage-board" style={{ background: boardColor }}>
+            <span className="sr-only" id="smart-move-help">누른 채 이동 · 문제 위: 순서 변경 · 문제 옆: 뒤 여백 당기기 · {ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소</span>
+            {smartMove && boardDropTarget && <div className="stage-drag-feedback" role="status" aria-live="polite">
+              {boardDropTarget.mode === 'gap'
+                ? boardDropTarget.removableGapPages > PLACEMENT_EPSILON_PAGES
+                  ? `${items.findIndex(item => item.id === boardDropTarget.id) + 1}번 뒤 여백 ${formatClassinPageAmount(boardDropTarget.removableGapPages)} 줄이기 · 아래 문제를 위로 당깁니다`
+                  : '이 줄은 더 줄일 뒤 여백이 없습니다'
+                : `${items.findIndex(item => item.id === boardDropTarget.id) + 1}번 ${boardDropTarget.position === 'before' ? '앞' : '뒤'}에 넣기 · 순서 변경`}
+            </div>}
 
-            <div className="stage-scroll" ref={scrollRef} onScroll={onScroll}>
+            <div
+              className="stage-scroll"
+              ref={scrollRef}
+              onScroll={onScroll}
+              onWheel={() => cancelSmoothScroll(scrollRef.current)}
+              onPointerDown={() => cancelSmoothScroll(scrollRef.current)}
+            >
               <div
-                className={`stage-content ${columnCount > 1 ? 'has-column-guides' : ''} ${positioningId ? 'is-positioning' : ''}`}
+                className={`stage-content ${previewFitActive ? 'is-fit-preview' : ''} ${columnCount > 1 ? 'has-column-guides' : ''} ${positioningId ? 'is-positioning' : ''}`}
                 ref={contentRef}
                 style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
               >
-                {/* page boundary dividers — scroll with content */}
-                {dividers.map((top, i) => (
-                  <div key={i} className="page-divider" style={{ top }}>
-                    <span className="label">— {i + 2} 페이지 —</span>
+                {/* page bands — scroll with content, one per ClassIn board page */}
+                {pageGuides && pageBands.map(band => (
+                  <div
+                    key={`band-${band.page}`}
+                    className={`page-band ${band.page % 2 === 0 ? 'is-even' : ''} ${band.page === visibleCurrentPage ? 'is-current' : ''}`}
+                    data-classin-page={band.page}
+                    style={{ top: band.top, height: DEFAULT_SLOT_HEIGHT_PAGES * pageH }}
+                    aria-hidden="true"
+                  />
+                ))}
+                {pageGuides && pageBands.map(band => (
+                  <div
+                    key={`head-${band.page}`}
+                    className={`page-head ${band.page === visibleCurrentPage ? 'is-current' : ''} ${band.page === 1 ? 'is-first' : ''}`}
+                    style={{ top: band.top }}
+                    aria-hidden="true"
+                  >
+                    <span className="page-head-chip">
+                      <strong>ClassIn {band.page}쪽 · {band.offsetPages.toFixed(1)}p</strong>
+                      <small>{band.label}</small>
+                    </span>
                   </div>
                 ))}
+
+                {activePlacement && activeTrailingGapPages > 0.05 && (
+                  <div
+                    className="active-slot-gap"
+                    style={{
+                      top: activeRenderedBottomPages * pageH,
+                      height: activeTrailingGapPages * pageH,
+                      ...(activeGuideWidth > 0
+                        ? { left: activeGuideLeft, width: activeGuideWidth }
+                        : null),
+                    }}
+                    aria-hidden="true"
+                  >
+                    <span className="label">여백 {formatClassinPageAmount(activeTrailingGapPages)}</span>
+                  </div>
+                )}
+
+                {activePlacement && previewEstimate.active?.nextStartPages != null && (
+                  <div
+                    className="active-next-boundary"
+                    style={{ top: previewEstimate.active.nextStartPages * pageH }}
+                    aria-hidden="true"
+                  >
+                    <span className="label">
+                      다음 문항 · {previewEstimate.active.classinNextPage}쪽
+                    </span>
+                  </div>
+                )}
 
                 {columnGuides.map(guide => (
                   <div
@@ -4297,6 +8297,13 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                 {layout.items.map((it, i) => {
                   const p = layout.positions[i];
                   if (!p) return null;
+                  const tileBounds = boardItemVisualBounds(it);
+                  const tileRenderedBottomPages = tileBounds.bottom;
+                  const tileClassinStartPage = classinBoardPageNumberAtOffset(tileBounds.start);
+                  const tileClassinEndPage = classinPageNumberForRenderedEnd(
+                    tileRenderedBottomPages,
+                    DEFAULT_SLOT_HEIGHT_PAGES
+                  );
                   const tileWidth = contentW > 0
                     ? isContinuousPlacementItem(it)
                       ? Math.max(120, contentW / PLACEMENT_FIT_WIDTH_SCALE_RATIO)
@@ -4322,13 +8329,15 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     : placementScaleLimitForItem(it);
                   const scaleRatio = normalizePlacementScaleRatio(it.placementScaleRatio, maxScale);
                   const scaledWidth = tileWidth ? tileWidth * scaleRatio : null;
-                  const scaledHeight = p.height * scaleRatio;
+                  const scaledHeight = p.renderedHeightPages * pageH;
                   const maxLeft = scaledWidth ? Math.max(0, contentW - scaledWidth) : 0;
                   const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - scaledHeight);
                   const xRatio = normalizePlacementXRatio(p.xRatio);
                   const yRatio = normalizePlacementYRatio(p.yRatio);
                   const dropPosition = boardDropTarget?.id === it.id ? boardDropTarget.position : null;
                   const hasPageChrome = hasPageChromeArtifactFlag(it);
+                  const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
+                  const moveDirection = isJustMoved ? moveFeedback.direction : null;
                   const tileStyle = {
                     top: p.top + (yRatio * maxTopOffset),
                     height: scaledHeight,
@@ -4338,26 +8347,39 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                     <button
                       key={it.id}
                       ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
-                      onClick={() => onTileClick(it.id)}
-                      title={problemDisplayName(it, i)}
-                      style={tileStyle}
+                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${dropPosition === 'gap' ? 'drop-gap' : ''}`}
+                      onClick={event => onTileClick(it.id, event)}
                       onPointerDown={e => beginPositionDrag(e, it, p)}
-                      onPointerMove={movePositionDrag}
-                      onPointerUp={endPositionDrag}
-                      onPointerCancel={endPositionDrag}
+                      title={problemDisplayName(it, i)}
+                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. ${smartMove ? '문제 위로 드래그하면 순서 변경, 옆에 놓으면 뒤 여백 당기기' : `드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}`}
+                      aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}
+                      style={tileStyle}
                     >
-                      <div className="tile-hd">
+                      <div
+                        className="tile-hd"
+                        title={smartMove ? '문제 위: 순서 변경 · 옆: 뒤 여백 당기기 · Esc: 취소' : `드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}
+                      >
+                        <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
                         <span className="nm">{problemDisplayName(it, i)}</span>
-                        {p.spans > 1 && (
-                          <span className="span-mark">{p.page}–{p.page + p.spans - 1}p</span>
+                        {isJustMoved && (
+                          <span className={`tile-move-cue move-${moveDirection}`} aria-hidden="true">
+                            {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
+                          </span>
+                        )}
+                        {tileClassinEndPage > tileClassinStartPage && (
+                          <span
+                            className="span-mark"
+                            title={`ClassIn ${tileClassinStartPage}–${tileClassinEndPage}페이지`}
+                          >
+                            C{tileClassinStartPage}–C{tileClassinEndPage}
+                          </span>
                         )}
                         {p.columnCount > 1 && (
                           <span className="column-mark">칸 {p.columnIndex + 1}</span>
                         )}
                         {p.rowHeightPages > p.renderedHeightPages + 0.05 && (
-                          <span className="row-mark">{p.rowHeightPages.toFixed(1)}p</span>
+                          <span className="row-mark">{formatClassinPageAmount(p.rowHeightPages)}</span>
                         )}
                         {hasPageChrome && (
                           <span className="page-chrome-mark">페이지 장식</span>
@@ -4367,7 +8389,7 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                         </span>
                       </div>
                       <div className="tile-art">
-                        <TileImage item={it} />
+                        <TileImage item={it} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} />
                       </div>
                     </button>
                   );
@@ -4381,75 +8403,345 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                 >
                   <span className="plus">＋</span>
                   자료 추가
-                  <small>{layout.totalPages > 50 ? `${layout.totalPages}p` : 'auto pages'}</small>
+                  <small>
+                    {previewEstimate.classinPageCount > 0
+                      ? `예상 C${previewEstimate.classinPageCount}`
+                      : '자동 계산'}
+                  </small>
                 </div>
               </div>
             </div>
 
-            <div className="board-pageind">
-              <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
-              <span className="sep">/</span>
-              <span className="total">{String(layout.totalPages).padStart(2,'0')}</span>
-              <span style={{marginLeft:6, opacity:.6}}>p</span>
+            <div className="board-pageind" role="group" aria-label="칠판 페이지 이동">
+              <button
+                type="button"
+                className="pageind-btn"
+                aria-label="이전 페이지"
+                title="이전 페이지"
+                disabled={visibleCurrentPage <= 1}
+                onClick={() => goToPage(visibleCurrentPage - 1)}
+              >{Icon.arrowUp}</button>
+              <span className="pageind-count">
+                <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
+                <span className="sep">/</span>
+                <span className="total">{String(Math.max(1, previewEstimate.classinPageCount)).padStart(2,'0')}</span>
+                <span style={{marginLeft:6, opacity:.6}}>ClassIn</span>
+              </span>
+              <button
+                type="button"
+                className="pageind-btn"
+                aria-label="다음 페이지"
+                title="다음 페이지"
+                disabled={visibleCurrentPage >= Math.max(1, previewEstimate.classinPageCount)}
+                onClick={() => goToPage(visibleCurrentPage + 1)}
+              >{Icon.arrowDown}</button>
             </div>
 
             <div className="vignette" />
           </div>
         </div>
 
-        <div className="stage-status">
-          <span className="chip">{layout.usesPlacement ? 'Export 배치 기준' : '1문제 / 1.2페이지 · 자동 페이지 나눔'}</span>
-          <span className="chip">
-            <span className="pip" />
-            {activeContinuousFlow ? '연속 이어붙임' : `한 줄 ${columnCount}개`}
-          </span>
-          {activePlacement && (
-            <span className="chip">
-              행 높이 {activePlacement.rowHeightPages.toFixed(1)}p
-            </span>
+        </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function HomeDashboard({
+  onUpload, onFilesDropped, onAddMockSample, canAddDummy,
+  recentSessions, onRestoreRecentSession, restoringSessionId,
+  recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey,
+}){
+  const [dropActive, setDropActive] = useState(false);
+  const [recentLimit, setRecentLimit] = useState(6);
+  const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
+  const hangulMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
+
+  const handleDragEnter = (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    setDropActive(true);
+  };
+  const handleDragOver = (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setDropActive(true);
+  };
+  const handleDragLeave = (e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return;
+    setDropActive(false);
+  };
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDropActive(false);
+    const files = Array.from(e.dataTransfer?.files || []);
+    if (files.length && onFilesDropped) onFilesDropped(files);
+  };
+
+  const savedSessions = Array.isArray(recentSessions) ? recentSessions : [];
+  const sessionsToShow = savedSessions.slice(0, recentLimit);
+  const restoreBusy = Boolean(recentSessionRestoreBlocked || restoringSessionId);
+
+  return (
+    <div
+      className="home-dashboard home-start-screen"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      <div className="home-dashboard-inner">
+        <div className="home-start-layout">
+        <section className="home-start-intro" aria-labelledby="home-start-title">
+        <div className="home-hero-head">
+          <div className="home-hero-badge">ClassIn EDB · 수업 준비</div>
+          <h1 id="home-start-title" className="home-hero-title">수업 자료를{' '}<br />칠판으로</h1>
+          <p className="home-hero-lead">
+            시험지와 교재를 올리고, 문제를 확인하고,<br />나만의 수업 칠판을 완성하세요.
+          </p>
+        </div>
+
+        <div className="home-section home-workflow-section" aria-label="자료 제작 3단계 가이드">
+          <h2 className="home-workflow-title">세 단계로 준비하는 수업</h2>
+          <ol className="home-workflow-steps">
+            <li className="home-step-card">
+              <span className="home-step-num" aria-hidden="true">1</span>
+              <div className="home-step-content">
+                <strong>자료 올리기</strong>
+                <p>파일을 대기열에 담고 넣는 방식을 선택합니다.</p>
+              </div>
+            </li>
+            <li className="home-step-card">
+              <span className="home-step-num" aria-hidden="true">2</span>
+              <div className="home-step-content">
+                <strong>확인하고 배치하기</strong>
+                <p>문항을 검수하고, 한 행에 한 문제씩 순서를 정합니다.</p>
+              </div>
+            </li>
+            <li className="home-step-card">
+              <span className="home-step-num" aria-hidden="true">3</span>
+              <div className="home-step-content">
+                <strong>EDB 제작하기</strong>
+                <p>오른쪽 판서 공간과 함께 ClassIn에서 엽니다.</p>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <div className="home-quick-cards" role="group" aria-label="빠른 시작">
+          {canAddDummy && (
+            <button type="button" className="home-quick-card accent" onClick={onAddMockSample}>
+              <span className="home-card-icon accent" aria-hidden="true">{Icon.board}</span>
+              <span className="home-card-info">
+                <strong>샘플로 먼저 둘러보기</strong>
+                <span className="home-card-description">파일 없이 편집과 칠판 배치를 체험하세요.</span>
+              </span>
+              <span className="home-sample-arrow" aria-hidden="true">{Icon.arrowRight}</span>
+            </button>
           )}
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'#aa6516'}} />
-            1단계 {s1Count}
+        </div>
+        </section>
+
+        <section className="home-start-launch" aria-labelledby="home-launch-title">
+        <div className="home-launch-heading">
+          <span className="home-launch-step">01 · 새 작업</span>
+          <h2 id="home-launch-title">어떤 자료로 시작할까요?</h2>
+        </div>
+
+        <button
+          type="button"
+          className={`home-hero-dropzone ${dropActive ? 'is-active' : ''}`}
+          onClick={onUpload}
+          aria-label="자료 파일 선택"
+          aria-describedby="home-upload-help"
+        >
+          <span className="home-dropzone-icon" aria-hidden="true">
+            {Icon.upload}
           </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#6d3df0,#2f6fed)'}} />
-            원문 보존 {aiCount}
+          <span className="home-dropzone-text">
+            <strong>{dropActive ? '여기에 놓으면 자료가 담겨요' : '끌어다 놓거나 클릭하세요'}</strong>
+            <span>시험지·교재 파일을 여러 개 함께 넣을 수 있어요.</span>
           </span>
-          <span className="chip">
-            <span style={{width:8, height:8, borderRadius:2, background:'linear-gradient(135deg,#10b981,#22d3ee)'}} />
-            고화질 {reconstructCount}
+          <span className="btn primary home-upload-btn" aria-hidden="true">
+            {Icon.plus} 파일 선택
           </span>
-          {rawCount > 0 && (
-            <span className="chip" style={{color:'var(--danger)', borderColor: 'rgba(213,72,72,.3)'}}>
-              미처리 {rawCount}
+          <span className="home-format-badges" aria-label="지원 형식">
+            <span className="home-format-badge badge-pdf">PDF</span>
+            <span className="home-format-badge badge-hwp">HWP · HWPX</span>
+            <span className="home-format-badge badge-img">PNG · JPG</span>
+          </span>
+        </button>
+        <p id="home-upload-help" className="home-upload-help">
+          파일은 먼저 대기열에 담깁니다. 올린 뒤 페이지 전체 넣기, 문항별 분할, 수동 쪼개기 중에서 선택하세요.
+        </p>
+
+        <div className="home-methods" aria-labelledby="home-methods-title">
+          <h3 id="home-methods-title">파일을 올린 뒤, 이렇게 넣을 수 있어요</h3>
+          <ul className="home-method-cards">
+            <li className="home-method-card">
+              <span className="home-method-icon recognize" aria-hidden="true">{Icon.sparkle}</span>
+              <strong>문항 인식</strong>
+              <span>문제별로 자동 분리</span>
+            </li>
+            <li className="home-method-card">
+              <span className="home-method-icon pages" aria-hidden="true">{Icon.fileText}</span>
+              <strong>페이지 전체</strong>
+              <span>한 페이지를 그대로</span>
+            </li>
+            <li className="home-method-card">
+              <span className="home-method-icon manual" aria-hidden="true">
+                <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="6" cy="6" r="3" /><path d="M8.12 8.12 12 12M20 4 8.12 15.88" />
+                  <circle cx="6" cy="18" r="3" /><path d="M14.8 14.8 20 20" />
+                </svg>
+              </span>
+              <strong>수동 쪼개기</strong>
+              <span>필요한 영역만 직접</span>
+            </li>
+          </ul>
+        </div>
+        </section>
+        </div>
+
+        {sessionsToShow.length > 0 && (
+          <div className="home-section home-recent-section" aria-label="최근 작업 이어하기">
+            <div className="home-section-head">
+              <h2>{Icon.clock} 최근 작업 이어하기</h2>
+              <span className="home-section-count">{savedSessions.length}개 저장됨</span>
+            </div>
+            <div className="home-recent-grid">
+              {sessionsToShow.map(entry => {
+                const isRestoring = restoringSessionId === entry.id;
+                const problemCount = entry.problemCount ?? entry.problem_count;
+                const sessionName = entry.sessionName || entry.session_name || '이름 없는 작업';
+                const updatedAt = entry.updatedAt || entry.updated_at;
+                return (
+                  <button
+                    type="button"
+                    key={entry.id}
+                    className={`home-recent-card ${isRestoring ? 'is-restoring' : ''}`}
+                    disabled={restoreBusy}
+                    aria-busy={isRestoring}
+                    aria-label={`${sessionName} ${isRestoring ? '여는 중' : '열기'}`}
+                    onClick={() => {
+                      if (!restoreBusy) {
+                        onRestoreRecentSession?.(entry.id);
+                      }
+                    }}
+                  >
+                    <span className="home-recent-card-body">
+                      <span className="home-recent-card-title" title={sessionName}>
+                        {sessionName}
+                      </span>
+                      <span className="home-recent-card-meta">
+                        <span className="home-recent-count">
+                          {recentSessionCountLabel(entry) || (problemCount ? `${problemCount}개 문항` : '저장된 작업')}
+                        </span>
+                        {updatedAt && (
+                          <span className="home-recent-date">
+                            {formatPublishTime(updatedAt)}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                    <span className="home-recent-open-btn" aria-hidden="true">
+                      {isRestoring ? '여는 중…' : '열기'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {savedSessions.length > sessionsToShow.length && (
+              <button type="button" className="btn ghost home-recent-more"
+                onClick={() => setRecentLimit(limit => limit + 6)}>
+                최근 작업 더 보기 ({savedSessions.length - sessionsToShow.length}개)
+              </button>
+            )}
+          </div>
+        )}
+
+        <div className="home-dashboard-footer">
+          <div className="home-status-pills">
+            <span className={`home-status-pill ${hangulMeta.tone === 'ok' ? 'positive' : hangulMeta.tone === 'warn' || hangulMeta.tone === 'danger' ? 'warning' : 'neutral'}`}>
+              한글(HWP): {hangulMeta.label}
             </span>
-          )}
-          <div className="spacer" />
-          <span style={{fontFamily:'JetBrains Mono, monospace'}}>{processedCount}/{items.length} 처리됨 · {layout.totalPages}p</span>
+            <span className={`home-status-pill ${aiEnabled && hasApiKey ? 'positive' : 'neutral'}`}>
+              {!aiEnabled ? '로컬 처리 · AI 사용 꺼짐' : hasApiKey ? 'AI 설정 준비됨 · 실행할 때 사용' : '로컬 처리 · AI 연결 설정 필요'}
+            </span>
+          </div>
+          <div className="home-shortcuts-hint">
+            단축키: <kbd>{ALTERNATE_MODIFIER_LABEL}+1</kbd>·<kbd>{ALTERNATE_MODIFIER_LABEL}+2</kbd>·<kbd>{ALTERNATE_MODIFIER_LABEL}+3</kbd> 패널 전환 · <kbd>Esc</kbd> 취소 · <kbd>Shift</kbd> 다중 선택
+          </div>
         </div>
       </div>
     </div>
   );
 }
 
-function downloadPublishSummary(target){
-  if (!target?.canDownload) return;
+async function downloadPublishSummary(target){
+  if (!target?.canDownload) {
+    return { ok: false, error: new Error('다운로드할 수 있는 EDB 제작본이 없습니다') };
+  }
   const parts = Array.isArray(target.edbParts) && target.edbParts.length
     ? target.edbParts
     : [target];
-  parts
-    .filter(part => (part.edbFileUri || part.edb_file_uri) && (part.edbFileExists ?? part.edb_file_exists) !== false)
-    .forEach((part, index) => {
-      window.setTimeout(() => {
-        const a = document.createElement('a');
-        a.href = part.edbFileUri || part.edb_file_uri;
-        a.download = part.edbFileName || part.edb_file_name || target.edbFileName || 'classin.edb';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      }, index * 150);
-    });
+  const downloadableParts = parts
+    .filter(part => (part.edbFileUri || part.edb_file_uri) && (part.edbFileExists ?? part.edb_file_exists) !== false);
+  if (!downloadableParts.length) {
+    return { ok: false, error: new Error('EDB 제작본 파일을 찾을 수 없습니다') };
+  }
+
+  const edbPaths = downloadableParts
+    .map(part => part.edbPath || part.edb_path)
+    .filter(Boolean);
+  if (edbPaths.length === downloadableParts.length) {
+    try {
+      const resp = await fetch('/api/session/export-edb', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          edbPaths,
+          fileName: target.edbFileName || target.edb_file_name || downloadableParts[0]?.edbFileName || 'classin.edb',
+        }),
+      });
+      const json = await expectOkJson(resp, 'EDB 다운로드 준비 실패');
+      triggerServerFileDownload(json.downloadUrl);
+      return { ok: true };
+    } catch (error) {
+      console.warn('[board] EDB bundle download failed:', error);
+      return { ok: false, error };
+    }
+  }
+
+  const firstUri = downloadableParts[0]?.edbFileUri || downloadableParts[0]?.edb_file_uri;
+  if (firstUri) {
+    try {
+      triggerServerFileDownload(firstUri);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+  return { ok: false, error: new Error('EDB 다운로드 주소가 없습니다') };
+}
+
+function triggerServerFileDownload(downloadUrl){
+  const url = String(downloadUrl || '').trim();
+  if (!url) {
+    throw new Error('다운로드 URL이 없습니다');
+  }
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = '';
+  link.hidden = true;
+  document.body.appendChild(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+  }
 }
 
 async function openPublishedEdb(target){
@@ -4479,7 +8771,49 @@ function openClassinHandoff(target){
   window.open(url, '_blank', 'noopener');
 }
 
-function PublishResultPanel({ session, visible, onClassinReviewComplete, onExportImages, exportingImages, canExportImages }){
+function readSettingsSectionsOpen(){
+  try {
+    const stored = JSON.parse(window.localStorage?.getItem(SETTINGS_SECTIONS_OPEN_KEY) || 'null');
+    if (stored && typeof stored === 'object') return { ...SETTINGS_SECTIONS_DEFAULT_OPEN, ...stored };
+  } catch (_err) {
+    // Storage can be unavailable or hold stale JSON; fall back to defaults.
+  }
+  return { ...SETTINGS_SECTIONS_DEFAULT_OPEN };
+}
+
+function SettingsSection({ id, title, summary, tone, open, onToggle, children }){
+  const bodyId = `settings-section-${id}`;
+  return (
+    <section className={`settings-section ${open ? 'open' : ''}`}>
+      <button
+        type="button"
+        className="settings-section-hd"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => onToggle(id)}
+      >
+        <span className="settings-section-title">{title}</span>
+        {summary && <span className={`settings-section-summary ${tone || ''}`}>{summary}</span>}
+        <span className="settings-section-chevron" aria-hidden="true">{open ? Icon.arrowUp : Icon.arrowDown}</span>
+      </button>
+      {open && <div className="settings-section-body" id={bodyId}>{children}</div>}
+    </section>
+  );
+}
+
+function PublishPlanSummary({ plan, busy, failed }){
+  if (!busy && !failed && !plan?.projectedPartCount) return null;
+  return <div className="panel-session-state publish-plan-summary" role="status" aria-live="polite" aria-atomic="true">
+    <strong>{busy ? '내보내기 · EDB 파일 수 계산 중' : failed ? '내보내기 · EDB 파일 수 계산 실패' : `내보내기 · EDB ${plan.actual ? '확정' : '예상'} ${plan.projectedPartCount}개`}</strong>
+    {failed ? <small>배치를 변경하면 다시 계산합니다. 제작 시 파일 수를 확인할 수 있어요.</small>
+      : !busy && !plan?.actual ? <small>최종 파일 수는 제작 결과에서 확인하세요.</small> : null}
+  </div>;
+}
+
+function PublishResultPanel({
+  session, visible, onClassinReviewComplete, onExportImages, exportingImages, canExportImages,
+  onDownloadPublish, publishDownloadBusy,
+}){
   const summary = useMemo(() => visible ? sessionPublishSummary(session) : null, [session, visible]);
   const history = useMemo(() => visible ? sessionPublishHistory(session) : [], [session, visible]);
   const [open, setOpen] = useState(false);
@@ -4505,15 +8839,43 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
         </span>
         <span className="publish-result-state">{open ? '접기' : '펼치기'}</span>
       </button>
+      <div className="publish-result-primary-actions">
+        <button
+          className="btn primary"
+          type="button"
+          onClick={() => onDownloadPublish?.(summary)}
+          disabled={!summary.canDownload || publishDownloadBusy || !onDownloadPublish}
+          title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : '최신 제작본 다운로드'}
+        >
+          {Icon.download}<span>{publishDownloadBusy ? '다운로드 준비 중…' : summary.edbFileExists === false ? '파일 없음' : summary.edbSplit ? 'EDB 묶음 다운로드' : 'EDB 다운로드'}</span>
+        </button>
+      </div>
       {open && (
-        <>
+        <div className="publish-result-detail-body">
           <div className="publish-result-file" title={summary.edbPath || summary.edbFileName}>
-            {summary.edbSplit ? `${summary.edbFileName} + ${summary.edbPartCount - 1} parts` : summary.edbFileName}
+            {summary.edbSplit ? `${summary.edbFileName} + ${summary.edbPartCount - 1}개 파일` : summary.edbFileName}
           </div>
+          {summary.edbParts.length > 0 && (
+            <div className="publish-result-parts" aria-label="EDB 파일별 제작 결과">
+              {summary.edbParts.map(part => (
+                <div
+                  className="publish-result-part"
+                  key={`${part.partIndex}-${part.edbPath || part.edbFileName}`}
+                  title={part.edbPath || part.edbFileName}
+                >
+                  <strong>{part.partIndex}/{summary.edbPartCount}</strong>
+                  <span>{part.edbFileName}</span>
+                  <small>
+                    {part.recordCount || part.placementCount}개 자료 · 실제 사용 {part.flowEndPages.toFixed(1)}/{part.pageCountHint || 50}p
+                  </small>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="publish-result-metrics">
-            <span>{summary.recordCountActual || summary.recordCount} records</span>
-            {summary.edbSplit && <span>{summary.edbPartCount} EDB files</span>}
-            {summary.pageCountHint > 0 && <span>{summary.pageCountHint}p hint</span>}
+            <span>{summary.recordCountActual || summary.recordCount}개 자료</span>
+            {summary.edbSplit && <span>{summary.edbPartCount}개 EDB 파일</span>}
+            {summary.pageCountHint > 0 && <span>파일당 {summary.pageCountHint}p</span>}
             {summary.outerSize > 0 && <span>{formatBytes(summary.outerSize)}</span>}
             {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
             {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
@@ -4531,15 +8893,6 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
             {summary.classinReviewStatusLabel && <span>{summary.classinReviewStatusLabel}</span>}
           </div>
           <div className="publish-result-actions">
-            <button
-              className="btn"
-              type="button"
-              onClick={() => downloadPublishSummary(summary)}
-              disabled={!summary.canDownload}
-              title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'EDB 다시 다운로드'}
-            >
-              {Icon.download}<span>{summary.edbFileExists === false ? '파일 없음' : '다운로드'}</span>
-            </button>
             <button
               className="btn"
               type="button"
@@ -4600,8 +8953,8 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
                     className="icon-btn"
                     type="button"
                     title="이 제작본 다운로드"
-                    disabled={!item.canDownload}
-                    onClick={() => downloadPublishSummary(item)}
+                    disabled={!item.canDownload || publishDownloadBusy || !onDownloadPublish}
+                    onClick={() => onDownloadPublish?.(item)}
                   >{Icon.download}</button>
                   <button
                     className="icon-btn"
@@ -4621,57 +8974,287 @@ function PublishResultPanel({ session, visible, onClassinReviewComplete, onExpor
               ))}
             </div>
           )}
-        </>
+        </div>
       )}
     </div>
   );
 }
 
+function OriginalProblemNumberEditor({ item, disabled, onSave }){
+  const info = originalProblemNumberInfo(item);
+  const [draft, setDraft] = useState(info.number == null ? '' : String(info.number));
+  const [error, setError] = useState('');
+  useEffect(() => {
+    setDraft(info.number == null ? '' : String(info.number));
+    setError('');
+  }, [item.id, info.number, info.source]);
+  if (info.status === 'passage') return null;
+  const save = async event => {
+    event.preventDefault();
+    if (disabled) return;
+    const text = draft.trim();
+    if (text && (!/^\d{1,6}$/.test(text) || Number(text) < 1)) {
+      setError('1~999999 사이의 정수 번호를 입력하세요.');
+      return;
+    }
+    setError('');
+    await onSave('problem-number', { problemId: item.id, problemNumber: text ? Number(text) : null });
+  };
+  return (
+    <form className="original-number-editor" onSubmit={save}>
+      <label htmlFor="original-problem-number">원문 문제 번호 <span>{info.label}</span></label>
+      <div className="original-number-fields">
+        <input id="original-problem-number" type="text" inputMode="numeric" maxLength={6}
+          value={draft} disabled={disabled} placeholder="예: 12" aria-invalid={!!error}
+          aria-describedby="original-number-help original-number-error"
+          onChange={event => { setDraft(event.target.value); setError(''); }} />
+        <button className="btn" type="submit" disabled={disabled || (draft.trim() === String(info.number ?? '') && info.source === 'manual')}>번호 저장</button>
+      </div>
+      <small id="original-number-help">이미지에 적힌 번호만 입력하세요. 빈칸으로 저장하면 미확인으로 표시됩니다. 배치 순서는 바뀌지 않습니다.</small>
+      <span id="original-number-error" className="original-number-error" role="alert">{error}</span>
+    </form>
+  );
+}
+
 // ─── RIGHT: tabbed panel ──────────────────────────────────────────────────
+function SidebarDisclosure({ title, summary, badge, tone = 'neutral', className = '', disclosureRef, children }){
+  return (
+    <details className={`sidebar-disclosure ${className}`} ref={disclosureRef}>
+      <summary className="sidebar-disclosure-summary">
+        <span className="sidebar-disclosure-heading">
+          <strong>{title}</strong>
+          {summary && <small>{summary}</small>}
+        </span>
+        {badge && <span className={`sidebar-disclosure-badge tone-${tone}`}>{badge}</span>}
+        <span className="sidebar-disclosure-chevron" aria-hidden="true">{Icon.chevronDown}</span>
+      </summary>
+      <div className="sidebar-disclosure-body">{children}</div>
+    </details>
+  );
+}
+
+function BoardLayoutControls({
+  boardColumns,
+  layoutGapMode,
+  setLayoutGapMode,
+  manualGapCount,
+  resetPlacementGaps,
+  disabled = false,
+}) {
+  const gapMode = normalizeLayoutGapMode(layoutGapMode);
+  const columns = normalizeBoardColumns(boardColumns);
+  const summary = [
+    columns === BOARD_COLUMN_MIN ? '한 행 · 문제 1개' : `기존 ${columns}칸 배치 유지`,
+    gapMode === LAYOUT_GAP_MODE_COMPACT ? '빈틈 없이' : '1.2 맞춤',
+    manualGapCount ? `개별 여백 ${manualGapCount}곳` : '',
+  ].filter(Boolean).join(' · ');
+  return (
+    <section className="board-layout-controls" aria-label="칠판 레이아웃">
+      <p className="single-row-layout-note">
+        <strong>{columns === BOARD_COLUMN_MIN ? '한 행에 문제 하나' : `기존 ${columns}칸 배치`}</strong>
+        <span>{columns === BOARD_COLUMN_MIN ? '기본은 ClassIn 한 페이지에 문제 하나, 오른쪽은 판서 공간입니다.' : '불러온 자료의 배치와 순서를 그대로 유지합니다.'}</span>
+      </p>
+      {columns !== BOARD_COLUMN_MIN && (
+        <div className="placement-column-warning" role="status">
+          <strong>기존 {columns}칸 배치를 유지합니다.</strong>
+          <small>새 작업은 한 행에 문제 하나로 시작합니다.</small>
+          <small>기존 배치 그대로 저장할 수 있습니다. 2·3칸 배치의 EDB 제작은 아직 지원하지 않습니다.</small>
+        </div>
+      )}
+      <div className="row-control layout-gap-mode-control">
+        <div className="lbl">문항 사이 여백<small>수업 전체 · 배치 변경 저장 시 저장</small></div>
+        <div className="seg-mini" role="group" aria-label="문항 사이 여백 방식">
+          <button
+            type="button"
+            className={gapMode === LAYOUT_GAP_MODE_GRID ? 'on' : ''}
+            aria-pressed={gapMode === LAYOUT_GAP_MODE_GRID}
+            disabled={disabled}
+            onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_GRID)}
+          >1.2 맞춤</button>
+          <button
+            type="button"
+            className={gapMode === LAYOUT_GAP_MODE_COMPACT ? 'on' : ''}
+            aria-pressed={gapMode === LAYOUT_GAP_MODE_COMPACT}
+            disabled={disabled}
+            onClick={() => setLayoutGapMode?.(LAYOUT_GAP_MODE_COMPACT)}
+          >빈틈 없이</button>
+        </div>
+      </div>
+      {gapMode === LAYOUT_GAP_MODE_COMPACT && (
+        <p className="placement-control-note">ClassIn 화면 경계를 걸칠 수 있어요. 칠판에서 확인한 뒤 저장하세요.</p>
+      )}
+      <SidebarDisclosure title="배치 규칙 및 개별 여백" summary={summary} className="placement-layout-details">
+        <div className="board-layout-body">
+          {gapMode === LAYOUT_GAP_MODE_COMPACT ? (
+            <div className="layout-gap-note" role="note">
+              <strong>빈틈 없이 사용 중</strong>
+              <span className="warn">‘빈틈 없이’는 문항이 ClassIn 화면 경계를 걸칠 수 있으니 저장 전에 미리보기를 확인하세요.</span>
+            </div>
+          ) : (
+            <p className="layout-gap-hint">
+              <strong>가능하면 한 페이지에 문제 하나</strong>
+              1.2p는 ClassIn 한 페이지입니다. 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 긴 문제와 원본 페이지는 자르지 않고 이어서 표시하며, 사용자가 조절한 배율은 유지합니다.
+            </p>
+          )}
+
+          <div className="row-control layout-gap-reset-control">
+            <div className="lbl">개별 여백 삭제<small>{manualGapCount ? `${manualGapCount}곳 적용됨` : '배치 탭에서 선택 문항별 조절'}</small></div>
+            <button
+              className="btn compact"
+              type="button"
+              disabled={disabled || !manualGapCount}
+              onClick={() => resetPlacementGaps?.()}
+            >전체 해제</button>
+          </div>
+        </div>
+      </SidebarDisclosure>
+    </section>
+  );
+}
+
+function derivePlacementSaveState(session, items, boardColumns, layoutGapMode){
+  const currentItems = Array.isArray(items) ? items : [];
+  if (!currentItems.length) {
+    return { dirty: false, canSave: false, label: '자료 없음', draftSignature: '', savedSignature: '' };
+  }
+  if (!session) {
+    return { dirty: false, canSave: true, label: '미리보기', draftSignature: '', savedSignature: '' };
+  }
+  const draft = materializeSessionForItems(
+    session,
+    currentItems,
+    session.session_name || '',
+    boardColumns,
+    layoutGapMode
+  );
+  const savedSignature = placementPersistenceSignature(session);
+  const draftSignature = placementPersistenceSignature(draft);
+  const dirty = Boolean(draft && savedSignature !== draftSignature);
+  return {
+    dirty,
+    canSave: dirty,
+    label: dirty ? '미저장 변경' : '저장됨',
+    draftSignature,
+    savedSignature,
+  };
+}
+
+function placementVerticalRoomHint(item, scaleRatio){
+  if (!item || verticalPlacementRoomPages(item, scaleRatio) > 0.001) return '';
+  return itemUsesContinuousPageFlow(item)
+    ? '이어붙임 자료는 높이에 맞춰 연속 배치되어 상하 위치가 고정됩니다.'
+    : '상하 여유 공간이 없습니다. 크기를 줄이면 위치를 조절할 수 있어요.';
+}
+
 function SidePanel({
-  item, items, activeIndex,
+  item, items, activeIndex, setActive,
   setStep, applyToAll, bulk, setBulk,
-  setPlacement, mutateSession, mutating,
-  boardColumns, setBoardColumns,
+  setPlacement, setPlacements, savePlacement, mutateSession, mutating,
+  reducePlacementGap, undoPlacementGap, canUndoPlacementGap = false,
+  boardColumns, setBoardColumns, layoutGapMode, setLayoutGapMode, resetPlacementGaps,
   boardColor, setBoardColor,
-  accent, setAccent,
+  darkMode = false, onToggleDarkMode,
   onConfirm,
-  userSettings, runtimeDiagnostics, onSaveGeminiKey,
-  onSaveOpenAiKey, onEnhanceImage, imageEnhanceBusy,
-  aiEnabled, setAiEnabled,
-  inputIntent, setInputIntent,
-  onRecognizeSession, canRecognizeSession,
-  session, published,
+  userSettings, runtimeDiagnostics, lastOperationError, onSaveGeminiKey,
+  onEnhanceImage, imageEnhanceBusy,
+  aiEnabled, onToggleAi, aiToggleBusy,
+  inputIntent,
+  session, published, sessionEditState,
+  publishPlan, publishPlanBusy, publishPlanFailed,
   onClassinReviewComplete,
+  onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, onCheckUpdate, onOpenUpdate,
+  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, updatePanelRequest = 0,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
+  triggerUpload, addSample, onRevealPanel, onOpenBugReport,
+  pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
+  focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
-  const [tab, setTab] = useState('item');
+  const consumedUpdateRequestRef = useRef(0);
+  const [storedTab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
+  // An explicit update request renders its tab in the same commit as opening
+  // the panel, instead of painting another tab and switching in an effect.
+  const tab = updatePanelRequest !== consumedUpdateRequestRef.current ? 'board' : storedTab;
+  const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
+  const toggleSettingsSection = (id) => {
+    setSettingsOpen(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      try { window.localStorage?.setItem(SETTINGS_SECTIONS_OPEN_KEY, JSON.stringify(next)); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  };
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
+  const [previewExpanded, setPreviewExpanded] = useState(false);
   const [compareX, setCompareX] = useState(50);
   const [keyDraft, setKeyDraft] = useState('');
-  const [openAiKeyDraft, setOpenAiKeyDraft] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [showOpenAiKey, setShowOpenAiKey] = useState(false);
-  const [hangulDetailsExpanded, setHangulDetailsExpanded] = useState(false);
-  const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false);
+  const [keySaveBusy, setKeySaveBusy] = useState(false);
+  const [keySaveError, setKeySaveError] = useState('');
+  const [aiSaveError, setAiSaveError] = useState('');
+  const [placementSaveError, setPlacementSaveError] = useState('');
+  const [updatePinDraft, setUpdatePinDraft] = useState('');
+  const [showUpdatePin, setShowUpdatePin] = useState(false);
+  const [advancedSettingsOpen, setAdvancedSettingsOpen] = useStoredPreference(ADVANCED_SETTINGS_OPEN_KEY, false, isStoredBoolean);
+  const [keyEditorOpen, setKeyEditorOpen] = useState(false);
   const [cropPresetsOpen, setCropPresetsOpen] = useState(false);
   const [cropDraft, setCropDraft] = useState({ ...EMPTY_MANUAL_CROP });
   const [placementScope, setPlacementScope] = useState('item');
   const [placementPreset, setPlacementPreset] = useState('auto');
-  const [placePassageOnce, setPlacePassageOnce] = useState(true);
-  const [movePassageGroupTogether, setMovePassageGroupTogether] = useState(true);
-  const [breakGroupOnOverflow, setBreakGroupOnOverflow] = useState(true);
-  const [placementApplied, setPlacementApplied] = useState(false);
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
+  const updateDisclosureRef = useRef(null);
+  useEffect(() => {
+    if (emptyHome) {
+      consumedUpdateRequestRef.current = updatePanelRequest;
+      return;
+    }
+    if (!updatePanelRequest || consumedUpdateRequestRef.current === updatePanelRequest) return;
+    setTab('board');
+    const disclosure = updateDisclosureRef.current;
+    if (!disclosure) return;
+    disclosure.open = true;
+    const revealUpdate = () => {
+      if (disclosure.open) disclosure.scrollIntoView({ block: 'start' });
+    };
+    // Feed results and runtime diagnostics can resize the panel after opening.
+    // Keep the requested update section visible through those async changes.
+    const resizeObserver = new ResizeObserver(revealUpdate);
+    resizeObserver.observe(disclosure);
+    // Wait for the newly opened panel and disclosure to finish layout before
+    // scrolling; the home screen can otherwise leave the actions offscreen.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        consumedUpdateRequestRef.current = updatePanelRequest;
+        revealUpdate();
+        disclosure.querySelector('summary')?.focus({ preventScroll: true });
+      });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+    };
+  }, [updatePanelRequest, tab, setTab, emptyHome]);
+  const panelTabRefs = useRef({});
+  const panelBusy = Boolean(mutating || sessionEditState?.busy);
+  const handlePanelTabKeyDown = (event) => {
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const index = RIGHT_PANEL_TABS.indexOf(tab);
+    const nextIndex = event.key === 'Home' ? 0
+      : event.key === 'End' ? RIGHT_PANEL_TABS.length - 1
+        : event.key === 'ArrowRight' ? (index + 1) % RIGHT_PANEL_TABS.length
+          : event.key === 'ArrowLeft' ? (index + RIGHT_PANEL_TABS.length - 1) % RIGHT_PANEL_TABS.length
+            : null;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    const nextTab = RIGHT_PANEL_TABS[nextIndex];
+    setTab(nextTab);
+    panelTabRefs.current[nextTab]?.focus();
+  };
   const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
   const hangulStatusMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
   const hangulToolRows = hangulRuntimeToolRows(hangulDiagnostics);
-  const hangulDetailsOpen = !!hangulDiagnostics && hangulDiagnostics.status !== 'ready';
 
   useEffect(() => {
     const onMove = e => {
@@ -4689,9 +9272,33 @@ function SidePanel({
     };
   }, []);
 
+  // Picking another problem while the settings tab is open means the teacher
+  // wants that problem's options. Placement work keeps its tab. The first
+  // null -> id transition is the session loading, not a choice, so a
+  // remembered settings tab survives a reload.
+  const lastItemIdRef = useRef(item?.id ?? null);
   useEffect(() => {
-    if (hangulDiagnostics) setHangulDetailsExpanded(hangulDetailsOpen);
-  }, [hangulDiagnostics?.status]);
+    const nextId = item?.id ?? null;
+    const previousId = lastItemIdRef.current;
+    lastItemIdRef.current = nextId;
+    if (previousId != null && nextId != null && nextId !== previousId && tab === 'board') {
+      setTab('item');
+    }
+  }, [item?.id]);
+
+  useEffect(() => {
+    const onKeyDown = (evt) => {
+      if (!evt.altKey || evt.metaKey || evt.ctrlKey || evt.shiftKey) return;
+      if (isEditableKeyboardTarget(evt.target)) return;
+      const nextTab = RIGHT_PANEL_TAB_SHORTCUTS[evt.code];
+      if (!nextTab) return;
+      evt.preventDefault();
+      setTab(nextTab);
+      if (typeof onRevealPanel === 'function') onRevealPanel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [setTab, onRevealPanel]);
 
   useEffect(() => {
     setCropDraft(item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP });
@@ -4703,11 +9310,11 @@ function SidePanel({
     item?.manualCrop?.bottomRatio,
   ]);
 
+  const previousViewRef = useRef(null);
   useEffect(() => {
-    if (view !== 'review') return;
-    setAdvancedSettingsOpen(false);
-    setCropPresetsOpen(false);
-  }, [view, item?.id]);
+    if (view === 'review' && previousViewRef.current !== view) setTab('item');
+    previousViewRef.current = view;
+  }, [view, setTab]);
 
   const itemPosLabel = item
     ? `${String(activeIndex+1).padStart(2,'0')} / ${String(items.length).padStart(2,'0')}`
@@ -4725,6 +9332,35 @@ function SidePanel({
   const placementX = item ? normalizePlacementXRatio(item.placementXRatio) : DEFAULT_PLACEMENT_X_RATIO;
   const placementY = item ? normalizePlacementYRatio(item.placementYRatio) : DEFAULT_PLACEMENT_Y_RATIO;
   const hasVerticalRoom = verticalPlacementRoomPages(item, placementScale) > 0.001;
+  const extraMovementSlots = placementExtraSlots(item);
+  const verticalRoomHint = placementVerticalRoomHint(item, placementScale);
+  const placementSaveState = useMemo(
+    () => session && sessionEditState
+      ? sessionEditState
+      : derivePlacementSaveState(session, items, boardColumns, layoutGapMode),
+    [session, sessionEditState, items, boardColumns, layoutGapMode]
+  );
+  const panelSaveState = sessionEditState || {
+    dirty: placementSaveState.dirty,
+    label: !items.length ? '자료 없음' : !session ? '샘플 미리보기 · 저장되지 않음' : placementSaveState.label,
+  };
+  const aiReady = Boolean(aiEnabled && userSettings?.hasGeminiApiKey);
+  const aiConnectionLabel = !aiEnabled
+    ? '로컬 처리 중 · AI 사용 꺼짐'
+    : aiReady ? 'AI 설정 준비됨 · 실행할 때 사용'
+      : '로컬 처리 중 · AI 연결 설정 필요';
+  const placementLayoutItems = useMemo(
+    () => reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode),
+    [items, boardColumns, layoutGapMode]
+  );
+  const activePlacementPreview = useMemo(
+    () => deriveBoardPreviewEstimate(placementLayoutItems, item?.id).active,
+    [placementLayoutItems, item?.id]
+  );
+  const placementGapAction = useMemo(
+    () => derivePlacementGapActionFromLayout(placementLayoutItems, item?.id),
+    [placementLayoutItems, item?.id]
+  );
   const selectedPassageGroupId = item ? passageGroupIdFor(item) : '';
   const selectedPassageRangeLabel = item ? passageRangeLabelFor(item) : '';
   const selectedGroupItems = useMemo(() => {
@@ -4732,46 +9368,65 @@ function SidePanel({
     if (!selectedPassageGroupId) return [item];
     return items.filter(candidate => passageGroupIdFor(candidate) === selectedPassageGroupId);
   }, [item?.id, items, selectedPassageGroupId]);
-  const placementTargets = placementScope === 'all'
-    ? items
-    : placementScope === 'group' && selectedPassageGroupId
-      ? selectedGroupItems
-      : item
-        ? [item]
-        : [];
-  const passageFragmentCount = selectedGroupItems.filter(isPassageFragmentProblem).length;
+  const selectedPassageFragments = selectedGroupItems.filter(isPassageFragmentProblem);
+  const placementTargets = placementPreset === 'passage-only' && selectedPassageFragments.length
+    ? selectedPassageFragments
+    : placementScope === 'all'
+      ? items
+      : placementScope === 'group' && selectedPassageGroupId
+        ? selectedGroupItems
+        : item
+          ? [item]
+          : [];
+  const placementTargetLabel = placementPreset === 'passage-only' && selectedPassageFragments.length
+    ? `지문 본문 ${placementTargets.length}개`
+    : placementScope === 'all'
+      ? `전체 자료 ${placementTargets.length}개`
+      : placementScope === 'group' && selectedPassageGroupId
+        ? `지문 묶음 ${placementTargets.length}개`
+        : item
+          ? '현재 자료 1개'
+          : '선택된 자료 없음';
+  const passageFragmentCount = selectedPassageFragments.length;
   const passageQuestionCount = Math.max(0, selectedGroupItems.length - passageFragmentCount);
-  const placementGroupHeightPages = selectedGroupItems.reduce((total, target) => (
-    total + Math.max(0.12, Number(target?.actualHeightPages ?? target?.actual_height_pages ?? target?.heightFrac) || 0.8)
+  const placementGroupLayoutItems = useMemo(() => {
+    const selectedIds = new Set(selectedGroupItems.map(selected => String(selected.id)));
+    return placementLayoutItems.filter(target => selectedIds.has(String(target.id)));
+  }, [placementLayoutItems, selectedGroupItems]);
+  const placementGroupHeightPages = placementGroupLayoutItems.reduce((total, target) => (
+    total + itemRenderedHeightPages(target)
   ), 0);
-  const placementIntervals = selectedGroupItems
+  const placementIntervals = placementGroupLayoutItems
     .map(target => {
-      const start = Math.max(0, Number(target?.startYPages ?? target?.start_y_pages) || 0);
-      const height = Math.max(0.12, Number(target?.actualHeightPages ?? target?.actual_height_pages ?? target?.heightFrac) || 0.8);
-      const scale = normalizePlacementScaleRatio(target?.placementScaleRatio ?? target?.placement_scale_ratio, maxPlacementScaleRatio(target));
+      const rawStart = Number(target?.startYPages ?? target?.start_y_pages);
+      const flowStart = Number.isFinite(rawStart) && rawStart >= 0 ? rawStart : 0;
+      const renderedTop = Number(target?.renderedTopYPages ?? target?.rendered_top_y_pages);
+      const start = Number.isFinite(renderedTop) && renderedTop >= flowStart ? renderedTop : flowStart;
+      const renderedBottom = Number(target?.renderedBottomYPages ?? target?.rendered_bottom_y_pages);
+      const bottom = Number.isFinite(renderedBottom) && renderedBottom > start
+        ? renderedBottom : start + itemRenderedHeightPages(target);
       const snapped = Number(target?.snappedNextStartYPages ?? target?.snapped_next_start_y_pages);
       return {
         start,
-        bottom: start + (height * scale),
-        next: Number.isFinite(snapped) ? snapped : start + (height * scale),
+        bottom,
+        next: Number.isFinite(snapped) && snapped >= bottom ? snapped : bottom,
       };
     })
     .sort((a, b) => a.start - b.start);
   const placementHasOverlap = placementIntervals.some((interval, index) => (
     index < placementIntervals.length - 1 && interval.bottom > placementIntervals[index + 1].start + 0.001
   ));
-  const placementNextStartPages = placementIntervals.reduce((maximum, interval) => Math.max(maximum, interval.next), 0);
   const placementGroupTitle = selectedPassageGroupId
     ? `지문 묶음 ${selectedPassageRangeLabel || '연결'}`
     : item
       ? problemDisplayName(item, activeIndex)
       : '배치할 자료를 선택하세요';
   const placementGroupMeta = selectedPassageGroupId
-    ? `지문 ${passageFragmentCount}개 · 문항 ${passageQuestionCount}개 · ${placementGroupHeightPages.toFixed(1)}p`
+    ? `지문 ${passageFragmentCount}개 · 문항 ${passageQuestionCount}개 · EDB 높이 ${placementGroupHeightPages.toFixed(1)}p`
     : item
-      ? `자료 1개 · ${placementGroupHeightPages.toFixed(1)}p`
+      ? `자료 1개 · EDB 높이 ${placementGroupHeightPages.toFixed(1)}p`
       : '왼쪽 목록 또는 칠판에서 자료를 선택하세요';
-  const currentInputIntent = normalizeInputIntent(session?.inputIntent || session?.input_intent || inputIntent);
+  const currentInputIntent = normalizeInputIntent(session?.inputIntent || session?.input_intent || DEFAULT_INPUT_INTENT);
   const itemInputIntent = normalizeInputIntent(item?.inputIntent || currentInputIntent);
   const itemIntentMeta = inputIntentMeta(itemInputIntent);
   const showFitWidth = !!item && itemInputIntent === 'page-as-is';
@@ -4779,51 +9434,92 @@ function SidePanel({
   const canZoomIn = item && placementScale < maxScale - 0.001;
   const canEnhanceCurrent = !!item && !imageEnhanceBusy;
   const updateStatus = updateInfo?.channelStatus || 'unknown';
+  const updateArchitectureBlocked = isUpdateArchitectureMismatch(updateInfo);
+  const updateArchitectureSteps = updateArchitectureRecoverySteps(updateInfo);
   const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || '';
+  const updateAutomaticEnabled = Boolean(updateInfo?.automaticUpdateEnabled);
+  const updateAutomaticReady = Boolean(updateInfo?.automaticUpdateReady);
+  const updateActionBusy = updateBusy || updateInstallBusy;
+  useEffect(() => {
+    if (updateInfo?.updateAvailable) return;
+    setUpdatePinDraft('');
+    setShowUpdatePin(false);
+  }, [updateInfo?.updateAvailable]);
   const updateStatusLabel = updateBusy
     ? '확인 중'
-    : updateInfo?.updateAvailable
-      ? '새 버전'
-      : updateStatus === 'up_to_date'
-        ? '최신'
-        : updateStatus === 'manual_download'
-          ? '수동'
-          : updateStatus === 'not_configured'
-            ? '미설정'
-            : updateStatus === 'error'
-              ? '오류'
-              : updateStatus === 'invalid_feed'
-                ? '피드 오류'
-              : updateStatus === 'unsupported_platform'
-                ? '미지원'
-                : '확인 전';
-  const updateStatusTone = updateInfo?.updateAvailable
-    ? 'var(--accent)'
-    : updateStatus === 'up_to_date'
-      ? 'var(--ok)'
-      : updateStatus === 'error' || updateStatus === 'invalid_feed'
-        ? 'var(--danger)'
-        : 'var(--muted)';
+    : updateArchitectureBlocked
+      ? '파일 없음'
+      : updateInfo?.updateAvailable
+        ? '새 버전'
+        : updateStatus === 'up_to_date'
+          ? '최신'
+          : updateStatus === 'manual_download'
+            ? '수동'
+            : updateStatus === 'not_configured'
+              ? '미설정'
+              : updateStatus === 'error'
+                ? '오류'
+                : updateStatus === 'invalid_feed'
+                  ? '피드 오류'
+                  : updateStatus === 'unsupported_platform'
+                    ? '미지원'
+                    : '확인 전';
+  const updateStatusTone = updateArchitectureBlocked
+      ? 'danger'
+      : updateInfo?.updateAvailable
+        ? 'accent'
+        : updateStatus === 'up_to_date'
+          ? 'ok'
+          : updateStatus === 'error' || updateStatus === 'invalid_feed'
+            ? 'danger'
+            : 'neutral';
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
+  const requestUpdateInstall = () => {
+    if (!updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
+    const targetVersion = updateInfo?.latest?.version || '새 버전';
+    const confirmed = window.confirm(
+      `${targetVersion} 업데이트를 설치할까요?\n검증이 끝나면 앱이 종료되고 현재 설치 위치에 적용됩니다.`
+    );
+    if (!confirmed) return;
+    Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
+      if (installed) setUpdatePinDraft('');
+    });
+  };
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
-  const showItemConfirmBar = !!item && (bulk || item.step !== 'raw');
+  const showItemConfirmBar = view !== 'review' && !!item && (bulk || item.step !== 'raw');
+  const manualGapCount = items.filter(target => (
+    normalizePlacementGapAfterPages(
+      target.placementGapAfterPages ?? target.placement_gap_after_pages
+    ) !== null
+  )).length;
+  const hasPrevItem = !!item && activeIndex > 0;
+  const hasNextItem = !!item && activeIndex >= 0 && activeIndex < items.length - 1;
+  const goToItem = (delta) => {
+    const target = items[activeIndex + delta];
+    if (target?.id) setActive?.(target.id);
+  };
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
-    setPlacementApplied(false);
   }, [item?.id, selectedPassageGroupId]);
 
   const updatePlacementTargets = (patchForTarget) => {
-    placementTargets.forEach(target => {
+    if (panelBusy) return;
+    const updates = placementTargets.map(target => {
       const patch = typeof patchForTarget === 'function' ? patchForTarget(target) : patchForTarget;
-      if (patch && target?.id) setPlacement?.(target.id, patch);
-    });
-    setPlacementApplied(false);
+      return patch && target?.id ? { id: target.id, patch } : null;
+    }).filter(Boolean);
+    if (setPlacements) setPlacements(updates);
+    else updates.forEach(update => setPlacement?.(update.id, update.patch));
+  };
+  const selectPlacementScope = (scope) => {
+    setPlacementScope(scope);
+    if (placementPreset === 'passage-only') setPlacementPreset('auto');
   };
   const updatePlacement = (patch) => {
     if (!item) return;
@@ -4844,6 +9540,7 @@ function SidePanel({
   };
   const resetPlacement = () => {
     updatePlacementTargets({
+      extraSlots: 0,
       xRatio: DEFAULT_PLACEMENT_X_RATIO,
       yRatio: DEFAULT_PLACEMENT_Y_RATIO,
       scaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
@@ -4865,10 +9562,65 @@ function SidePanel({
     }));
   };
   const applyPlacementPreset = (preset) => {
+    if (panelBusy) return;
     setPlacementPreset(preset);
-    setPlacementApplied(false);
-    if (preset === 'side-by-side') setBoardColumns?.(2);
     if (preset === 'auto' || preset === 'vertical' || preset === 'passage-only') setBoardColumns?.(1);
+    if (preset === 'passage-only' && selectedPassageFragments.length) {
+      setPlacements?.(selectedPassageFragments.map(target => ({
+        id: target.id,
+        patch: {
+          xRatio: DEFAULT_PLACEMENT_X_RATIO,
+          xEdited: false,
+          yRatio: DEFAULT_PLACEMENT_Y_RATIO,
+          scaleRatio: maxPlacementScaleRatio(target),
+          fitWidth: true,
+        },
+      })));
+      setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
+    }
+  };
+  const commitPlacement = async () => {
+    if (!(session ? sessionEditState?.canSave ?? placementSaveState.canSave : placementSaveState.canSave) || panelBusy) return;
+    try {
+      const saved = await savePlacement?.();
+      setPlacementSaveError(saved === true ? '' : '저장하지 못했습니다. 조정값은 유지됩니다. 다시 저장해 주세요.');
+    } catch (_error) {
+      setPlacementSaveError('저장하지 못했습니다. 조정값은 유지됩니다. 다시 저장해 주세요.');
+    }
+  };
+  const persistAiPreference = async (enabled) => {
+    if (aiToggleBusy || panelBusy || !onToggleAi) return;
+    setAiSaveError('');
+    try {
+      if (await onToggleAi(enabled) === false) {
+        setAiSaveError('AI 설정을 저장하지 못했습니다. 다시 시도해 주세요.');
+      }
+    } catch (_error) {
+      setAiSaveError('AI 설정을 저장하지 못했습니다. 다시 시도해 주세요.');
+    }
+  };
+  const selectProcessingStep = (step) => {
+    if (!item || panelBusy) return;
+    setStep(item.id, step);
+    setPreviewMode(step === 's1' ? 'raw' : 'chalk');
+  };
+  const persistGeminiKeyDraft = async () => {
+    if (!keyDraft.trim() || keySaveBusy || !onSaveGeminiKey) return;
+    setKeySaveBusy(true);
+    setKeySaveError('');
+    try {
+      const saved = await onSaveGeminiKey(keyDraft.trim());
+      if (saved !== true) {
+        setKeySaveError('키를 저장하지 못했습니다. 입력값을 확인하고 다시 시도해 주세요.');
+        return;
+      }
+      setKeyDraft('');
+      setKeyEditorOpen(false);
+    } catch (error) {
+      setKeySaveError('키를 저장하지 못했습니다. 입력값을 확인하고 다시 시도해 주세요.');
+    } finally {
+      setKeySaveBusy(false);
+    }
   };
   const updateCropDraft = (key, value) => {
     setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
@@ -4883,13 +9635,14 @@ function SidePanel({
   };
   const focusManualCrop = () => {
     setAdvancedSettingsOpen(true);
+    setPreviewExpanded(true);
     setPreviewMode('raw');
     window.requestAnimationFrame(() => {
       cropControlRef.current?.scrollIntoView({ block: 'center', inline: 'nearest' });
     });
   };
   const applyManualCrop = (nextCrop = cropDraft) => {
-    if (!item || mutating) return;
+    if (!item || panelBusy) return;
     const normalized = normalizeManualCrop(nextCrop);
     setCropDraft(normalized);
     if (item.step === 's2' || item.step === 's3') setPreviewMode('chalk');
@@ -4901,40 +9654,187 @@ function SidePanel({
     if (savedCropActive) applyManualCrop(reset);
   };
 
-  return (
-    <div className={`col right ${view === 'review' ? 'review-context' : ''}`}>
-      <div className="tab-bar" role="tablist" aria-label="우측 편집 패널">
+  const updateControls = (
+    <>
+      {updateInfo?.channelStatus === 'not_configured' && <div className="runtime-note warn" role="status">
+        업데이트 배포 주소가 아직 설정되지 않았습니다. 현재 버전이 최신인지 확인하거나 새 버전을 설치할 수 없습니다. 관리자에게 업데이트가 설정된 배포본을 요청해 주세요.
+      </div>}
+      {updateArchitectureBlocked ? (
+        <div className="runtime-note warn update-architecture-note" role="status">
+          <strong>이 기기용 업데이트 파일 없음</strong>
+          {updateArchitectureSteps.map(step => <small key={step}>{step}</small>)}
+        </div>
+      ) : updateInfo?.error && (
+        <div className="runtime-note warn">
+          {updateInfo.error}
+        </div>
+      )}
+      <div className="settings-action-row">
         <button
-          className={tab==='item' ? 'on' : ''}
-          onClick={() => setTab('item')}
-          title="선택 자료"
-          data-tooltip="선택한 자료의 처리 방식과 세부 편집"
-          role="tab"
-          aria-selected={tab === 'item'}
+          className="btn"
+          type="button"
+          onClick={() => onCheckUpdate?.()}
+          disabled={updateActionBusy}
         >
-          자료 <span className="badge">{itemPosLabel}</span>
+          {updateBusy ? '확인 중...' : '업데이트 확인'}
         </button>
         <button
-          className={tab==='placement' ? 'on' : ''}
-          onClick={() => setTab('placement')}
-          title="배치"
-          data-tooltip="자료 위치, 크기, 지문 묶음 배치"
-          role="tab"
-          aria-selected={tab === 'placement'}
+          className="btn"
+          type="button"
+          onClick={() => onOpenUpdate?.()}
+          disabled={updateActionBusy || !updateDownloadUrl}
+          title={updateArchitectureBlocked
+            ? '현재 아키텍처용 설치 파일을 선택해 주세요'
+            : updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
         >
-          배치
-        </button>
-        <button
-          className={tab==='board' ? 'on' : ''}
-          onClick={() => setTab('board')}
-          title="설정"
-          data-tooltip="레이아웃, 색상, AI 인식 설정"
-          role="tab"
-          aria-selected={tab === 'board'}
-        >
-          설정
+          {Icon.download} 다운로드 열기
         </button>
       </div>
+      {updateInfo?.updateAvailable && <div className="update-install-card">
+        <div className="lbl">
+          관리자 PIN 업데이트
+          <small>
+            {updateAutomaticEnabled
+              ? '배포 파일을 검증한 뒤 앱을 종료하고 현재 설치 위치에 덮어씁니다.'
+              : '관리자가 업데이트 PIN을 설정한 배포본에서 사용할 수 있습니다.'}
+          </small>
+        </div>
+        <div className="key-input-row update-pin-row">
+          <input
+            type={showUpdatePin ? 'text' : 'password'}
+            className="key-input"
+            aria-label="업데이트 PIN"
+            placeholder="업데이트 PIN (숫자 4~12자리)"
+            value={updatePinDraft}
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={12}
+            autoComplete="one-time-code"
+            disabled={updateActionBusy || !updateAutomaticEnabled}
+            onChange={event => setUpdatePinDraft(event.target.value.replace(/\D/g, '').slice(0, 12))}
+            onKeyDown={event => {
+              if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
+              event.preventDefault();
+              requestUpdateInstall();
+            }}
+          />
+          <button
+            className="btn icon"
+            type="button"
+            onClick={() => setShowUpdatePin(visible => !visible)}
+            disabled={updateActionBusy || !updateAutomaticEnabled}
+            title={showUpdatePin ? 'PIN 숨기기' : 'PIN 보기'}
+            aria-label={showUpdatePin ? '업데이트 PIN 숨기기' : '업데이트 PIN 보기'}
+            aria-pressed={showUpdatePin}
+          >
+            <span aria-hidden="true">{showUpdatePin ? Icon.eyeOff : Icon.eye}</span>
+          </button>
+        </div>
+        <button
+          className="btn primary update-install-button"
+          type="button"
+          disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4}
+          title={!updateAutomaticEnabled
+            ? '이 배포본에 업데이트 PIN이 설정되지 않았습니다'
+            : !updateInfo?.updateAvailable
+              ? '업데이트 확인 후 새 버전이 있을 때 사용할 수 있습니다'
+              : !updateAutomaticReady
+                ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
+                : 'PIN 확인 후 새 버전을 덮어씁니다'}
+          onClick={requestUpdateInstall}
+        >
+          {updateInstallBusy ? '검증·설치 준비 중...' : '관리자 PIN 확인 후 업데이트'}
+        </button>
+      </div>}
+
+    </>
+  );
+
+  if (emptyHome) return (
+    <HomeUpdateDialog
+      open={homeUpdateOpen}
+      onClose={onCloseHomeUpdate}
+      busy={updateInstallBusy}
+      versionLine={updateVersionLine}
+      statusLabel={updateStatusLabel}
+    >{updateControls}</HomeUpdateDialog>
+  );
+
+  return (
+    <div className={`col right ${view === 'review' ? 'review-context' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정">
+      {focusMode && (
+        <div className="focus-panel-heading">
+          <div>
+            <strong>편집 도구</strong>
+          </div>
+          <button
+            className="icon-btn focus-panel-toggle"
+            type="button"
+            aria-label="편집 패널 접기"
+            aria-expanded="true"
+            aria-controls="workspace-panel"
+            onClick={onToggleFocusPanel}
+          >{Icon.chevronDown}</button>
+        </div>
+      )}
+      <div className="tab-bar" role="tablist" aria-label="우측 편집 패널">
+        <button
+          type="button"
+          id="side-tab-item"
+          ref={node => { panelTabRefs.current.item = node; }}
+          className={tab==='item' ? 'on' : ''}
+          onClick={() => setTab('item')}
+          onKeyDown={handlePanelTabKeyDown}
+          title="자료 편집"
+          data-tooltip={`선택한 자료의 처리 방식과 세부 편집 · ${ALTERNATE_MODIFIER_LABEL}+1`}
+          role="tab"
+          aria-keyshortcuts="Alt+1"
+          aria-selected={tab === 'item'}
+          aria-controls="side-panel-item"
+          tabIndex={tab === 'item' ? 0 : -1}
+        >
+          {Icon.fileText} 자료 편집
+        </button>
+        <button
+          type="button"
+          id="side-tab-placement"
+          ref={node => { panelTabRefs.current.placement = node; }}
+          className={tab==='placement' ? 'on' : ''}
+          onClick={() => setTab('placement')}
+          onKeyDown={handlePanelTabKeyDown}
+          title="칠판 배치"
+          data-tooltip={`자료 위치, 크기, 지문 묶음 배치 · 전체 레이아웃 · ${ALTERNATE_MODIFIER_LABEL}+2`}
+          role="tab"
+          aria-keyshortcuts="Alt+2"
+          aria-selected={tab === 'placement'}
+          aria-controls="side-panel-placement"
+          tabIndex={tab === 'placement' ? 0 : -1}
+        >
+          {Icon.align} 칠판 배치
+        </button>
+        <button
+          type="button"
+          id="side-tab-board"
+          ref={node => { panelTabRefs.current.board = node; }}
+          className={tab==='board' ? 'on' : ''}
+          onClick={() => setTab('board')}
+          onKeyDown={handlePanelTabKeyDown}
+          title="앱 설정"
+          data-tooltip={`AI, 칠판 배경, 문서 변환, 앱 정보 · ${ALTERNATE_MODIFIER_LABEL}+3`}
+          role="tab"
+          aria-keyshortcuts="Alt+3"
+          aria-selected={tab === 'board'}
+          aria-controls="side-panel-board"
+          tabIndex={tab === 'board' ? 0 : -1}
+        >
+          {Icon.rows3} 앱 설정
+        </button>
+      </div>
+
+      {tab !== 'placement' && (panelBusy || panelSaveState.dirty) && <div className={`panel-session-state ${panelSaveState.dirty ? 'is-dirty' : ''} ${panelBusy ? 'is-busy' : ''}`} role="status" aria-live="polite" aria-atomic="true">
+        <strong>{panelBusy ? '수업 변경 처리 중…' : panelSaveState.label}</strong>
+        {session && panelSaveState.dirty && <small>수업 이름·처리 방식·배치 변경 포함</small>}
+      </div>}
 
       <PublishResultPanel
         session={session}
@@ -4943,8 +9843,11 @@ function SidePanel({
         onExportImages={onExportImages}
         exportingImages={exportingImages}
         canExportImages={canExportImages}
+        onDownloadPublish={onDownloadPublish}
+        publishDownloadBusy={publishDownloadBusy}
       />
 
+      <section className="side-tab-panel" id="side-panel-item" role="tabpanel" aria-labelledby="side-tab-item" hidden={tab !== 'item'} tabIndex={0}>
       {tab === 'item' && (
         <>
           <div className="tab-body">
@@ -4962,108 +9865,208 @@ function SidePanel({
                       {problemSourceLabel(item)} · {item.type.toUpperCase()}
                     </div>
                   </div>
-                  <div className="pos-tag">{itemPosLabel}</div>
-                </div>
-
-                <div className="item-preview" ref={wrapRef}>
-                  <div className="ptab">
-                    <button className={previewMode==='raw' ? 'on' : ''} onClick={() => setPreviewMode('raw')}>원본</button>
-                    <button className={previewMode==='chalk' ? 'on' : ''} onClick={() => setPreviewMode('chalk')}>칠판용</button>
-                    <button className={previewMode==='compare' ? 'on' : ''} onClick={() => setPreviewMode('compare')}>비교</button>
+                  <div className="item-nav" role="group" aria-label="자료 이동">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="이전 자료"
+                      aria-label="이전 자료"
+                      disabled={!hasPrevItem}
+                      onClick={() => goToItem(-1)}
+                    >{Icon.arrowLeft}</button>
+                    <div className="pos-tag">{itemPosLabel}</div>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="다음 자료"
+                      aria-label="다음 자료"
+                      disabled={!hasNextItem}
+                      onClick={() => goToItem(1)}
+                    >{Icon.arrowRight}</button>
                   </div>
-
-                  {previewMode === 'compare' ? (
-                    <div className="canvas-mini" style={{ background: 'white' }}>
-                      <div className="inner"><TileImage item={item} forceMode="raw" /></div>
-                      <div style={{
-                        position: 'absolute', inset: 0,
-                        clipPath: `inset(0 0 0 ${compareX}%)`,
-                        background: boardColor,
-                      }}>
-                        <div className="inner"><TileImage item={item} forceMode="chalk" /></div>
-                      </div>
-                      <div className="compare-handle"
-                           style={{ left: `${compareX}%` }}
-                           onMouseDown={() => { dragging.current = true; }}/>
-                    </div>
-                  ) : (
-                    <div className={`canvas-mini ${previewMode==='chalk' ? 'board' : ''}`}
-                         style={previewMode==='chalk' ? { background: boardColor } : null}>
-                      <div className="inner"><TileImage item={item} forceMode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
-                    </div>
-                  )}
-
                 </div>
 
                 <div className="panel-section-hd">
                   처리 방식 선택 <span className="line" />
+                  {!showItemConfirmBar && items.length > 1 && (
+                    <button
+                      type="button"
+                      className="section-hd-action"
+                      disabled={panelBusy || item.step === 'raw'}
+                      title={`${stepLabel(item.step)}을(를) 전체 ${items.length}개 자료에 선택 · 검수 적용 시 저장`}
+                      onClick={() => applyToAll(item.step)}
+                    >전체에 선택</button>
+                  )}
                 </div>
-
-                <div className="steps">
+                <div className="steps" role="group" aria-label="자료 처리 방식">
                   <button
                     className={`step-row ${item.step === 's1' ? 'on' : ''}`}
+                    type="button"
+                    aria-pressed={item.step === 's1'}
                     data-tooltip="원본 이미지를 빠르게 그대로 배치"
-                    onClick={() => setStep(item.id, 's1')}
+                    disabled={panelBusy}
+                    onClick={() => selectProcessingStep('s1')}
                   >
                     <span className="radio" />
                     <div>
-                      <div className="t">1단계 · 그대로 붙이기</div>
+                      <div className="t">그대로 붙이기</div>
                       <div className="d">원본 색·여백 유지</div>
                     </div>
-                    <div className="meta-r">즉시<strong>~ 0.3s</strong></div>
                   </button>
                   <button
                     className={`step-row ${item.step === 's2' ? 'on' : ''}`}
+                    type="button"
+                    aria-pressed={item.step === 's2'}
                     data-tooltip="원문 글자를 유지하면서 배경과 선명도를 빠르게 정리"
-                    onClick={() => setStep(item.id, 's2')}
+                    disabled={panelBusy}
+                    onClick={() => selectProcessingStep('s2')}
                   >
                     <span className="radio" />
                     <div>
-                      <div className="t">2단계 · 원문 보존 <span className="ai-badge">FAST</span></div>
-                      <div className="d">글자 유지 · 배경 제거 · 빠른 선명화</div>
+                      <div className="t">원문 보존</div>
+                      <div className="d">글자 유지 · 배경 정리 · 선명화</div>
                     </div>
-                    <div className="meta-r">로컬<strong>1~4s</strong></div>
                   </button>
                   <button
                     className={`step-row ${item.step === 's3' ? 'on' : ''}`}
-                    data-tooltip="원문 보존 2K 또는 선택적 AI 재구성으로 고화질 제작"
-                    onClick={() => setStep(item.id, 's3')}
+                    type="button"
+                    aria-pressed={item.step === 's3'}
+                    data-tooltip="원문 보존 2K 또는 선택적 AI 1K 재구성으로 고화질 제작"
+                    disabled={panelBusy}
+                    onClick={() => selectProcessingStep('s3')}
                   >
                     <span className="radio" />
                     <div>
-                      <div className="t">3단계 · 고화질 <span className="ai-badge">2K</span></div>
-                      <div className="d">보존형 2K · 선택적 AI 재구성</div>
+                      <div className="t">고화질</div>
+                      <div className="d">보존형 2K · 선택적 AI 1K</div>
                     </div>
-                    <div className="meta-r">선택<strong>1~8s</strong></div>
                   </button>
                 </div>
 
-                <div className={`detail-settings ${advancedSettingsOpen ? 'open' : ''}`}>
+                <p className="panel-scope-note">
+                  선택 1개 · 처리 방식은 아래 적용 버튼으로 저장합니다.
+                  {session && <> 적용 시 수업의 미저장 변경도 함께 저장됩니다.</>}
+                </p>
+
+                <div className="inspector-quick-actions" role="group" aria-label="선택 자료 빠른 편집">
+                  <button className="btn" type="button" disabled={panelBusy} onClick={focusManualCrop}>
+                    {Icon.crop} 여백 자르기
+                  </button>
+                  <button className="btn" type="button" onClick={() => setTab('placement')}>
+                    {Icon.align} 크기·간격
+                  </button>
+                </div>
+
+                <div className={`item-preview ${previewExpanded ? 'is-expanded' : 'is-collapsed'}`} ref={wrapRef}>
+                  <button
+                    type="button"
+                    className="item-preview-toggle"
+                    aria-expanded={previewExpanded}
+                    aria-controls="item-image-preview-content"
+                    onClick={() => setPreviewExpanded(open => !open)}
+                  >
+                    <span className="item-preview-toggle-copy">
+                      <strong>선택 자료 미리보기</strong>
+                      <small>{previewMode === 'raw' ? '원본' : previewMode === 'chalk' ? '칠판용' : '비교'}</small>
+                    </span>
+                    <span className="item-preview-toggle-icon" aria-hidden="true">
+                      {previewExpanded ? Icon.chevronUp : Icon.chevronDown}
+                    </span>
+                  </button>
+
+                  {previewExpanded && (
+                    <div className="item-preview-content" id="item-image-preview-content">
+                      <div className="ptab" role="group" aria-label="선택 자료 미리보기 방식">
+                        <button type="button" className={previewMode==='raw' ? 'on' : ''} aria-pressed={previewMode==='raw'} onClick={() => setPreviewMode('raw')}>원본</button>
+                        <button type="button" className={previewMode==='chalk' ? 'on' : ''} aria-pressed={previewMode==='chalk'} onClick={() => setPreviewMode('chalk')}>칠판용</button>
+                        <button type="button" className={previewMode==='compare' ? 'on' : ''} aria-pressed={previewMode==='compare'} onClick={() => setPreviewMode('compare')}>비교</button>
+                      </div>
+
+                      {previewMode === 'compare' ? (
+                        <div className="canvas-mini" style={{ background: 'white' }}>
+                          <div className="inner"><TileImage item={item} forceMode="raw" /></div>
+                          <div style={{
+                            position: 'absolute', inset: 0,
+                            clipPath: `inset(0 0 0 ${compareX}%)`,
+                            background: boardColor,
+                          }}>
+                            <div className="inner"><TileImage item={item} forceMode="chalk" /></div>
+                          </div>
+                          <div className="compare-handle"
+                               role="slider" tabIndex={0} aria-label="원본과 칠판용 비교"
+                               aria-valuemin={6} aria-valuemax={94} aria-valuenow={Math.round(compareX)}
+                               style={{ left: `${compareX}%` }}
+                               onKeyDown={event => {
+                                 if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                                 event.preventDefault();
+                                 setCompareX(previous => event.key === 'Home' ? 6 : event.key === 'End' ? 94 : Math.max(6, Math.min(94, previous + (event.key === 'ArrowLeft' ? -2 : 2))));
+                               }}
+                               onMouseDown={() => { dragging.current = true; }}/>
+                        </div>
+                      ) : (
+                        <div className={`canvas-mini ${previewMode==='chalk' ? 'board' : ''}`}
+                             style={previewMode==='chalk' ? { background: boardColor } : null}>
+                          <div className="inner"><TileImage item={item} forceMode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <div className={`detail-settings material-detail-disclosure ${advancedSettingsOpen ? 'open' : ''}`}>
                   <button
                     className="detail-settings-toggle"
                     type="button"
-                    data-tooltip="여백 자르기와 업스케일 상세 설정"
+                    data-tooltip="지문 분류, 여백 자르기, 추가 고화질 처리"
                     aria-expanded={advancedSettingsOpen}
                     onClick={() => setAdvancedSettingsOpen(open => !open)}
                   >
                     <span>
-                      <strong>상세 설정</strong>
-                      <small>자르기 · 업스케일</small>
+                      <strong>자료 상세</strong>
+                      <small>분류 · 번호 정정 · 추가 고화질</small>
                     </span>
                     <span className="detail-settings-state">
-                      {savedCropActive && <em>crop</em>}
+                      {savedCropActive && <em>자르기 적용됨</em>}
                       <i aria-hidden="true">{advancedSettingsOpen ? '접기' : '펼치기'}</i>
                     </span>
                   </button>
 
-                  {advancedSettingsOpen && (
-                    <div className="detail-settings-body">
+                    <div className="detail-settings-body" hidden={!advancedSettingsOpen}>
+                      <div className="item-classification">
+                        <div>
+                          <strong>자료 분류</strong>
+                          <small>선택 즉시 저장 · 이미 잘라진 독립 지문 이미지에만 사용</small>
+                        </div>
+                        <div className="item-classification-options" role="radiogroup" aria-label="선택 자료 분류">
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={!isPassageFragmentProblem(item)}
+                            className={!isPassageFragmentProblem(item) ? 'on' : ''}
+                            disabled={panelBusy}
+                            onClick={() => mutateSession?.('classify', { problemId: item.id, classification: 'question' })}
+                          >문항</button>
+                          <button
+                            type="button"
+                            role="radio"
+                            aria-checked={isPassageFragmentProblem(item)}
+                            className={isPassageFragmentProblem(item) ? 'on' : ''}
+                            disabled={panelBusy}
+                            onClick={() => mutateSession?.('classify', { problemId: item.id, classification: 'shared-passage' })}
+                          >독립 지문 이미지</button>
+                        </div>
+                      </div>
+
+                      <SidebarDisclosure title="원문 번호 수정" summary="인식된 번호가 잘못된 경우만 수정" className="original-number-details">
+                        <OriginalProblemNumberEditor key={item.id} item={item} disabled={panelBusy || !session} onSave={mutateSession} />
+                      </SidebarDisclosure>
+
                       <div className="panel-section-hd">
                         빠른 편집 <span className="line" />
                       </div>
 
                       <div className="ptools detail-tools">
-                        <button className="icon-btn" title="회전">{Icon.rotate}</button>
+
                         <button
                           className={`icon-btn ${savedCropActive ? 'on' : ''}`}
                           type="button"
@@ -5079,6 +10082,7 @@ function SidePanel({
                       <div className="manual-crop-control" ref={cropControlRef}>
                         <div className="manual-crop-note">
                           +값은 영역을 바깥으로 넓히고, -값은 안쪽으로 잘라냅니다.
+                          {' '}적용하면 수업 변경과 함께 저장됩니다.
                         </div>
                         <button
                           type="button"
@@ -5092,16 +10096,16 @@ function SidePanel({
                         </button>
                         {cropPresetsOpen && (
                           <div className="manual-crop-presets">
-                            <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05, topRatio: -0.05, bottomRatio: -0.05 })}>
+                            <button type="button" className="btn" disabled={!item || panelBusy} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05, topRatio: -0.05, bottomRatio: -0.05 })}>
                               사방 +5%
                             </button>
-                            <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ topRatio: -0.05, bottomRatio: -0.05 })}>
+                            <button type="button" className="btn" disabled={!item || panelBusy} onClick={() => adjustCropDraft({ topRatio: -0.05, bottomRatio: -0.05 })}>
                               위아래 +5%
                             </button>
-                            <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05 })}>
+                            <button type="button" className="btn" disabled={!item || panelBusy} onClick={() => adjustCropDraft({ leftRatio: -0.05, rightRatio: -0.05 })}>
                               좌우 +5%
                             </button>
-                            <button type="button" className="btn" disabled={!item || mutating} onClick={() => adjustCropDraft({ leftRatio: 0.05, rightRatio: 0.05, topRatio: 0.05, bottomRatio: 0.05 })}>
+                            <button type="button" className="btn" disabled={!item || panelBusy} onClick={() => adjustCropDraft({ leftRatio: 0.05, rightRatio: 0.05, topRatio: 0.05, bottomRatio: 0.05 })}>
                               사방 -5%
                             </button>
                           </div>
@@ -5115,6 +10119,7 @@ function SidePanel({
                               max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                               step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                               value={Math.round(cropDraft.leftRatio * 100)}
+                              disabled={panelBusy}
                               onChange={e => updateCropDraft('leftRatio', Number(e.target.value) / 100)}
                             />
                             <strong>{manualCropPercent(cropDraft.leftRatio)}</strong>
@@ -5127,6 +10132,7 @@ function SidePanel({
                               max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                               step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                               value={Math.round(cropDraft.rightRatio * 100)}
+                              disabled={panelBusy}
                               onChange={e => updateCropDraft('rightRatio', Number(e.target.value) / 100)}
                             />
                             <strong>{manualCropPercent(cropDraft.rightRatio)}</strong>
@@ -5139,6 +10145,7 @@ function SidePanel({
                               max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                               step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                               value={Math.round(cropDraft.topRatio * 100)}
+                              disabled={panelBusy}
                               onChange={e => updateCropDraft('topRatio', Number(e.target.value) / 100)}
                             />
                             <strong>{manualCropPercent(cropDraft.topRatio)}</strong>
@@ -5151,24 +10158,28 @@ function SidePanel({
                               max={Math.round(MANUAL_CROP_EDGE_MAX * 100)}
                               step={Math.round(MANUAL_CROP_EDGE_STEP * 100)}
                               value={Math.round(cropDraft.bottomRatio * 100)}
+                              disabled={panelBusy}
                               onChange={e => updateCropDraft('bottomRatio', Number(e.target.value) / 100)}
                             />
                             <strong>{manualCropPercent(cropDraft.bottomRatio)}</strong>
                           </label>
                         </div>
                         <div className="manual-crop-actions">
+                          <span className={`manual-crop-state ${cropChanged ? 'ready' : ''}`} aria-live="polite">
+                            {cropChanged ? '변경한 여백을 적용할 수 있어요' : '여백 변경 없음'}
+                          </span>
                           <button
                             className="btn"
                             type="button"
-                            disabled={!item || mutating || (!draftCropActive && !savedCropActive)}
+                            disabled={!item || panelBusy || (!draftCropActive && !savedCropActive)}
                             onClick={resetManualCrop}
                           >초기화</button>
                           <button
                             className="btn primary"
                             type="button"
-                            disabled={!item || mutating || !cropChanged}
+                            disabled={!item || panelBusy || !cropChanged}
                             onClick={() => applyManualCrop()}
-                          >자르기 적용</button>
+                          >{Icon.check} {mutating ? '적용 중…' : '자르기 적용'}</button>
                         </div>
                       </div>
 
@@ -5180,7 +10191,7 @@ function SidePanel({
                         type="button"
                         style={{width: '100%', justifyContent: 'space-between'}}
                         onClick={() => onEnhanceImage?.([item.id], { mode: 'preserve' })}
-                        disabled={!canEnhanceCurrent}
+                        disabled={!canEnhanceCurrent || panelBusy}
                         title="글자를 새로 만들지 않고 원본 픽셀을 보존해 2K 투명 PNG로 개선합니다"
                       >
                         <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 글자 보존 고화질</span>
@@ -5191,27 +10202,35 @@ function SidePanel({
                         type="button"
                         style={{width: '100%', justifyContent: 'space-between', marginTop: 7}}
                         onClick={() => onEnhanceImage?.([item.id], { mode: 'ai' })}
-                        disabled={!canEnhanceCurrent || !userSettings?.hasGeminiApiKey}
-                        title={userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
+                        disabled={!canEnhanceCurrent || panelBusy || !aiEnabled || !userSettings?.hasGeminiApiKey}
+                        title={!aiEnabled ? '설정에서 AI 기능을 켜면 선택적으로 사용할 수 있습니다' : userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
                       >
                         <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 선택적 AI 재구성</span>
-                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 2K</span>
+                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 1K</span>
                       </button>
                       <div style={{fontSize: 11.5, lineHeight: 1.45, color: 'var(--muted)', marginTop: 7}}>
-                        국어·영어는 글자 보존형을 권장합니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
+                        수식·문자·선지가 있는 자료는 글자 보존형이 기본입니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
                       </div>
                     </div>
-                  )}
                 </div>
               </>
             ) : pendingFile ? (
               <PendingFilePreview
                 file={pendingFile}
-                fileKey={pendingFileKey}
+                pendingCount={pendingFileCount}
+                imageOnly={pendingImageOnly}
                 queueBusy={queueBusy}
                 processQueuedFiles={processQueuedFiles}
                 onPreviewError={onPendingPreviewError}
+                splitMode={splitMode}
+                setSplitMode={setSplitMode}
               />
+            ) : items.length === 0 ? (
+              <div className="side-panel-home-empty">
+                <div className="side-panel-empty-icon">{Icon.upload}</div>
+                <strong>선택한 자료를 편집해요</strong>
+                <p>자료를 추가한 뒤 목록이나 칠판에서 선택하면 처리 방식과 세부 설정을 조절할 수 있어요.</p>
+              </div>
             ) : (
               <div style={{
                 padding: 40, textAlign: 'center',
@@ -5227,30 +10246,49 @@ function SidePanel({
           {showItemConfirmBar && (
           <div className="tab-foot">
             <label className="check">
-              <input type="checkbox" checked={bulk} onChange={e => setBulk(e.target.checked)} />
-              전체 적용
+              <input type="checkbox" checked={bulk} disabled={panelBusy} onChange={e => setBulk(e.target.checked)} aria-label={`처리 방식을 수업 전체 ${items.length}개에 적용`} />
+              수업 전체 {items.length}개
             </label>
             <div className="spacer" />
-            <button className="btn" disabled={!item}>건너뛰기</button>
+            <button
+              className="btn"
+              type="button"
+              disabled={!hasNextItem}
+              data-tooltip="확인하지 않고 다음 자료로 이동"
+              onClick={() => goToItem(1)}
+            >건너뛰기</button>
             <button
               className="btn primary"
-              disabled={!item || item.step === 'raw'}
+              disabled={!item || item.step === 'raw' || panelBusy}
+              title="처리 방식을 적용하고 현재 수업의 미저장 변경을 함께 저장"
               onClick={() => {
                 if (!item) return;
-                if (bulk) applyToAll(item.step, { silent: true });
-                onConfirm(item.id, { bulk });
+                onConfirm(item.id, { bulk, processingStep: item.step });
               }}
             >
-              {Icon.check} {bulk ? '일괄 확인' : '확인'}
+              {Icon.check} {mutating ? '적용 중…' : bulk ? `전체 ${items.length}개에 적용` : '선택 1개에 적용'}
             </button>
           </div>
           )}
         </>
       )}
+      </section>
 
+      <section className="side-tab-panel" id="side-panel-placement" role="tabpanel" aria-labelledby="side-tab-placement" hidden={tab !== 'placement'} tabIndex={0}>
       {tab === 'placement' && (
         <>
           <div className="tab-body placement-tab-body">
+            {items.length === 0 ? (
+              <div className="side-panel-home-empty placement-empty-state">
+                <div className="side-panel-empty-icon">{pendingFile ? Icon.fileText : Icon.upload}</div>
+                <strong>{pendingFile ? '등록 대기 자료가 있어요' : '배치할 자료를 추가해 주세요'}</strong>
+                <p>{pendingFile
+                  ? '자료 탭에서 파일을 확인하고 등록하면 크기와 간격을 조절할 수 있어요.'
+                  : '파일을 추가하고 문항을 확인한 뒤 칠판에 배치하세요.'}</p>
+                {pendingFile && <button className="btn" type="button" onClick={() => setTab('item')}>대기 자료 확인</button>}
+              </div>
+            ) : (
+              <>
             <section className="placement-context" aria-label="선택 배치 대상">
               <div>
                 <strong>{placementGroupTitle}</strong>
@@ -5269,50 +10307,32 @@ function SidePanel({
                   type="button"
                   className={placementScope === 'item' ? 'on' : ''}
                   aria-pressed={placementScope === 'item'}
-                  disabled={!item}
-                  onClick={() => setPlacementScope('item')}
+                  disabled={!item || panelBusy}
+                  onClick={() => selectPlacementScope('item')}
                 >이 문항</button>
                 <button
                   type="button"
                   className={placementScope === 'group' ? 'on' : ''}
                   aria-pressed={placementScope === 'group'}
-                  disabled={!selectedPassageGroupId}
-                  onClick={() => setPlacementScope('group')}
+                  disabled={!selectedPassageGroupId || panelBusy}
+                  onClick={() => selectPlacementScope('group')}
                 >지문 묶음</button>
                 <button
                   type="button"
                   className={placementScope === 'all' ? 'on' : ''}
                   aria-pressed={placementScope === 'all'}
-                  disabled={!items.length}
-                  onClick={() => setPlacementScope('all')}
+                  disabled={!items.length || panelBusy}
+                  onClick={() => selectPlacementScope('all')}
                 >전체 자료</button>
               </div>
-            </section>
-
-            <section className="placement-section">
-              <div className="placement-section-title"><span>레이아웃 프리셋</span></div>
-              <div className="placement-presets" role="group" aria-label="레이아웃 프리셋">
-                {[
-                  ['auto', '자동 추천'],
-                  ['vertical', '세로 연결'],
-                  ['side-by-side', '좌우 병렬'],
-                  ['passage-only', '지문 전용'],
-                ].map(([value, label]) => (
-                  <button
-                    key={value}
-                    type="button"
-                    className={placementPreset === value ? 'on' : ''}
-                    aria-pressed={placementPreset === value}
-                    disabled={!item}
-                    onClick={() => applyPlacementPreset(value)}
-                  >{value === 'auto' && <span aria-hidden="true">✦</span>}{label}</button>
-                ))}
-              </div>
+              <p className="placement-target-hint">
+                {item ? `${placementTargetLabel}의 크기와 위치를 조절합니다.` : '왼쪽 목록 또는 칠판에서 자료를 선택하세요.'}
+              </p>
             </section>
 
             <section className="placement-section placement-size-section">
               <div className="placement-section-title">
-                <span>크기 및 위치</span>
+                <span>크기</span>
                 <small>{placementScalePercent}%</small>
               </div>
               <div className="placement-width-row">
@@ -5328,7 +10348,7 @@ function SidePanel({
                       type="button"
                       className={Math.abs(placementScale - scale) < 0.035 ? 'on' : ''}
                       aria-pressed={Math.abs(placementScale - scale) < 0.035}
-                      disabled={!item}
+                      disabled={!item || panelBusy}
                       onClick={() => applyWidthPreset(scale)}
                     >{label}</button>
                   ))}
@@ -5336,7 +10356,7 @@ function SidePanel({
               </div>
 
               <div className="placement-scale-row">
-                <span>비율(스케일)</span>
+                <span>크기 비율</span>
                 <input
                   className="scale-range"
                   type="range"
@@ -5345,189 +10365,330 @@ function SidePanel({
                   value={placementScalePercent}
                   style={{ '--range-progress': `${Math.max(0, Math.min(100, scaleRangeProgress))}%` }}
                   aria-label={`배치 크기 ${placementScalePercent}%`}
-                  disabled={!item}
+                  disabled={!item || panelBusy}
                   onChange={event => updatePlacement({ scaleRatio: Number(event.target.value) / 100 })}
                 />
                 <strong>{placementScalePercent}%</strong>
               </div>
 
-              <div className="position-control placement-position-control">
-                <div className="position-pad" aria-label="배치 위치 미세 조절">
-                  <button className="pos-btn up" type="button" title="위로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, -PLACEMENT_NUDGE_STEP)}>{Icon.arrowUp}</button>
-                  <button className="pos-btn left" type="button" title="왼쪽으로" disabled={!item} onClick={() => nudgePlacement(-PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowLeft}</button>
-                  <button className="pos-btn reset" type="button" title="위치 초기화" disabled={!item} onClick={resetPlacement}>{Icon.reset}</button>
-                  <button className="pos-btn right" type="button" title="오른쪽으로" disabled={!item} onClick={() => nudgePlacement(PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowRight}</button>
-                  <button className="pos-btn down" type="button" title="아래로" disabled={!item || !hasVerticalRoom} onClick={() => nudgePlacement(0, PLACEMENT_NUDGE_STEP)}>{Icon.arrowDown}</button>
-                </div>
-                <div className="position-sliders">
-                  <label>
-                    <span>좌우</span>
-                    <input type="range" min="0" max="100" value={Math.round(placementX * 100)} disabled={!item} onChange={event => updatePlacement({ xRatio: Number(event.target.value) / 100 })} />
-                    <strong>{Math.round(placementX * 100)}%</strong>
-                  </label>
-                  <label>
-                    <span>상하</span>
-                    <input type="range" min="0" max="100" value={Math.round((hasVerticalRoom ? placementY : 0) * 100)} disabled={!item || !hasVerticalRoom} onChange={event => updatePlacement({ yRatio: Number(event.target.value) / 100 })} />
-                    <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
-                  </label>
-                  <div className="placement-scale-actions">
-                    <button type="button" className="btn" disabled={!canZoomOut} onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}>{Icon.zoomOut} 축소</button>
-                    <button type="button" className="btn" disabled={!canZoomIn} onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}>{Icon.zoomIn} 확대</button>
-                  </div>
-                </div>
-              </div>
               {showFitWidth && (
-                <button className="btn placement-fit-width" type="button" disabled={!item} onClick={fitPlacementWidth}>
+                <button className="btn placement-fit-width" type="button" disabled={!item || panelBusy} onClick={fitPlacementWidth}>
                   {Icon.stretchHorizontal} 너비 맞춤 이어붙임
                 </button>
               )}
             </section>
 
-            <section className="placement-section placement-rules">
-              <div className="placement-section-title"><span>지문 묶음 규칙</span></div>
-              {[
-                ['지문 한 번만 배치', placePassageOnce, setPlacePassageOnce],
-                ['문항 함께 이동', movePassageGroupTogether, setMovePassageGroupTogether],
-                ['공간 부족 시 다음 칠판', breakGroupOnOverflow, setBreakGroupOnOverflow],
-              ].map(([label, checked, setter]) => (
-                <label key={label} className="placement-rule-row">
-                  <span>{label}</span>
-                  <input type="checkbox" checked={checked} disabled={!item} onChange={event => setter(event.target.checked)} />
-                </label>
-              ))}
+            <BoardLayoutControls
+              boardColumns={boardColumns}
+              layoutGapMode={layoutGapMode}
+              setLayoutGapMode={setLayoutGapMode}
+              manualGapCount={manualGapCount}
+              resetPlacementGaps={resetPlacementGaps}
+              disabled={panelBusy}
+            />
+
+            <SidebarDisclosure
+              title="위치 미세 조절"
+              summary={`좌우 ${Math.round(placementX * 100)}% · 상하 ${Math.round((hasVerticalRoom ? placementY : 0) * 100)}%`}
+              badge={verticalRoomHint ? '상하 고정' : ''}
+              className="placement-position-details"
+            >
+              <div className="position-control placement-position-control">
+                <div className="position-pad" aria-label="배치 위치 미세 조절">
+                  <button className="pos-btn up" type="button" title="위로" disabled={!item || panelBusy || !hasVerticalRoom} onClick={() => nudgePlacement(0, -PLACEMENT_NUDGE_STEP)}>{Icon.arrowUp}</button>
+                  <button className="pos-btn left" type="button" title="왼쪽으로" disabled={!item || panelBusy} onClick={() => nudgePlacement(-PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowLeft}</button>
+                  <button className="pos-btn reset" type="button" title="위치와 크기 초기화" disabled={!item || panelBusy} onClick={resetPlacement}>{Icon.reset}</button>
+                  <button className="pos-btn right" type="button" title="오른쪽으로" disabled={!item || panelBusy} onClick={() => nudgePlacement(PLACEMENT_NUDGE_STEP, 0)}>{Icon.arrowRight}</button>
+                  <button className="pos-btn down" type="button" title="아래로" disabled={!item || panelBusy || !hasVerticalRoom} onClick={() => nudgePlacement(0, PLACEMENT_NUDGE_STEP)}>{Icon.arrowDown}</button>
+                </div>
+                <div className="position-sliders">
+                  <label>
+                    <span>좌우</span>
+                    <input type="range" min="0" max="100" aria-label="자료 좌우 위치" value={Math.round(placementX * 100)} disabled={!item || panelBusy} onChange={event => updatePlacement({ xRatio: Number(event.target.value) / 100 })} />
+                    <strong>{Math.round(placementX * 100)}%</strong>
+                  </label>
+                  <label>
+                    <span>상하</span>
+                    <input type="range" min="0" max="100" aria-label="자료 상하 위치" aria-describedby={verticalRoomHint ? 'placement-vertical-room-note' : undefined} value={Math.round((hasVerticalRoom ? placementY : 0) * 100)} disabled={!item || panelBusy || !hasVerticalRoom} onChange={event => updatePlacement({ yRatio: Number(event.target.value) / 100 })} />
+                    <strong>{Math.round((hasVerticalRoom ? placementY : 0) * 100)}%</strong>
+                  </label>
+                  <div className="placement-scale-actions">
+                    <button type="button" className="btn" disabled={!canZoomOut || panelBusy} onClick={() => nudgeScale(-PLACEMENT_SCALE_STEP)}>{Icon.zoomOut} 축소</button>
+                    <button type="button" className="btn" disabled={!canZoomIn || panelBusy} onClick={() => nudgeScale(PLACEMENT_SCALE_STEP)}>{Icon.zoomIn} 확대</button>
+                  </div>
+                </div>
+              </div>
+              {verticalRoomHint && (
+                <p className="placement-control-note" id="placement-vertical-room-note">{verticalRoomHint}</p>
+              )}
+              <div className="placement-extra-space">
+                <span>세로 이동 공간</span>
+                <button type="button" className="btn" aria-label="세로 이동 공간 줄이기" disabled={!item || panelBusy || extraMovementSlots === 0} onClick={() => updatePlacementTargets(target => ({ extraSlots: placementExtraSlots(target) - 1 }))}>−</button>
+                <strong aria-live="polite">+{extraMovementSlots}페이지</strong>
+                <button type="button" className="btn" aria-label="세로 이동 공간 늘리기" disabled={!item || panelBusy || extraMovementSlots >= PLACEMENT_EXTRA_SLOTS_MAX} onClick={() => updatePlacementTargets(target => ({ extraSlots: placementExtraSlots(target) + 1 }))}>+</button>
+              </div>
+              <small className="placement-movement-help">제목 줄을 아래로 끌면 공간이 늘어나고 다음 자료는 밀려납니다. {ALTERNATE_MODIFIER_LABEL}+드래그는 순서 이동, Esc는 취소입니다.</small>
+            </SidebarDisclosure>
+
+            <section className="placement-gap-control" aria-label="선택 문항 뒤 여백 조절">
+              <strong>{placementGapAction.ids.length > 1 ? '선택 행 뒤 여백' : item ? `선택 ${activeIndex + 1}번 뒤 여백` : '문항 뒤 여백'}</strong>
+              <p className="placement-control-note" id="placement-gap-hint">
+                {!item ? '칠판에서 문항을 선택하세요.' : placementGapAction.removableGapPages > 0
+                  ? `${formatClassinPageAmount(placementGapAction.removableGapPages)} 줄일 수 있어요. 뒤 여백을 줄이고 이후 문항을 위로 당깁니다.${placementGapAction.ids.length > 1 ? ' 같은 행의 모든 문항에 적용됩니다.' : ''}`
+                  : '더 줄일 수 있는 배치 여백이 없습니다.'}
+              </p>
+              <p className="placement-control-note">이미지 안의 흰 배경과 선택한 줄의 문항 위치는 유지하고, 뒤따르는 줄을 위로 당깁니다.</p>
+              <button className="btn" type="button" aria-describedby="placement-gap-hint" disabled={!item || panelBusy || !placementGapAction.ids.length} onClick={() => reducePlacementGap?.(item.id)}>뒤 여백 줄이기</button>
+              {canUndoPlacementGap && <button className="btn ghost" type="button" disabled={panelBusy} onClick={() => undoPlacementGap?.()}>마지막 여백 변경 되돌리기</button>}
             </section>
 
-            <section className={`placement-diagnostic ${placementHasOverlap ? 'warn' : 'ok'}`}>
+            <SidebarDisclosure
+              title="연결 및 배치 안내"
+              summary={activePlacementPreview
+                ? `선택 ${activePlacementPreview.classinStartPage}–${activePlacementPreview.classinEndPage}쪽${activePlacementPreview.classinNextPage === null ? '' : ` · 다음 ${activePlacementPreview.classinNextPage}쪽`}`
+                : '연결 방식 · 자동 배치 동작'}
+              badge={placementHasOverlap ? '겹침 확인' : publishPlanFailed ? '제작 확인 필요' : selectedPassageGroupId ? '지문 묶음' : ''}
+              tone={placementHasOverlap || publishPlanFailed ? 'warn' : 'neutral'}
+              className="placement-advanced-details"
+            >
+            <PublishPlanSummary plan={publishPlan} busy={publishPlanBusy} failed={publishPlanFailed} />
+            <section className="placement-section">
+              <div className="placement-section-title"><span>레이아웃 프리셋</span></div>
+              <div className="placement-presets" role="group" aria-label="레이아웃 프리셋">
+                {[
+                  ['vertical', '기본 세로'],
+                  ['passage-only', '지문 전체 너비'],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={(placementPreset === value || (value === 'vertical' && placementPreset === 'auto')) ? 'on' : ''}
+                    aria-pressed={placementPreset === value || (value === 'vertical' && placementPreset === 'auto')}
+                    disabled={!item || panelBusy || (value === 'passage-only' && passageFragmentCount === 0)}
+                    onClick={() => applyPlacementPreset(value)}
+                    title={value === 'passage-only'
+                      ? '전체 칠판을 1열로 바꾸고, 이미 추출된 지문 본문만 최대 읽기 폭으로 맞춥니다'
+                      : '전체 칠판을 1열로 세로 연결합니다'}
+                  >{label}</button>
+                ))}
+              </div>
+            </section>
+
+            <section className="placement-section placement-rules">
+              <div className="placement-section-title"><span>자동 배치 안내</span></div>
+              <dl className="placement-auto-rules-list">
+                <div>
+                  <dt>조절 대상</dt>
+                  <dd>{placementTargetLabel}</dd>
+                </div>
+                <div>
+                  <dt>문항 간격</dt>
+                  <dd>{itemUsesContinuousPageFlow(item)
+                    ? '이어붙임 자료는 높이에 맞춰 연속 배치합니다.'
+                    : normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT
+                      ? '기본 간격은 자료 높이에 맞춥니다.'
+                      : '기본 간격은 1.2p 경계에 맞춥니다.'}
+                    {' '}개별 여백 설정을 우선합니다.</dd>
+                </div>
+                <div>
+                  <dt>EDB 파일</dt>
+                  <dd>50페이지를 넘으면 여러 파일로 나누어 제작합니다.</dd>
+                </div>
+              </dl>
+            </section>
+
+            <section className={`placement-diagnostic ${placementHasOverlap ? 'warn' : selectedPassageGroupId ? 'ok' : 'info'}`}>
               <div>
                 <span>배치 진단</span>
-                <strong>{placementHasOverlap ? '겹침을 확인하세요' : `다음 문항 ${placementNextStartPages.toFixed(1)}p 시작 · 겹침 없음`}</strong>
+                <strong>{selectedPassageGroupId
+                  ? placementHasOverlap ? '현재 지문 묶음 내부 겹침 확인 필요' : '현재 지문 묶음 내부 겹침 없음'
+                  : '현재 자료 · 인접 문항은 칠판에서 확인'}</strong>
+                {activePlacementPreview && (
+                  <small className="placement-diagnostic-meta">
+                    {activePlacementPreview.classinStartPage}–{activePlacementPreview.classinEndPage}쪽
+                    {activePlacementPreview.classinNextPage !== null && <> · 다음 {activePlacementPreview.classinNextPage}쪽</>}
+                    {' · '}아래 여백 {formatClassinPageAmount(activePlacementPreview.blankHeightPages)}
+                  </small>
+                )}
               </div>
-              <span aria-hidden="true">{placementHasOverlap ? '!' : '✓'}</span>
+              <span aria-hidden="true">{placementHasOverlap ? '!' : selectedPassageGroupId ? '✓' : 'i'}</span>
             </section>
+            </SidebarDisclosure>
+              </>
+            )}
           </div>
-          <div className="tab-foot placement-tab-foot">
-            <button className="btn" type="button" disabled={!item} onClick={resetPlacement}>초기화</button>
+          {items.length > 0 && <div className="tab-foot placement-tab-foot">
+            <div className={`placement-save-state ${panelSaveState.dirty ? 'is-dirty' : 'is-saved'}`} role="status" aria-live="polite" aria-atomic="true">
+              <strong>{panelBusy ? '처리 중…' : panelSaveState.label}</strong>
+              <small>{!items.length
+                ? '자료를 추가하면 배치를 조절하고 저장할 수 있어요.'
+                : session
+                  ? '수업 전체의 배치·이름·처리 방식 변경을 함께 저장합니다.'
+                  : '미리보기 자료는 EDB 파일로 저장되지 않습니다.'}</small>
+            </div>
+            <button className="btn" type="button" title={`${placementTargetLabel}의 위치와 크기 초기화`} disabled={!item || panelBusy} onClick={resetPlacement}>선택 범위 초기화</button>
             <div className="spacer" />
             <button
               className="btn primary"
               type="button"
-              disabled={!item}
-              onClick={() => setPlacementApplied(true)}
-            >{Icon.check} {placementApplied ? '적용됨' : placementScope === 'group' ? '묶음 적용' : '배치 적용'}</button>
-          </div>
+              disabled={!(session ? sessionEditState?.canSave ?? placementSaveState.canSave : placementSaveState.canSave) || panelBusy}
+              onClick={() => { void commitPlacement(); }}
+            >{Icon.check} {panelBusy ? '처리 중…' : session ? '수업 배치 변경 저장' : '미리보기 확인'}</button>
+            {placementSaveError && <p className="runtime-note warn placement-save-error" role="alert">{placementSaveError}</p>}
+          </div>}
         </>
       )}
+      </section>
 
+      <section className="side-tab-panel" id="side-panel-board" role="tabpanel" aria-labelledby="side-tab-board" hidden={tab !== 'board'} tabIndex={0}>
       {tab === 'board' && (
         <>
-          <div className="tab-body">
-            <div className="panel-section-hd">레이아웃 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">한 줄 자료 수<small>너비 맞춤 아님 · 한 줄 배치 개수</small></div>
-              <div className="seg-mini">
-                {[1,2,3].map(n => (
-                  <button key={n} className={boardColumns===n ? 'on' : ''} onClick={() => setBoardColumns(n)}>{n}개</button>
-                ))}
-              </div>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">스크롤 모드<small>밑으로 무한 스크롤</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">드래그 마그넷<small>배치 칸 가이드에 자동 정렬</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">주변 사진 높이<small>같은 행의 가장 큰 자료 기준</small></div>
-              <span className="pos-tag" style={{background:'var(--ok)'}}>ON</span>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>칠판 색상 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">칠판 배경<small>실제 교실 칠판과 맞추기</small></div>
-              <div className="swatches">
-                {BOARD_COLORS.map(c => (
-                  <div key={c}
-                       className={`sw ${boardColor === c ? 'on' : ''}`}
-                       style={{ background: c }}
-                       onClick={() => setBoardColor(c)}
-                       title={c} />
-                ))}
-              </div>
-            </div>
-
-            <div className="row-control">
-              <div className="lbl">강조색<small>UI 강조에 쓰이는 색</small></div>
-              <div className="swatches">
-                {ACCENTS.map(c => (
-                  <div key={c}
-                       className={`sw ${accent === c ? 'on' : ''}`}
-                       style={{ background: c }}
-                       onClick={() => setAccent(c)}
-                       title={c} />
-                ))}
-              </div>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>일괄 작업 <span className="line" /></div>
-
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s2')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 전체를 2단계 원문 보존</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>~ {items.length * 4}s</span>
-            </button>
-            <button
-              className="btn primary"
-              style={{justifyContent:'space-between'}}
-              onClick={onRecognizeSession}
-              disabled={!canRecognizeSession}
-              title={userSettings?.hasGeminiApiKey ? '현재 세션의 모든 원본 페이지를 문제 단위로 다시 인식' : 'Gemini API 키를 저장하면 AI 인식을 실행할 수 있습니다'}
-            >
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.aiBatch} 현재 자료 문제 인식</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>AI</span>
-            </button>
-            <button className="btn" style={{justifyContent:'space-between'}} onClick={() => applyToAll('s1')}>
-              <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.check} 전체를 1단계로</span>
-              <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, color:'var(--muted)'}}>즉시</span>
-            </button>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>업로드 옵션 <span className="line" /></div>
+          <div className="tab-body settings-tab-body">
+            <SettingsSection id="upload" title="분할 방식" summary={splitModeMeta(splitMode).label} open={settingsOpen.upload} onToggle={toggleSettingsSection}>
+              <p className="settings-hint">업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다</p>
+              <SplitModePicker splitMode={splitMode} setSplitMode={setSplitMode} disabled={queueBusy} />
+            </SettingsSection>
+            <SettingsSection id="keys" title="AI 사용·연결" summary={aiConnectionLabel} open={settingsOpen.keys} onToggle={toggleSettingsSection}>
 
             <div className="row-control">
               <div className="lbl">
-                HWP/HWPX
-                <small>{hangulRuntimeSummary(hangulDiagnostics)}</small>
+                AI 기능 사용 허용
+                <small>앱 전체 · 변경하면 자동 저장</small>
               </div>
-              <span
-                className="pos-tag"
-                style={{
-                  background: hangulStatusMeta.tone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
-                title={(hangulDiagnostics?.recommendedActions || [])[0] || '한글 문서 변환 상태'}
-              >
-                {hangulStatusMeta.label}
-              </span>
+              <label className="check">
+                <input
+                  type="checkbox"
+                  aria-label="AI 기능 사용 허용"
+                  aria-describedby="settings-ai-connection"
+                  checked={!!aiEnabled}
+                  disabled={!!aiToggleBusy || panelBusy || !onToggleAi}
+                  onChange={e => { void persistAiPreference(e.target.checked); }}
+                />
+                <span style={{fontSize: 12, color: 'var(--muted)'}}>
+                  {aiToggleBusy ? '저장 중…' : aiEnabled ? '허용' : '꺼짐'}
+                </span>
+              </label>
+            </div>
+            <p className={`settings-connection-state ${aiReady ? 'is-ready' : 'needs-setup'}`} id="settings-ai-connection" role="status">
+              {aiConnectionLabel}
+            </p>
+            {aiSaveError && <p className="runtime-note warn" role="alert">{aiSaveError}</p>}
+
+            <div className="row-control api-key-status">
+              <div className="lbl">
+                Gemini API 키
+                <small>
+                  {userSettings?.hasGeminiApiKey
+                    ? `${userSettings.geminiApiKeyPreview || '설정됨'} · 앱 전체에 사용`
+                    : 'AI 기능을 사용할 때 설정해 주세요'}
+                </small>
+              </div>
+              <div className="row-actions">
+                <span className={`pos-tag status-tag ${userSettings?.hasGeminiApiKey ? 'tone-ok' : 'tone-neutral'}`}>
+                  {userSettings?.hasGeminiApiKey ? '설정됨' : '미설정'}
+                </span>
+                {!keyEditorOpen && (
+                  <button className="btn compact" type="button" onClick={() => { setKeySaveError(''); setKeyEditorOpen(true); }}>
+                    {userSettings?.hasGeminiApiKey ? '변경' : '키 설정'}
+                  </button>
+                )}
+              </div>
+            </div>
+            {keyEditorOpen && (
+              <div className="api-key-editor">
+                <small className="api-key-note">
+                  키 저장을 누르면 이 앱의 사용자 설정에 저장합니다. AI 실행은 별도 작업에서 시작합니다.
+                </small>
+                <div className="key-input-row">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    className="key-input"
+                    aria-label="Gemini API 키"
+                    placeholder={userSettings?.hasGeminiApiKey ? `현재 ${userSettings.geminiApiKeyPreview} (덮어쓰기)` : 'AIza...'}
+                    value={keyDraft}
+                    disabled={keySaveBusy}
+                    onChange={e => { setKeyDraft(e.target.value); setKeySaveError(''); }}
+                    spellCheck={false}
+                    autoComplete="off"
+                  />
+                  <button className="btn icon" type="button" onClick={() => setShowKey(s => !s)} title={showKey ? 'Gemini API 키 숨기기' : 'Gemini API 키 보기'} aria-label={showKey ? 'Gemini API 키 숨기기' : 'Gemini API 키 보기'} aria-pressed={showKey} disabled={keySaveBusy}>
+                    <span aria-hidden="true">{showKey ? Icon.eyeOff : Icon.eye}</span>
+                  </button>
+                </div>
+                <div className="settings-action-row">
+                  <button
+                    className="btn primary"
+                    type="button"
+                    onClick={() => { void persistGeminiKeyDraft(); }}
+                    disabled={!keyDraft.trim() || keySaveBusy || !onSaveGeminiKey}
+                  >
+                    {keySaveBusy ? '저장 중…' : '키 저장'}
+                  </button>
+                  <button
+                    className="btn"
+                    type="button"
+                    onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
+                    disabled={!userSettings?.hasStoredGeminiApiKey || keySaveBusy}
+                  >
+                    저장된 키 삭제
+                  </button>
+                </div>
+                {keySaveError && <p className="runtime-note warn" role="alert">{keySaveError}</p>}
+                <button className="btn ghost compact" type="button" disabled={keySaveBusy} onClick={() => { setKeyEditorOpen(false); setKeyDraft(''); setKeySaveError(''); }}>취소</button>
+              </div>
+            )}
+
+            </SettingsSection>
+            <SettingsSection id="color" title="미리보기" summary={BOARD_COLOR_LABELS[boardColor]} open={settingsOpen.color} onToggle={toggleSettingsSection}>
+            <div className="row-control">
+              <div className="lbl">화면 테마<small>이 브라우저에 자동 저장</small></div>
+              <label className="check">
+                <input type="checkbox" aria-label="어두운 화면 사용" checked={darkMode} disabled={!onToggleDarkMode} onChange={event => onToggleDarkMode?.(event.target.checked)} />
+                어두운 화면
+              </label>
+            </div>
+            <div className="row-control">
+              <div className="lbl">칠판 배경<small>이 브라우저에 자동 저장 · EDB 배경과 별개</small></div>
+              <div className="swatches" role="radiogroup" aria-label="칠판 배경">
+                {BOARD_COLORS.map(c => (
+                  <button
+                    key={c}
+                    type="button"
+                    role="radio"
+                    aria-checked={boardColor === c}
+                    aria-label={BOARD_COLOR_LABELS[c] || c}
+                    title={BOARD_COLOR_LABELS[c] || c}
+                    className={`sw ${boardColor === c ? 'on' : ''}`}
+                    style={{ '--swatch-color': c }}
+                    onClick={() => setBoardColor(c)}
+                  />
+                ))}
+              </div>
             </div>
 
-            {hangulDiagnostics && (
-              <div className={`runtime-details ${hangulDetailsExpanded ? 'open' : ''}`}>
-                <button
-                  className="runtime-details-summary"
-                  type="button"
-                  aria-expanded={hangulDetailsExpanded ? 'true' : 'false'}
-                  onClick={() => setHangulDetailsExpanded(open => !open)}
-                >
-                  변환 환경
-                </button>
-                {hangulDetailsExpanded && (
-                  <>
+            </SettingsSection>
+            <div className="panel-section-hd settings-group-label">도움말 <span className="line" /></div>
+            <SidebarDisclosure
+              title="도움말 및 문제 신고"
+              summary="오류나 불편한 점을 알려 주세요"
+              className="settings-support-disclosure"
+            >
+              <section className="bug-report-card open" aria-label="버그 리포트">
+                <p className="placement-control-note">문제가 생긴 작업과 화면을 알려 주세요. 넓은 신고 창에서 내용을 작성할 수 있습니다.</p>
+                <button className="btn primary" type="button" onClick={onOpenBugReport} aria-haspopup="dialog">문제 신고 작성</button>
+                <p className="bug-report-privacy">원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.</p>
+              </section>
+            </SidebarDisclosure>
+            <div className="panel-section-hd settings-group-label">앱 관리 <span className="line" /></div>
+            <SidebarDisclosure
+              title="한글 문서 변환 환경"
+              summary={hangulRuntimeSummary(hangulDiagnostics)}
+              badge={hangulStatusMeta.label}
+              tone={hangulStatusMeta.tone}
+              className="settings-environment-disclosure"
+            >
+              {hangulDiagnostics ? (
+                <div className="runtime-details">
                     <div className="runtime-tool-grid">
                       {hangulToolRows.map(row => (
                         <div key={row.label} className="runtime-tool-row">
@@ -5547,204 +10708,526 @@ function SidePanel({
                         {hangulDiagnostics.recommendedActions[0]}
                       </div>
                     )}
-                  </>
-                )}
-              </div>
-            )}
+                </div>
+              ) : <p className="placement-control-note">변환 환경 정보를 불러오는 중입니다.</p>}
+            </SidebarDisclosure>
 
-            <div className="intent-control">
-              {INPUT_INTENT_OPTIONS.map(option => (
-                <button
-                  key={option.value}
-                  className={`intent-choice ${normalizeInputIntent(inputIntent) === option.value ? 'on' : ''}`}
-                  type="button"
-                  onClick={() => setInputIntent?.(option.value)}
-                  title={option.description}
-                >
-                  <span className="intent-choice-head">
-                    <i aria-hidden="true">{Icon[option.icon] || Icon.scan}</i>
-                    <strong>{option.label}</strong>
-                  </span>
-                  <small>{option.description}</small>
-                  {Array.isArray(option.pills) && option.pills.length > 0 && (
-                    <em className="intent-choice-pills">
-                      {option.pills.map(pill => <b key={pill}>{pill}</b>)}
-                    </em>
-                  )}
-                </button>
-              ))}
-            </div>
+            <SidebarDisclosure
+              title="앱 업데이트"
+              summary={updateVersionLine}
+              badge={updateStatusLabel}
+              tone={updateStatusTone}
+              className="settings-update-disclosure"
+              disclosureRef={updateDisclosureRef}
+            >
+            {updateControls}
 
-            <div className="row-control">
-              <div className="lbl">
-                AI 보정 사용
-                <small>{userSettings?.hasGeminiApiKey ? 'Gemini 키 설정됨' : 'Gemini 키 없음 — 자동 비활성화'}</small>
-              </div>
-              <label className="check" style={{cursor: userSettings?.hasGeminiApiKey ? 'pointer' : 'not-allowed', opacity: userSettings?.hasGeminiApiKey ? 1 : .5}}>
-                <input
-                  type="checkbox"
-                  checked={aiEnabled && !!userSettings?.hasGeminiApiKey}
-                  disabled={!userSettings?.hasGeminiApiKey}
-                  onChange={e => setAiEnabled && setAiEnabled(e.target.checked)}
-                />
-                <span style={{fontSize: 12, color: 'var(--muted)'}}>
-                  {aiEnabled && userSettings?.hasGeminiApiKey ? '켜짐' : '꺼짐'}
-                </span>
-              </label>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>Gemini API 키 <span className="line" /></div>
-
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className={`pos-tag`} style={{background: userSettings?.hasGeminiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
-                    {userSettings?.hasGeminiApiKey ? '설정됨' : '미설정'}
-                  </span>
-                  {userSettings?.hasGeminiApiKey && (
-                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
-                      {userSettings.geminiApiKeyPreview}
-                    </span>
-                  )}
-                </span>
-                <small>
-                  {userSettings?.geminiApiKeySource === 'env'
-                    ? '환경변수의 GEMINI_API_KEY 사용 중. 저장하면 그 값이 우선.'
-                    : 'GEMINI_API_KEY로 자동 적용. .app_runtime/user_settings.json에 저장.'}
-                </small>
-              </div>
-            </div>
-            <div className="key-input-row">
-              <input
-                type={showKey ? 'text' : 'password'}
-                className="key-input"
-                placeholder={userSettings?.hasGeminiApiKey ? `현재 ${userSettings.geminiApiKeyPreview} (덮어쓰기)` : 'AIza...'}
-                value={keyDraft}
-                onChange={e => setKeyDraft(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <button className="btn icon" type="button" onClick={() => setShowKey(s => !s)} title={showKey ? '숨기기' : '보기'}>
-                {showKey ? '🙈' : '👁'}
-              </button>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { onSaveGeminiKey?.(keyDraft.trim()); setKeyDraft(''); }}
-                disabled={!keyDraft.trim()}
-              >
-                키 저장
-              </button>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { if (window.confirm('저장된 Gemini API 키를 삭제할까요?')) onSaveGeminiKey?.(''); }}
-                disabled={!userSettings?.hasStoredGeminiApiKey}
-              >
-                저장된 키 삭제
-              </button>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>OpenAI API 키 <span className="line" /></div>
-
-            <div className="row-control" style={{gridTemplateColumns: '1fr'}}>
-              <div className="lbl">
-                <span style={{display:'flex', alignItems:'center', gap:8}}>
-                  <span className={`pos-tag`} style={{background: userSettings?.hasOpenAiApiKey ? 'var(--ok)' : 'var(--danger)'}}>
-                    {userSettings?.hasOpenAiApiKey ? '설정됨' : '미설정'}
-                  </span>
-                  {userSettings?.hasOpenAiApiKey && (
-                    <span style={{fontSize: 11, color: 'var(--muted)', fontFamily: 'JetBrains Mono, monospace'}}>
-                      {userSettings.openAiApiKeyPreview}
-                    </span>
-                  )}
-                </span>
-                <small>OpenAI 기반 업스케일 재구성 fallback에만 사용합니다. 기본 3단계 업스케일은 Gemini를 사용합니다.</small>
-              </div>
-            </div>
-            <div className="key-input-row">
-              <input
-                type={showOpenAiKey ? 'text' : 'password'}
-                className="key-input"
-                placeholder={userSettings?.hasOpenAiApiKey ? `현재 ${userSettings.openAiApiKeyPreview} (덮어쓰기)` : 'sk-...'}
-                value={openAiKeyDraft}
-                onChange={e => setOpenAiKeyDraft(e.target.value)}
-                spellCheck={false}
-                autoComplete="off"
-              />
-              <button className="btn icon" type="button" onClick={() => setShowOpenAiKey(s => !s)} title={showOpenAiKey ? '숨기기' : '보기'}>
-                {showOpenAiKey ? '숨' : '보기'}
-              </button>
-            </div>
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { onSaveOpenAiKey?.(openAiKeyDraft.trim()); setOpenAiKeyDraft(''); }}
-                disabled={!openAiKeyDraft.trim()}
-              >
-                키 저장
-              </button>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                onClick={() => { if (window.confirm('저장된 OpenAI API 키를 삭제할까요?')) onSaveOpenAiKey?.(''); }}
-                disabled={!userSettings?.hasStoredOpenAiApiKey}
-              >
-                저장된 키 삭제
-              </button>
-            </div>
-
-            <div className="panel-section-hd" style={{marginTop:4}}>앱 업데이트 <span className="line" /></div>
-
-            <div className="row-control">
-              <div className="lbl">
-                현재 버전
-                <small>{updateVersionLine}</small>
-              </div>
-              <span
-                className="pos-tag"
-                style={{
-                  background: updateStatusTone,
-                  minWidth: 58,
-                  textAlign: 'center',
-                }}
-              >
-                {updateStatusLabel}
-              </span>
-            </div>
-            {updateInfo?.error && (
-              <div className="runtime-note warn">
-                {updateInfo.error}
-              </div>
-            )}
-            <div style={{display: 'flex', gap: 6}}>
-              <button
-                className="btn"
-                style={{flex: 1, justifyContent: 'center'}}
-                type="button"
-                onClick={() => onCheckUpdate?.()}
-                disabled={updateBusy}
-              >
-                {updateBusy ? '확인 중...' : '업데이트 확인'}
-              </button>
-              <button
-                className="btn primary"
-                style={{flex: 1, justifyContent: 'center'}}
-                type="button"
-                onClick={() => onOpenUpdate?.()}
-                disabled={updateBusy || !updateDownloadUrl}
-                title={updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
-              >
-                {Icon.download} 다운로드 열기
-              </button>
-            </div>
+            </SidebarDisclosure>
           </div>
         </>
       )}
+      </section>
     </div>
+  );
+}
+
+function HomeUpdateDialog({ open, onClose, busy, versionLine, statusLabel, children }){
+  const dialogRef = useRef(null);
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const previousFocus = document.activeElement;
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      const target = previousFocus?.isConnected ? previousFocus : document.querySelector('.topbar-update');
+      target?.focus?.({ preventScroll: true });
+    };
+  }, [open]);
+  if (!open) return null;
+  return (
+    <dialog
+      ref={dialogRef}
+      className="app-update-dialog"
+      aria-modal="true"
+      aria-labelledby="home-update-title"
+      aria-describedby="home-update-version"
+      onCancel={event => { event.preventDefault(); if (!busy) onClose?.(); }}
+      onKeyDown={event => {
+        if (event.key !== 'Tab') return;
+        const controls = Array.from(dialogRef.current?.querySelectorAll('button:not(:disabled), input:not(:disabled)') || []);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault(); last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault(); first?.focus();
+        }
+      }}
+      onClick={event => {
+        if (event.target !== event.currentTarget || busy) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose?.();
+      }}
+    >
+      <header>
+        <div>
+          <strong id="home-update-title">앱 업데이트</strong>
+          <small id="home-update-version">{versionLine}</small>
+        </div>
+        <button className="icon-btn" type="button" aria-label="업데이트 창 닫기" disabled={busy} onClick={onClose}>{Icon.close}</button>
+      </header>
+      <div className="app-update-content">
+        <p role="status" aria-live="polite">{statusLabel}</p>
+        {children}
+      </div>
+    </dialog>
+  );
+}
+
+function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
+  const [contact, setContact] = useState('');
+  const [consentToContact, setConsentToContact] = useState(false);
+  const [includeDiagnostics, setIncludeDiagnostics] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [invalidField, setInvalidField] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
+  const dialogRef = useRef(null);
+  const descriptionRef = useRef(null);
+  const consentRef = useRef(null);
+  const receiptRef = useRef(null);
+  const submitInFlightRef = useRef(false);
+  const errorSnapshot = request?.errorSnapshot || null;
+  const draftText = String(draft || '').trim();
+  const hasContact = contact.trim().length > 0;
+  const canSubmit = (draftText.length >= 5 || Boolean(errorSnapshot))
+    && !busy
+    && !result?.reportId
+    && (!hasContact || consentToContact);
+
+  useLayoutEffect(() => {
+    if (!request) return undefined;
+    setResult(null);
+    setErrorMessage('');
+    setInvalidField('');
+    setCopyStatus('');
+    const previousFocus = request.returnFocus || document.activeElement;
+    const dialog = dialogRef.current;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    dialog?.showModal();
+    const frame = window.requestAnimationFrame(() => descriptionRef.current?.focus());
+    return () => {
+      window.cancelAnimationFrame(frame);
+      dialog?.close();
+      document.body.style.overflow = previousBodyOverflow;
+      const focusTarget = previousFocus?.isConnected ? previousFocus : document.querySelector('[aria-controls="topbar-more-menu"]');
+      focusTarget?.focus?.({ preventScroll: true });
+    };
+  }, [request?.id]);
+
+  useEffect(() => {
+    if (result?.reportId) receiptRef.current?.focus();
+  }, [result?.reportId]);
+
+  if (!request) return null;
+
+  const handleKeyDown = event => {
+    if (event.key === 'Escape' && !busy) {
+      event.preventDefault();
+      event.stopPropagation();
+      onClose?.();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll(
+      'button:not(:disabled), input:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+    ) || []);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
+  const handleSubmit = async event => {
+    event.preventDefault();
+    if (busy || result?.reportId || submitInFlightRef.current) return;
+    if (!canSubmit) {
+      const field = draftText.length < 5 && !errorSnapshot ? 'description' : 'consent';
+      setInvalidField(field);
+      setErrorMessage(field === 'description' ? '문제가 생긴 상황을 5자 이상 적어 주세요.' : '연락처를 남기려면 회신에 동의해 주세요. 회신이 필요 없으면 연락처를 지워도 됩니다.');
+      (field === 'description' ? descriptionRef : consentRef).current?.focus();
+      return;
+    }
+    submitInFlightRef.current = true;
+    setBusy(true);
+    setErrorMessage('');
+    setInvalidField('');
+    setResult(null);
+    try {
+      const receipt = await submitBugReport({
+        description: draftText || `자동 첨부 오류 리포트 · ${errorSnapshot?.code || 'unknown'}`,
+        contact: contact.trim(),
+        consentToContact: hasContact && consentToContact,
+        includeDiagnostics,
+        context: {
+          ...(context || {}),
+          runtimeErrors: runtimeErrorsForBugReport(),
+          lastOperationError: errorSnapshot,
+        },
+      });
+      setResult(receipt);
+      onDraftChange?.('');
+      setContact('');
+      setConsentToContact(false);
+    } catch (error) {
+      setErrorMessage(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      submitInFlightRef.current = false;
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bug-report-dialog-backdrop" onMouseDown={event => {
+      if (event.target === event.currentTarget && !busy) onClose?.();
+    }}>
+      <dialog
+        ref={dialogRef}
+        className="bug-report-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bug-report-dialog-title"
+        aria-describedby="bug-report-dialog-help"
+        onKeyDown={handleKeyDown}
+        onCancel={event => { event.preventDefault(); if (!busy) onClose?.(); }}
+        onMouseDown={event => {
+          if (event.target !== event.currentTarget || busy) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose?.();
+        }}
+      >
+        <header>
+          <div>
+            <strong id="bug-report-dialog-title">문제 신고</strong>
+            <small id="bug-report-dialog-help">{result?.reportId ? '접수 번호를 보관해 주세요. 문의할 때 이 번호로 신고를 확인할 수 있습니다.' : '어떤 작업에서 불편했는지 알려 주세요. 닫아도 작성 중인 설명은 유지됩니다.'}</small>
+          </div>
+          <button className="icon-btn" type="button" aria-label="버그 리포트 닫기" disabled={busy} onClick={onClose}>
+            {Icon.close}
+          </button>
+        </header>
+        {errorSnapshot && !result?.reportId && (
+          <div className="bug-report-error-snapshot" role="status">
+            <span>자동 첨부 오류</span>
+            <strong>{operationRecoverySummary(errorSnapshot)}</strong>
+            <code>{errorSnapshot.code || 'unknown'}</code>
+          </div>
+        )}
+        <form className="bug-report-form" noValidate aria-busy={busy} onSubmit={handleSubmit}>
+          {!result?.reportId && <>
+          <label htmlFor="global-bug-report-description">{errorSnapshot ? '추가 설명 (선택)' : '어떤 문제가 있었나요?'}</label>
+          <p className="bug-report-field-help" id="global-bug-report-description-help">{errorSnapshot ? '오류 정보가 첨부돼 있어 설명 없이도 보낼 수 있습니다.' : '문제 직전의 작업과 화면에 보인 현상을 5자 이상 적어 주세요.'}</p>
+          <textarea
+            ref={descriptionRef}
+            id="global-bug-report-description"
+            value={draft || ''}
+            maxLength={4000}
+            rows={6}
+            disabled={Boolean(result?.reportId)}
+            readOnly={busy}
+            aria-invalid={invalidField === 'description'}
+            aria-describedby={`global-bug-report-description-help global-bug-report-count${invalidField === 'description' ? ' global-bug-report-error' : ''}`}
+            placeholder="예: PDF를 올린 뒤 ‘분할하기’를 누르면 화면이 멈춥니다."
+            onChange={event => {
+              onDraftChange?.(event.target.value);
+              setErrorMessage('');
+              setInvalidField('');
+              setResult(null);
+            }}
+          />
+          <div className="bug-report-counter" id="global-bug-report-count">{String(draft || '').length.toLocaleString()} / 4,000자</div>
+          <label htmlFor="global-bug-report-contact">회신 받을 연락처 <small>(선택)</small></label>
+          <input
+            id="global-bug-report-contact"
+            className="bug-report-contact"
+            type="text"
+            value={contact}
+            maxLength={240}
+            autoComplete="email"
+            disabled={Boolean(result?.reportId)}
+            readOnly={busy}
+            aria-describedby="global-bug-report-consent-help"
+            placeholder="이메일 또는 고객을 확인할 수 있는 ID"
+            onChange={event => { setContact(event.target.value); setInvalidField(''); setErrorMessage(''); }}
+          />
+          <label className="bug-report-diagnostics">
+            <input ref={consentRef} type="checkbox" checked={consentToContact} disabled={busy || !hasContact || Boolean(result?.reportId)} aria-invalid={invalidField === 'consent'} aria-describedby={invalidField === 'consent' ? 'global-bug-report-error' : 'global-bug-report-consent-help'} onChange={event => { setConsentToContact(event.target.checked); setInvalidField(''); setErrorMessage(''); }} />
+            <span><strong>이 문제에 관한 회신에 동의</strong><small id="global-bug-report-consent-help">연락처를 남길 때만 동의가 필요합니다. 신고 확인과 해결 안내에만 사용합니다.</small></span>
+          </label>
+          <label className="bug-report-diagnostics">
+            <input type="checkbox" checked={includeDiagnostics} disabled={busy || Boolean(result?.reportId)} onChange={event => setIncludeDiagnostics(event.target.checked)} />
+            <span><strong>진단 정보 포함</strong><small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small></span>
+          </label>
+          <p className="bug-report-privacy">원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.</p>
+          {errorMessage && <div id="global-bug-report-error" className="bug-report-status error" role="alert">{errorMessage}</div>}
+          {busy && <p className="bug-report-field-help" role="status">신고를 보내고 있습니다. 잠시만 기다려 주세요.</p>}
+          </>}
+          {result?.reportId && (
+            <div ref={receiptRef} className="bug-report-status success" role="status" aria-live="polite" tabIndex={-1}>
+              <strong>신고가 접수됐습니다.</strong>
+              <span>접수 번호 <code>{result.reportId}</code></span>
+              <button className="btn" type="button" onClick={async () => {
+                try { await navigator.clipboard.writeText(result.reportId); setCopyStatus('접수 번호를 복사했습니다.'); }
+                catch (_error) { setCopyStatus('접수 번호를 선택해 직접 복사해 주세요.'); }
+              }}>접수 번호 복사</button>
+              {copyStatus && <small role="status">{copyStatus}</small>}
+            </div>
+          )}
+          <div className="bug-report-actions">
+            <button className={`btn ${result?.reportId ? 'primary' : ''}`} type="button" disabled={busy} onClick={onClose}>닫기</button>
+            {!result?.reportId && <button className="btn primary" type="submit" disabled={busy}>
+              {busy ? '보내는 중...' : '리포트 보내기'}
+            </button>}
+          </div>
+        </form>
+      </dialog>
+    </div>
+  );
+}
+
+function OperationRecoveryBanner({
+  recovery,
+  onRetry,
+  onRestore,
+  onExport,
+  onReset,
+  onReport,
+  onCopy,
+  onDismiss,
+  onLoadLatest,
+  onRebase,
+  retryBusy,
+  restoreBusy,
+  exportBusy,
+  resetBusy,
+  resetBlocked,
+  downloadBusy,
+  canRestore,
+  canExport,
+}){
+  const error = recovery?.error || null;
+  const localServerUnavailable = error?.code === 'local_server_unavailable';
+  const [serverConnectionState, setServerConnectionState] = useState(
+    localServerUnavailable ? 'checking' : 'idle'
+  );
+  const [serverCheckBusy, setServerCheckBusy] = useState(false);
+
+  useEffect(() => {
+    if (!localServerUnavailable) {
+      setServerConnectionState('idle');
+      return undefined;
+    }
+    let cancelled = false;
+    let pollTimer = null;
+    const poll = async () => {
+      const connected = await probeLocalServerHealth(1400);
+      if (cancelled) return;
+      setServerConnectionState(connected ? 'online' : 'offline');
+      if (!connected) pollTimer = window.setTimeout(poll, 3500);
+    };
+    setServerConnectionState('checking');
+    void poll();
+    return () => {
+      cancelled = true;
+      if (pollTimer) window.clearTimeout(pollTimer);
+    };
+  }, [localServerUnavailable]);
+
+  if (!error) return null;
+  const summary = operationRecoverySummary(error);
+  const kind = recovery?.kind || 'publish';
+  const isDownload = kind === 'download';
+  const isQueue = kind === 'recognition' || kind === 'registration';
+  const isReset = kind === 'reset';
+  const isRestore = kind === 'restore';
+  const hasConflict = Boolean(recovery?.conflict);
+  const latestSessionIsEmpty = hasConflict && !recovery.conflict.latestSession;
+  const conflictNeedsResolution = hasConflict && !isReset;
+  const retryDisallowed = error.retryable === false && !hasConflict;
+  const serverConnected = localServerUnavailable && serverConnectionState === 'online';
+  const serverChecking = localServerUnavailable
+    && (serverConnectionState === 'checking' || serverCheckBusy);
+  const displayedSummary = serverConnected
+    ? '로컬 앱 서버와 다시 연결됐습니다. 원본 파일과 대기열은 그대로 유지됩니다.'
+    : summary;
+  const anyBusy = retryBusy || restoreBusy || exportBusy || resetBusy || downloadBusy;
+  const recoverySteps = Array.isArray(error.recoverySteps)
+    ? error.recoverySteps
+      .map(step => String(step || '').trim())
+      .filter((step, index, steps) => step && steps.indexOf(step) === index && step !== summary)
+      .slice(0, 3)
+    : [];
+  const title = localServerUnavailable
+    ? (serverConnected ? 'ClassIn EDB 연결이 복구되었습니다' : 'ClassIn EDB 앱을 다시 실행해 주세요')
+    : isDownload
+    ? 'EDB 제작은 완료됐습니다'
+    : isQueue
+      ? '원본 파일과 대기열은 그대로 있습니다'
+      : isReset
+        ? '초기화를 마치지 못했습니다'
+        : isRestore
+          ? '최근 작업을 열지 못했습니다'
+          : '제작을 마치지 못했지만 편집 내용은 안전합니다';
+  const guidance = conflictNeedsResolution
+    ? (latestSessionIsEmpty
+      ? '서버의 최신 상태는 빈 작업입니다. ‘빈 최신 상태 불러오기’로 새로 시작하거나, 현재 편집본이 더 필요하면 오류를 신고한 뒤 초기화 여부를 선택하세요.'
+      : '다른 작업이 먼저 저장됐습니다. ‘최신 상태 불러오기’는 서버 내용을 사용하고, ‘내 배치 안전하게 합치기’는 최신 문항에 현재 보드 배치만 적용합니다.')
+    : hasConflict && isReset
+      ? (latestSessionIsEmpty
+        ? '서버는 이미 빈 상태입니다. ‘초기화 다시 시도’로 현재 화면도 정리하거나 ‘빈 최신 상태 불러오기’로 서버 상태에 맞추세요.'
+        : '‘초기화 다시 시도’는 최신 버전을 기준으로 작업 목록을 비우고, ‘최신 상태 불러오기’는 초기화를 취소하고 최신 작업으로 돌아갑니다.')
+      : retryDisallowed
+        ? '같은 요청을 바로 반복해도 해결되지 않습니다. 아래 권장 순서대로 원본이나 문항 구성을 수정한 뒤 다시 제작하세요.'
+      : isDownload
+        ? (canExport
+          ? '제작본은 최근 제작에 보관했습니다. EDB 다운로드를 다시 시도하거나 PNG로 먼저 저장할 수 있습니다.'
+          : '제작본은 최근 제작에 보관했습니다. EDB 다운로드를 다시 시도해 주세요.')
+        : localServerUnavailable
+          ? (serverConnected
+            ? '연결이 돌아왔습니다. 이 화면을 새로고침하지 말고 아래 버튼으로 중단된 작업을 다시 시작하세요.'
+            : 'Finder 또는 다운로드한 폴더에서 ClassIn EDB 앱을 다시 실행하세요. 이 화면은 닫지 않아도 되며, 연결이 돌아오면 자동으로 알려드립니다.')
+        : isQueue
+          ? '같은 파일로 다시 시도하세요. 인식이 계속 실패하면 페이지 PNG 등록 또는 수동 쪼개기를 이용할 수 있습니다.'
+          : isReset
+            ? (error.code === 'artifact_cleanup_busy'
+              ? '진행 중인 제작·다운로드가 끝나거나 취소된 뒤 초기화를 다시 시도하세요.'
+              : '잠시 기다린 뒤 초기화를 다시 시도하세요. 계속 실패하면 앱을 다시 실행해 주세요.')
+            : isRestore
+              ? '현재 화면의 배치는 보존했습니다. 같은 최근 작업을 다시 열거나 버그 리포트를 보내 주세요.'
+              : '먼저 EDB를 다시 제작하세요. 계속 실패하면 PNG로 대체 저장하거나 초기화 후 원본 PDF를 다시 등록해 주세요.';
+  const retryLabel = conflictNeedsResolution
+    ? '먼저 최신 상태 선택'
+    : retryDisallowed
+      ? '권장 조치 후 다시 시도'
+    : isDownload
+    ? (downloadBusy ? '다운로드 준비 중…' : 'EDB 다운로드 다시 시도')
+    : isQueue
+      ? (retryBusy ? '다시 처리 중…' : recovery?.retryLabel || '자료 처리 다시 시도')
+      : isReset
+        ? (resetBusy ? '초기화 중…' : resetBlocked ? '진행 작업 완료 후 초기화' : '초기화 다시 시도')
+        : isRestore
+          ? (restoreBusy ? '여는 중…' : recovery?.retryLabel || '최근 작업 다시 열기')
+          : (retryBusy ? '제작 중…' : 'EDB 다시 제작');
+  const checkServerNow = async () => {
+    if (!localServerUnavailable || serverCheckBusy) return;
+    setServerCheckBusy(true);
+    setServerConnectionState('checking');
+    const connected = await probeLocalServerHealth(1800);
+    setServerConnectionState(connected ? 'online' : 'offline');
+    setServerCheckBusy(false);
+  };
+  return (
+    <section className="operation-recovery-banner" role="region" aria-labelledby="operation-recovery-title" aria-describedby="operation-recovery-summary">
+      <div className="operation-recovery-copy" role="alert" aria-live="assertive" aria-atomic="true">
+        <strong id="operation-recovery-title">{title}</strong>
+        <span id="operation-recovery-summary">{displayedSummary}</span>
+        <small>
+          {guidance}
+          {!localServerUnavailable && <> 해결되지 않으면 <b>설정 → 도움말 및 문제 신고 → 버그 리포트</b>에서 오류를 보내 주세요.</>}
+        </small>
+        {localServerUnavailable && (
+          <div className={`operation-recovery-server-status ${serverConnectionState}`} role="status" aria-live="polite" aria-atomic="true">
+            <span className="operation-recovery-server-dot" aria-hidden="true" />
+            <div>
+              <strong>
+                {serverConnected
+                  ? '앱 연결됨 · 작업을 다시 시작할 수 있습니다'
+                  : serverChecking
+                    ? '앱 연결을 확인하고 있습니다'
+                    : '앱이 꺼져 있거나 아직 시작되지 않았습니다'}
+              </strong>
+              <small>
+                {serverConnected
+                  ? `아래 ‘${retryLabel}’ 버튼을 눌러 중단된 지점부터 계속하세요.`
+                  : 'ClassIn EDB 앱을 다시 실행한 뒤 잠시 기다리세요. 원본과 대기열은 현재 화면에 그대로 있습니다.'}
+              </small>
+            </div>
+          </div>
+        )}
+        {recoverySteps.length > 0 && !serverConnected && (
+          <ol className="operation-recovery-steps" aria-label="권장 해결 순서">
+            {recoverySteps.map(step => <li key={step}>{step}</li>)}
+          </ol>
+        )}
+        {error.code && <code>오류 코드 · {error.code}</code>}
+      </div>
+      <div className="operation-recovery-actionbar">
+        <div className="operation-recovery-actions operation-recovery-actions-main" role="group" aria-label="오류 복구 작업">
+          {localServerUnavailable && !serverConnected ? (
+            <button className="btn primary" type="button" onClick={() => void checkServerNow()} disabled={anyBusy || serverCheckBusy}>
+              {Icon.refresh} {serverChecking ? '연결 확인 중…' : '앱 재실행 후 연결 확인'}
+            </button>
+          ) : (
+            <button className="btn primary" type="button" onClick={onRetry} disabled={anyBusy || retryDisallowed || conflictNeedsResolution || (isReset && resetBlocked)}>
+              {isDownload ? Icon.download : serverConnected ? Icon.check : Icon.refresh} {serverConnected ? `연결됨 · ${retryLabel}` : retryLabel}
+            </button>
+          )}
+          {recovery?.conflict && (
+            <>
+              <button className="btn" type="button" onClick={onLoadLatest} disabled={anyBusy}>{Icon.refresh} {latestSessionIsEmpty ? '빈 최신 상태 불러오기' : '최신 상태 불러오기'}</button>
+              {!latestSessionIsEmpty && !isReset && !isRestore && <button className="btn" type="button" onClick={onRebase} disabled={anyBusy}>{Icon.undo} 내 배치 안전하게 합치기</button>}
+            </>
+          )}
+          {!localServerUnavailable && !isQueue && !isReset && !isDownload && !isRestore && <button className="btn" type="button" onClick={onRestore} disabled={!canRestore || anyBusy || conflictNeedsResolution}>
+            {Icon.folder} {restoreBusy ? '여는 중…' : '최근 저장본 열기'}
+          </button>}
+          {(!localServerUnavailable || serverConnected) && isQueue && recovery?.alternativeLabel && (
+            <button className="btn" type="button" onClick={onExport} disabled={anyBusy || conflictNeedsResolution}>{Icon.pagePng} {recovery.alternativeLabel}</button>
+          )}
+          {!localServerUnavailable && !isReset && !isQueue && !isRestore && (!isDownload || canExport) && <button className="btn" type="button" onClick={onExport} disabled={!canExport || anyBusy || conflictNeedsResolution}>
+            {Icon.pagePng} {exportBusy ? '저장 중…' : 'PNG로 대체 저장'}
+          </button>}
+          {!localServerUnavailable && !isDownload && !isReset && <button
+            className="btn"
+            type="button"
+            onClick={onReset}
+            disabled={anyBusy || resetBlocked}
+            title={resetBlocked
+              ? '진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다'
+              : hasConflict
+                ? '서버의 최신 버전을 기준으로 현재 작업을 초기화합니다'
+                : '확인 후 현재 작업을 비우고 원본 PDF부터 다시 시작합니다'}
+          >
+            {Icon.reset} 초기화 후 다시 시작
+          </button>}
+        </div>
+        <div className="operation-recovery-actions operation-recovery-actions-support" role="group" aria-label="오류 지원 작업">
+          <button className="btn" type="button" onClick={onReport} disabled={anyBusy} title={localServerUnavailable ? '연결 복구 후 리포트를 전송할 수 있습니다' : undefined}>
+            {Icon.bug} 버그 리포트 열기
+          </button>
+          <button className="btn" type="button" onClick={onCopy} disabled={anyBusy}>
+            {Icon.copy} 오류 내용 복사
+          </button>
+        </div>
+      </div>
+      <button
+        className="operation-recovery-dismiss"
+        type="button"
+        onClick={onDismiss}
+        disabled={anyBusy || hasConflict}
+        title={hasConflict ? '최신 상태를 선택한 뒤 안내를 닫을 수 있습니다' : '오류 복구 안내 닫기'}
+        aria-label={hasConflict ? '최신 상태 선택 전에는 오류 복구 안내를 닫을 수 없습니다' : '오류 복구 안내 닫기'}
+      >
+        {Icon.close}
+      </button>
+    </section>
   );
 }
 
@@ -5754,7 +11237,7 @@ function LoadingOverlay({ label, hint, startedAt }){
     if (!startedAt) { setElapsed(0); return; }
     const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
     tick();
-    const id = setInterval(tick, 500);
+    const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [startedAt]);
   const fmt = (s) => s >= 60 ? `${Math.floor(s/60)}분 ${s%60}초` : `${s}초`;
@@ -5772,12 +11255,13 @@ function LoadingOverlay({ label, hint, startedAt }){
 
 function BackgroundJobsPanel({ jobs, onCancel, onDismiss }){
   const visibleJobs = (jobs || []).filter(job => job.status !== 'dismissed');
+  const hasRunningJob = visibleJobs.some(job => job.status === 'running');
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (!visibleJobs.some(job => job.status === 'running')) return;
-    const id = setInterval(() => setNow(Date.now()), 500);
+    if (!hasRunningJob) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [visibleJobs]);
+  }, [hasRunningJob]);
   if (!visibleJobs.length) return null;
 
   const elapsedLabel = (startedAt) => {
@@ -5826,7 +11310,7 @@ function RecognitionCancelBanner({ job, onCancel }){
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (!job?.startedAt) return;
-    const id = setInterval(() => setNow(Date.now()), 500);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [job?.startedAt]);
 
@@ -5857,124 +11341,22 @@ function RecognitionCancelBanner({ job, onCancel }){
   );
 }
 
-function RecognitionReviewModal({ review, confirming, onConfirm, onCancel }){
-  const previewSession = review?.session;
-  const targetPageIds = review?.pageIds || null;
-  const pages = useMemo(() => {
-    const allPages = Array.isArray(previewSession?.pages) ? previewSession.pages : [];
-    if (!targetPageIds?.length) return allPages;
-    const allowed = new Set(targetPageIds);
-    return allPages.filter(page => allowed.has(page.id));
-  }, [previewSession, targetPageIds]);
-  const problemsById = useMemo(() => {
-    const map = new Map();
-    (previewSession?.problems || []).forEach(problem => {
-      if (problem?.id) map.set(problem.id, problem);
-    });
-    return map;
-  }, [previewSession]);
-  const summary = useMemo(
-    () => summarizeRecognitionSession(previewSession, targetPageIds),
-    [previewSession, targetPageIds]
-  );
-
-  if (!review) return null;
-  const title = review.title || 'AI 인식 결과 확인';
-  const movesToReview = review?.kind === 'queue-recognition';
-  const subtitle = review.subtitle || (
-    movesToReview
-      ? `${summary.problemLabel}로 분할했습니다. 맞으면 검수 화면에서 경계를 확인합니다.`
-      : `${summary.problemLabel}로 분할했습니다. 맞으면 바로 칠판에 붙입니다.`
-  );
-  const confirmLabel = movesToReview ? '맞아요, 검수로 이동' : '맞아요, 칠판에 붙이기';
-  const confirmingLabel = movesToReview ? '검수로 이동 중...' : '붙이는 중...';
-  const cancelLabel = movesToReview ? '적용 안 함' : '취소';
-
-  return (
-    <div className="recognition-modal-shell" role="dialog" aria-modal="true" aria-labelledby="recognition-review-title">
-      <div className="recognition-modal-backdrop" onClick={confirming ? undefined : onCancel} />
-      <div className="recognition-modal">
-        <div className="recognition-modal-hd">
-          <div>
-            <span className="recognition-eyebrow">AI 인식 결과</span>
-            <h2 id="recognition-review-title">{title}</h2>
-            <p>{subtitle}</p>
-          </div>
-          <button className="modal-x" type="button" onClick={onCancel} disabled={confirming} title="닫기">×</button>
-        </div>
-
-        <div className="recognition-summary">
-          {review.fileCount ? <span>{review.fileCount}개 파일</span> : null}
-          <span>{summary.pages} 페이지</span>
-          <span>{summary.problemLabel}</span>
-          <span className={summary.riskCount ? 'warn' : ''}>
-            {summary.riskCount ? `${summary.riskCount}개 확인 필요` : '위험 표시 없음'}
-          </span>
-        </div>
-
-        <div className="recognition-preview">
-          {pages.length ? pages.map(page => {
-            const pageProblems = (page.problemIds || page.problem_ids || [])
-              .map(id => problemsById.get(id))
-              .filter(Boolean);
-            return (
-              <div key={page.id} className="recognition-page">
-                <div className="recognition-page-hd">
-                  <strong>{page.id}</strong>
-                  <span>{formatProblemCount(countSessionProblems(pageProblems))}</span>
-                  <span>{page.width}×{page.height}</span>
-                </div>
-                <div className="recognition-page-canvas">
-                  {page.sourceImageUri ? (
-                    <img src={page.sourceImageUri} alt={page.id} draggable={false} />
-                  ) : (
-                    <div className="recognition-page-empty">페이지 이미지를 불러올 수 없어요.</div>
-                  )}
-                  {pageProblems.map((problem, index) => {
-                    const bbox = problem.bbox || {};
-                    const w = page.width || 1;
-                    const h = page.height || 1;
-                    if (!bbox.width || !bbox.height) return null;
-                    const status = deriveProblemStatus(problem);
-                    return (
-                      <div
-                        key={problem.id}
-                        className={`recognition-box ${reviewStatusClass(status)}`}
-                        style={{
-                          left: `${(bbox.left / w) * 100}%`,
-                          top: `${(bbox.top / h) * 100}%`,
-                          width: `${(bbox.width / w) * 100}%`,
-                          height: `${(bbox.height / h) * 100}%`,
-                        }}
-                        title={problem.title || problem.id}
-                      >
-                        <span>{String(index + 1).padStart(2, '0')}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          }) : (
-            <div className="recognition-empty">확인할 페이지가 없습니다.</div>
-          )}
-        </div>
-
-        <div className="recognition-modal-foot">
-          <button className="btn" type="button" onClick={onCancel} disabled={confirming}>{cancelLabel}</button>
-          <button className="btn primary" type="button" onClick={onConfirm} disabled={confirming || !summary.problems}>
-            {confirming ? confirmingLabel : confirmLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // renders a real image when the item came from the backend; falls back to
 // the SVG ItemArt for mock data. forceMode overrides the step→variant mapping
 // (useful for side-panel preview tabs).
-function TileImage({ item, forceMode }){
+const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024;
+
+function filePreviewUrl(url, maxDimension = CENTER_PANEL_PREVIEW_MAX_DIMENSION){
+  const normalizedUrl = String(url || '');
+  if (!normalizedUrl.startsWith('/api/file?')) return normalizedUrl;
+  const resolvedMax = Math.max(256, Math.min(2048, Math.round(Number(maxDimension) || CENTER_PANEL_PREVIEW_MAX_DIMENSION)));
+  if (/[?&]previewMax=/.test(normalizedUrl)) {
+    return normalizedUrl.replace(/([?&]previewMax=)[^&]*/i, `$1${resolvedMax}`);
+  }
+  return `${normalizedUrl}&previewMax=${resolvedMax}`;
+}
+
+function TileImage({ item, forceMode, previewMaxDimension }){
   const wantChalk = forceMode ? forceMode === 'chalk' : item.step !== 's1';
   const chalk = item.chalkUrl;
   const raw = item.imageUrl;
@@ -5982,9 +11364,14 @@ function TileImage({ item, forceMode }){
     ? (chalk || raw)
     : (raw || chalk);
   if (url) {
+    const displayUrl = previewMaxDimension
+      ? filePreviewUrl(url, previewMaxDimension)
+      : url;
     return (
-      <img src={url} alt={item.name || ''}
+      <img src={displayUrl} alt={item.name || ''}
            className={`tile-img ${wantChalk ? 'is-chalk' : 'is-raw'}`}
+           loading="lazy"
+           decoding="async"
            draggable={false} />
     );
   }
@@ -6003,7 +11390,38 @@ function pendingFilePreviewLabel(file){
   return '파일 미리보기';
 }
 
-function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPreviewError }){
+function SplitModePicker({ splitMode, setSplitMode, disabled, compact = false, imageOnly = false }){
+  const current = normalizeSplitMode(splitMode);
+  return (
+    <div className={`intent-control split-mode-control ${compact ? 'compact' : ''}`} role="radiogroup" aria-label="분할 방식">
+      {SPLIT_MODE_OPTIONS.map(option => {
+        const description = option.value === 'recognize' && imageOnly
+          ? '이미지는 AI 보정 없이 빠르게 문항을 나눕니다'
+          : option.description;
+        return (
+          <button
+            key={option.value}
+            className={`intent-choice ${current === option.value ? 'on' : ''}`}
+            type="button"
+            role="radio"
+            aria-checked={current === option.value ? 'true' : 'false'}
+            onClick={() => setSplitMode?.(option.value)}
+            disabled={disabled}
+            title={description}
+          >
+            <span className="intent-choice-head">
+              <i aria-hidden="true">{Icon[option.icon] || Icon.scan}</i>
+              <strong>{option.label}</strong>
+            </span>
+            {!compact && <small>{description}</small>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false }){
   const [objectUrl, setObjectUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
   const isImagePreview = canPreviewImageFile(file);
@@ -6037,9 +11455,13 @@ function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPr
 
   if (!file) return null;
 
-  const runQueueAction = (mode) => {
-    if (!fileKey || queueBusy) return;
-    processQueuedFiles?.(mode, fileKey);
+  const runSplit = () => {
+    if (queueBusy) return;
+    processQueuedFiles?.(normalizeSplitMode(splitMode));
+  };
+  const runPassageExtraction = () => {
+    if (queueBusy) return;
+    processQueuedFiles?.('passage-only', fileQueueKey(file));
   };
   const metaParts = [
     sourceFileKindLabel(file),
@@ -6097,33 +11519,31 @@ function PendingFilePreview({ file, fileKey, queueBusy, processQueuedFiles, onPr
         )}
       </div>
 
+      <SplitModePicker
+        splitMode={splitMode}
+        setSplitMode={setSplitMode}
+        disabled={queueBusy}
+        imageOnly={imageOnly}
+      />
+
       <div className="pending-preview-actions">
         <button
-          className="btn"
+          className="btn primary split-run-action"
           type="button"
-          onClick={() => runQueueAction('manual-split')}
+          onClick={runSplit}
           disabled={queueBusy}
-          title="인식 없이 열고 검수 화면에서 직접 문제 영역을 나눕니다"
+          title={`${splitModeMeta(splitMode).label} · 끝나면 바로 칠판에 배치합니다`}
         >
-          {Icon.pen}<span>직접 쪼개기</span>
+          {Icon[splitModeMeta(splitMode).icon] || Icon.check}<span>{splitActionLabel(pendingCount)}</span>
         </button>
         <button
           className="btn"
           type="button"
-          onClick={() => runQueueAction('register')}
+          onClick={runPassageExtraction}
           disabled={queueBusy}
-          title="문제 파싱 없이 페이지 PNG 자료로 등록"
+          title="여러 문항이 함께 쓰는 공통 지문만 추출"
         >
-          {Icon.pagePng}<span>페이지 PNG</span>
-        </button>
-        <button
-          className="btn primary"
-          type="button"
-          onClick={() => runQueueAction('recognize')}
-          disabled={queueBusy}
-          title="이 파일만 문항 AI 인식"
-        >
-          {Icon.aiBatch}<span>AI 인식</span>
+          {Icon.fileText}<span>지문만 추출</span>
         </button>
       </div>
     </div>
@@ -6145,8 +11565,51 @@ function fileToBase64(file){
   });
 }
 
+const MAX_EXPORT_JSON_BYTES = 64 * 1024 * 1024;
+const EXPORT_JSON_SAFETY_BYTES = 256 * 1024;
+
+function estimatedExportPayloadBytes(files){
+  return (Array.isArray(files) ? files : []).reduce((total, file) => {
+    const rawBytes = Math.max(0, Number(file?.size) || 0);
+    const base64Bytes = 4 * Math.ceil(rawBytes / 3);
+    const metadataBytes = 256 + (String(file?.name || '').length * 4);
+    return total + base64Bytes + metadataBytes;
+  }, 2048);
+}
+
+function assertExportPayloadFits(files){
+  const estimatedBytes = estimatedExportPayloadBytes(files);
+  const usableBytes = MAX_EXPORT_JSON_BYTES - EXPORT_JSON_SAFETY_BYTES;
+  if (estimatedBytes <= usableBytes) return estimatedBytes;
+  const rawBytes = (Array.isArray(files) ? files : []).reduce(
+    (total, file) => total + Math.max(0, Number(file?.size) || 0),
+    0
+  );
+  throw new Error(
+    `업로드 용량 ${formatBytes(rawBytes)}가 한 번에 처리할 수 있는 범위를 넘었습니다. `
+    + '파일을 나누어 등록하거나 PDF를 압축해 주세요.'
+  );
+}
+
 function fileQueueKey(file){
   return [file?.name || 'file', file?.size || 0, file?.lastModified || 0].join('::');
+}
+
+function appendUniquePendingFiles(currentFiles, incomingFiles){
+  const current = Array.isArray(currentFiles) ? currentFiles : [];
+  const incoming = Array.from(incomingFiles || []);
+  const seen = new Set(current.map(fileQueueKey));
+  const addedFiles = incoming.filter(file => {
+    const key = fileQueueKey(file);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return {
+    files: addedFiles.length ? [...current, ...addedFiles] : current,
+    addedFiles,
+    duplicateCount: incoming.length - addedFiles.length,
+  };
 }
 
 function sourceFileExtension(file){
@@ -6202,7 +11665,10 @@ function makeUniqueId(baseId, existingIds){
 
 function applyItemStateToProblem(problem, item){
   const next = { ...problem };
-  const actualHeightPages = Math.max(0.12, item.heightFrac || next.actualHeightPages || next.actual_height_pages || 0.8);
+  const actualHeightPages = itemHeightPages({
+    ...next,
+    ...item,
+  });
   const startYPages = Number.isFinite(item.startYPages) ? Math.max(0, item.startYPages) : null;
   const snappedNextStartYPages = Number.isFinite(item.snappedNextStartYPages)
     ? Math.max(startYPages || 0, item.snappedNextStartYPages)
@@ -6231,10 +11697,9 @@ function applyItemStateToProblem(problem, item){
   next.board_columns = next.boardColumns;
   next.boardColumnIndex = Math.max(0, Number.isFinite(Number(item.boardColumnIndex)) ? Math.round(Number(item.boardColumnIndex)) : 0);
   next.board_column_index = next.boardColumnIndex;
-  const rawMagnetColumnIndex = Number(item.placementMagnetColumnIndex ?? item.placement_magnet_column_index);
-  const placementMagnetColumnIndex = Number.isFinite(rawMagnetColumnIndex)
-    ? Math.max(0, Math.min(next.boardColumns - 1, Math.round(rawMagnetColumnIndex)))
-    : null;
+  const placementMagnetColumnIndex = normalizePlacementMagnetColumnIndex(
+    item, next.boardColumns
+  );
   next.placementMagnetColumnIndex = next.placementXEdited ? placementMagnetColumnIndex : null;
   next.placement_magnet_column_index = next.placementMagnetColumnIndex;
   next.boardRowHeightPages = Number.isFinite(Number(item.boardRowHeightPages)) ? Number(Number(item.boardRowHeightPages).toFixed(6)) : null;
@@ -6243,9 +11708,26 @@ function applyItemStateToProblem(problem, item){
     ? normalizePlacementYRatio(item.placementYRatio)
     : DEFAULT_PLACEMENT_Y_RATIO;
   next.placement_y_ratio = next.placementYRatio;
+  next.placementExtraSlots = placementExtraSlots(item);
+  next.placement_extra_slots = next.placementExtraSlots;
   next.placementScaleRatio = normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item));
   next.placement_scale_ratio = next.placementScaleRatio;
-  const renderedHeightPages = actualHeightPages * next.placementScaleRatio;
+  next.placementAutoFitDisabled = Boolean(
+    item.placementAutoFitDisabled || item.placement_auto_fit_disabled
+  );
+  next.placement_auto_fit_disabled = next.placementAutoFitDisabled;
+  const placementGapAfterPages = normalizePlacementGapAfterPages(
+    item.placementGapAfterPages ?? item.placement_gap_after_pages
+  );
+  if (placementGapAfterPages === null) {
+    delete next.placementGapAfterPages;
+    delete next.placement_gap_after_pages;
+  } else {
+    next.placementGapAfterPages = Number(placementGapAfterPages.toFixed(6));
+    next.placement_gap_after_pages = next.placementGapAfterPages;
+  }
+  if (item.imageRecordGeometry) next.imageRecordGeometry = { ...item.imageRecordGeometry };
+  const renderedHeightPages = itemRenderedHeightPages(item, next.placementScaleRatio);
   next.actualHeightPages = actualHeightPages;
   next.actual_height_pages = actualHeightPages;
   if (startYPages !== null) {
@@ -6255,7 +11737,16 @@ function applyItemStateToProblem(problem, item){
   if (snappedNextStartYPages !== null) {
     next.snappedNextStartYPages = Number(snappedNextStartYPages.toFixed(6));
     next.snapped_next_start_y_pages = next.snappedNextStartYPages;
-    next.slotSpanCount = Math.max(1, Math.round((snappedNextStartYPages - (startYPages || 0)) / DEFAULT_SLOT_HEIGHT_PAGES));
+    next.slotSpanCount = Math.max(
+      1,
+      Math.ceil(
+        (
+          snappedNextStartYPages
+          - (startYPages || 0)
+          - PLACEMENT_EPSILON_PAGES
+        ) / DEFAULT_SLOT_HEIGHT_PAGES
+      )
+    );
     next.slot_span_count = next.slotSpanCount;
   }
   if (startYPages !== null) {
@@ -6322,24 +11813,43 @@ function markSessionProblemsConfirmed(rawSession, targetIds){
   return snapshot;
 }
 
-function materializeSessionForItems(rawSession, items, fileName, boardColumns = BOARD_COLUMN_MIN){
+function materializeSessionForItems(
+  rawSession,
+  items,
+  fileName,
+  boardColumns = BOARD_COLUMN_MIN,
+  layoutGapMode = normalizeLayoutGapMode(rawSession?.layoutGapMode ?? rawSession?.layout_gap_mode)
+){
   const snapshot = cloneSession(rawSession);
   if (!snapshot || !Array.isArray(snapshot.problems)) return null;
+  const normalizedGapMode = normalizeLayoutGapMode(layoutGapMode);
   const byId = new Map(snapshot.problems.map(problem => [problem.id, problem]));
-  const reflowedItems = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+  const reflowedItems = reflowItemsForBoardOrder(
+    items,
+    DEFAULT_SLOT_HEIGHT_PAGES,
+    boardColumns,
+    normalizedGapMode
+  );
   const orderedProblems = reflowedItems
     .filter(item => byId.has(item.id))
     .map(item => applyItemStateToProblem(byId.get(item.id), item));
-  const activeIds = new Set(orderedProblems.map(problem => problem.id));
-  snapshot.problems = orderedProblems;
-  applyProblemCounts(snapshot, orderedProblems);
+  const orderedIds = new Set(orderedProblems.map(problem => problem.id));
+  // A temporary UI filter must never become an implicit server-side delete.
+  // Explicit removal still goes through the exclude mutation before materializing.
+  const strandedProblems = snapshot.problems.filter(problem => !orderedIds.has(problem.id));
+  const mergedProblems = orderedProblems.concat(strandedProblems);
+  const activeIds = new Set(mergedProblems.map(problem => problem.id));
+  snapshot.problems = mergedProblems;
+  applyProblemCounts(snapshot, mergedProblems);
   snapshot.session_name = fileName || snapshot.session_name || '새 세션';
+  snapshot.layoutGapMode = normalizedGapMode;
+  snapshot.layout_gap_mode = normalizedGapMode;
   snapshot.edb_path = null;
   snapshot.edb_file_uri = null;
   snapshot.edbPath = null;
   snapshot.edbFileUri = null;
   if (Array.isArray(snapshot.pages)) {
-    const orderIndex = new Map(orderedProblems.map((problem, index) => [problem.id, index]));
+    const orderIndex = new Map(mergedProblems.map((problem, index) => [problem.id, index]));
     snapshot.pages = snapshot.pages.map(page => ({
       ...page,
       problemIds: (page.problemIds || page.problem_ids || [])
@@ -6348,6 +11858,146 @@ function materializeSessionForItems(rawSession, items, fileName, boardColumns = 
     }));
   }
   return snapshot;
+}
+
+function prepareSessionPublishRequest(
+  session,
+  items,
+  fileName,
+  boardColumns,
+  layoutGapMode
+){
+  if (!session || !Array.isArray(session.problems)) return null;
+  const sessionIds = new Set(session.problems.map(problem => problem.id));
+  const currentIds = items.map(item => item.id);
+  const order = currentIds.filter(id => sessionIds.has(id));
+  const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
+  const itemsForPublish = reflowItemsForBoardOrder(
+    items,
+    DEFAULT_SLOT_HEIGHT_PAGES,
+    boardColumns,
+    layoutGapMode
+  );
+  const sessionForPublish = materializeSessionForItems(
+    session,
+    itemsForPublish,
+    fileName,
+    boardColumns,
+    layoutGapMode
+  ) || session;
+  const placements = Object.fromEntries(
+    itemsForPublish
+      .filter(item => sessionIds.has(item.id))
+      .map(item => [item.id, {
+        xRatio: normalizePlacementXRatio(item.placementXRatio),
+        extraSlots: placementExtraSlots(item),
+        yRatio: verticalPlacementRoomPages(item) > 0.001
+          ? normalizePlacementYRatio(item.placementYRatio)
+          : DEFAULT_PLACEMENT_Y_RATIO,
+        scaleRatio: normalizePlacementScaleRatio(
+          item.placementScaleRatio,
+          maxPlacementScaleRatio(item)
+        ),
+      }])
+  );
+  return {
+    sessionIds,
+    currentIds,
+    order,
+    excluded,
+    itemsForPublish,
+    sessionForPublish,
+    placements,
+  };
+}
+
+function publishPlanRequestSignature(publishRequest){
+  if (!publishRequest) return '';
+  const sessionForPublish = publishRequest.sessionForPublish;
+  return JSON.stringify({
+    order: publishRequest.order,
+    excluded: publishRequest.excluded,
+    placement: placementPersistenceSignature(sessionForPublish),
+    problems: (sessionForPublish?.problems || []).map(problem => [
+      String(problem.id || ''),
+      problem.imagePath || problem.image_path || '',
+      problem.boardRenderPath || problem.board_render_path || '',
+      problem.processingStep || problem.processing_step || problem.step || '',
+      problem.bbox || null,
+    ]),
+  });
+}
+
+function rebaseSessionBoardLayout(
+  latestSession,
+  localDraft,
+  boardColumns = BOARD_COLUMN_MIN,
+  layoutGapMode = normalizeLayoutGapMode(localDraft?.layoutGapMode ?? localDraft?.layout_gap_mode)
+){
+  const latest = cloneSession(latestSession);
+  const draft = cloneSession(localDraft);
+  if (!latest || !Array.isArray(latest.problems) || !draft || !Array.isArray(draft.problems)) return null;
+  const localItemsById = new Map(draft.problems.map((problem, index) => [
+    String(problem.id),
+    mapProblemToItem(problem, index, draft),
+  ]));
+  const localOrder = new Map(draft.problems.map((problem, index) => [String(problem.id), index]));
+  const fallbackOrder = draft.problems.length;
+  const latestProblems = latest.problems
+    .map((problem, index) => ({ problem, index }))
+    .sort((a, b) => {
+      const aOrder = localOrder.has(String(a.problem.id)) ? localOrder.get(String(a.problem.id)) : fallbackOrder + a.index;
+      const bOrder = localOrder.has(String(b.problem.id)) ? localOrder.get(String(b.problem.id)) : fallbackOrder + b.index;
+      return aOrder - bOrder;
+    })
+    .map(({ problem }, index) => {
+      const localItem = localItemsById.get(String(problem.id));
+      if (!localItem) return problem;
+      const latestItem = mapProblemToItem(problem, index, latest);
+      return applyItemStateToProblem(problem, {
+        ...latestItem,
+        placementMode: localItem.placementMode,
+        placementXRatio: localItem.placementXRatio,
+        placementXEdited: localItem.placementXEdited,
+        placementYRatio: localItem.placementYRatio,
+        placementExtraSlots: placementExtraSlots(localItem),
+        placementScaleRatio: localItem.placementScaleRatio,
+        placementAutoFitDisabled: localItem.placementAutoFitDisabled,
+        placementGapAfterPages: localItem.placementGapAfterPages,
+        boardColumnCount: localItem.boardColumnCount,
+        boardColumnIndex: localItem.boardColumnIndex,
+        placementMagnetColumnIndex: localItem.placementMagnetColumnIndex,
+        boardRowHeightPages: localItem.boardRowHeightPages,
+        startYPages: localItem.startYPages,
+        snappedNextStartYPages: localItem.snappedNextStartYPages,
+      });
+    });
+  latest.problems = latestProblems;
+  latest.session_name = latest.session_name || '새 세션';
+  latest.boardColumns = normalizeBoardColumns(boardColumns);
+  latest.board_columns = latest.boardColumns;
+  latest.layoutGapMode = normalizeLayoutGapMode(layoutGapMode);
+  latest.layout_gap_mode = latest.layoutGapMode;
+  latest.edb_path = null;
+  latest.edb_file_uri = null;
+  latest.edbPath = null;
+  latest.edbFileUri = null;
+  applyProblemCounts(latest, latestProblems);
+  if (Array.isArray(latest.pages)) {
+    const orderIndex = new Map(latestProblems.map((problem, index) => [String(problem.id), index]));
+    latest.pages = latest.pages.map(page => ({
+      ...page,
+      problemIds: (page.problemIds || page.problem_ids || [])
+        .filter(id => orderIndex.has(String(id)))
+        .sort((a, b) => (orderIndex.get(String(a)) ?? 999999) - (orderIndex.get(String(b)) ?? 999999)),
+    }));
+  }
+  return latest;
+}
+
+function conflictSafeUndoHistory(latestSession){
+  const snapshot = cloneSession(latestSession);
+  return snapshot && Array.isArray(snapshot.problems) ? [snapshot] : [];
 }
 
 function fitWidthPageAsIsSession(rawSession, options = {}){
@@ -6359,7 +12009,7 @@ function fitWidthPageAsIsSession(rawSession, options = {}){
   const boardColumns = normalizeBoardColumns(options.boardColumns || BOARD_COLUMN_MIN);
   const sessionIntent = normalizeInputIntent(snapshot.inputIntent || snapshot.input_intent);
   const items = snapshot.problems.map((problem, idx) => {
-    const item = mapProblemToItem(problem, idx);
+    const item = mapProblemToItem(problem, idx, snapshot);
     const itemIntent = normalizeInputIntent(item.inputIntent || problem.inputIntent || problem.input_intent || sessionIntent);
     if (itemIntent !== 'page-as-is') return item;
     if (targetIds && !targetIds.has(String(item.id))) return item;
@@ -6378,6 +12028,7 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   const incoming = cloneSession(incomingSession);
   if (!base) return incoming;
   if (!incoming) return base;
+  const layoutGapMode = normalizeLayoutGapMode(base.layoutGapMode ?? base.layout_gap_mode);
 
   const existingProblemIds = new Set((base.problems || []).map(problem => problem.id).filter(Boolean));
   const existingPageIds = new Set((base.pages || []).map(page => page.id).filter(Boolean));
@@ -6413,15 +12064,18 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   const mergedProblems = [...(base.problems || []), ...incomingProblems];
   const mergedProblemsById = new Map(mergedProblems.map(problem => [problem.id, problem]));
   const reflowedProblems = reflowItemsForBoardOrder(
-    mergedProblems.map((problem, idx) => mapProblemToItem(problem, idx)),
+    mergedProblems.map((problem, idx) => mapProblemToItem(problem, idx, base)),
     DEFAULT_SLOT_HEIGHT_PAGES,
-    boardColumns
+    boardColumns,
+    layoutGapMode
   ).map(item => applyItemStateToProblem(mergedProblemsById.get(item.id) || {}, item));
   const mergedPages = [...(base.pages || []), ...incomingPages];
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
   const merged = {
     ...base,
     session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    layoutGapMode,
+    layout_gap_mode: layoutGapMode,
     data_source: 'question_export',
     source_mode: 'batch',
     input_file_count: concatUnique(base.input_files || base.inputFiles || [], incoming.input_files || incoming.inputFiles || []).length,
@@ -6438,6 +12092,258 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
     edbFileUri: null,
   };
   applyProblemCounts(merged, reflowedProblems);
+  return merged;
+}
+
+function sessionReusableSourcePaths(rawSession){
+  const inputCandidates = rawSession?.input_files || rawSession?.inputFiles || [];
+  const candidates = (Array.isArray(inputCandidates) ? inputCandidates : [inputCandidates])
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  if (!candidates.length) {
+    (rawSession?.pages || []).forEach(page => {
+      const sourcePath = page?.sourceImagePath
+        || page?.source_image_path
+        || page?.sourceImageUri
+        || page?.source_image_uri;
+      if (sourcePath) candidates.push(String(sourcePath).trim());
+    });
+  }
+  return listUnique(
+    candidates.filter(Boolean)
+  );
+}
+
+function problemClassificationSource(problem){
+  return String(
+    problem?.classificationSource
+    || problem?.classification_source
+    || problem?.metadata?.classificationSource
+    || problem?.metadata?.classification_source
+    || ''
+  ).trim().toLowerCase();
+}
+
+function isManualIndependentPassage(problem){
+  return isPassageFragmentProblem(problem)
+    && problemClassificationSource(problem) === 'manual'
+    && passageGroupIdFor(problem).startsWith('manual-passage-');
+}
+
+function isManualMisclassifiedChildQuestion(problem){
+  return isPassageFragmentProblem(problem)
+    && problemClassificationSource(problem) === 'manual'
+    && !passageGroupIdFor(problem).startsWith('manual-passage-');
+}
+
+function restoreManualPassageToChildQuestion(problem){
+  const metadata = { ...(problem?.metadata || {}) };
+  metadata.passageRole = 'child_question';
+  metadata.passage_role = 'child_question';
+  metadata.supplementalItem = false;
+  metadata.supplemental_item = false;
+  return {
+    ...problem,
+    passageRole: 'child_question',
+    passage_role: 'child_question',
+    supplementalItem: false,
+    supplemental_item: false,
+    metadata,
+  };
+}
+
+function questionNumberForPassageInsertion(problem){
+  const candidates = [
+    problem?.questionNumber,
+    problem?.question_number,
+    problem?.number,
+    problem?.metadata?.questionNumber,
+    problem?.metadata?.question_number,
+    problem?.metadata?.number,
+  ];
+  for (const candidate of candidates) {
+    const parsed = Number(candidate);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const titleMatch = String(problem?.title || '').match(/(?:^|\s)(\d{1,3})(?:번|\s|[.)])/);
+  return titleMatch ? Number(titleMatch[1]) : null;
+}
+
+function normalizedSourceIdentity(value){
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase();
+}
+
+function pageIdentityKeys(page){
+  const keys = [];
+  const id = String(page?.id || '').trim();
+  if (id) keys.push(`id:${id}`);
+  const sourcePath = normalizedSourceIdentity(
+    page?.sourceImagePath
+    || page?.source_image_path
+    || page?.sourcePath
+    || page?.source_path
+  );
+  if (sourcePath) keys.push(`path:${sourcePath}`);
+  const sourceUri = normalizedSourceIdentity(page?.sourceImageUri || page?.source_image_uri);
+  if (sourceUri) keys.push(`uri:${sourceUri}`);
+  const sourceIndex = Number(page?.sourceIndex ?? page?.source_index);
+  const pageNumber = Number(page?.pageNumber ?? page?.page_number ?? page?.index);
+  if (Number.isFinite(sourceIndex) && Number.isFinite(pageNumber)) {
+    keys.push(`source-page:${sourceIndex}:${pageNumber}`);
+  }
+  return keys;
+}
+
+function passageInsertionIndex(problems, passage){
+  const groupId = passageGroupIdFor(passage);
+  if (groupId) {
+    const exactChildIndex = problems.findIndex(problem => (
+      !isPassageFragmentProblem(problem)
+      && passageGroupIdFor(problem) === groupId
+    ));
+    if (exactChildIndex >= 0) return exactChildIndex;
+  }
+  const range = passage?.passageRange
+    || passage?.passage_range
+    || passage?.metadata?.passageRange
+    || passage?.metadata?.passage_range;
+  const start = Number(range?.start);
+  const end = Number(range?.end);
+  if (Number.isFinite(start) && Number.isFinite(end) && start > 0 && end >= start) {
+    const rangeChildIndex = problems.findIndex(problem => {
+      if (isPassageFragmentProblem(problem)) return false;
+      const questionNumber = questionNumberForPassageInsertion(problem);
+      return Number.isFinite(questionNumber) && questionNumber >= start && questionNumber <= end;
+    });
+    if (rangeChildIndex >= 0) return rangeChildIndex;
+  }
+  return problems.length;
+}
+
+function mergeReextractedSharedPassages(baseSession, incomingSession, fileName){
+  const base = cloneSession(baseSession);
+  const incoming = cloneSession(incomingSession);
+  if (!base) return incoming;
+  if (!incoming) return base;
+
+  const retainedProblems = [];
+  const removedPassageIds = new Set();
+  (base.problems || []).forEach(problem => {
+    if (!isPassageFragmentProblem(problem) || isManualIndependentPassage(problem)) {
+      retainedProblems.push(problem);
+      return;
+    }
+    if (isManualMisclassifiedChildQuestion(problem)) {
+      retainedProblems.push(restoreManualPassageToChildQuestion(problem));
+      return;
+    }
+    if (problem?.id) removedPassageIds.add(problem.id);
+  });
+
+  const incomingFragments = (incoming.problems || []).filter(isPassageFragmentProblem);
+  if (!incomingFragments.length) return base;
+
+  const existingProblemIds = new Set(retainedProblems.map(problem => problem?.id).filter(Boolean));
+  const basePages = (base.pages || []).map(page => ({
+    ...page,
+    problemIds: [...(page.problemIds || page.problem_ids || [])]
+      .filter(id => !removedPassageIds.has(id)),
+  }));
+  const existingPageIds = new Set(basePages.map(page => page?.id).filter(Boolean));
+  const pageIdByIdentity = new Map();
+  basePages.forEach(page => {
+    pageIdentityKeys(page).forEach(key => {
+      if (!pageIdByIdentity.has(key)) pageIdByIdentity.set(key, page.id);
+    });
+  });
+
+  const incomingPageIdMap = new Map();
+  const appendedPages = [];
+  (incoming.pages || []).forEach(page => {
+    const matchedPageId = pageIdentityKeys(page)
+      .map(key => pageIdByIdentity.get(key))
+      .find(Boolean);
+    if (matchedPageId) {
+      incomingPageIdMap.set(page.id, matchedPageId);
+      return;
+    }
+    const nextId = makeUniqueId(page.id, existingPageIds);
+    incomingPageIdMap.set(page.id, nextId);
+    const appended = {
+      ...page,
+      id: nextId,
+      problemIds: [],
+    };
+    appendedPages.push(appended);
+    pageIdentityKeys(appended).forEach(key => {
+      if (!pageIdByIdentity.has(key)) pageIdByIdentity.set(key, nextId);
+    });
+  });
+
+  const preparedFragments = incomingFragments.map(problem => {
+    const nextId = makeUniqueId(problem.id, existingProblemIds);
+    const incomingPageId = problem.sourcePageId || problem.source_page_id;
+    const nextPageId = incomingPageIdMap.get(incomingPageId) || incomingPageId;
+    return {
+      ...problem,
+      id: nextId,
+      sourcePageId: nextPageId,
+      source_page_id: nextPageId,
+    };
+  });
+
+  const insertions = new Map();
+  preparedFragments.forEach(problem => {
+    const index = passageInsertionIndex(retainedProblems, problem);
+    const bucket = insertions.get(index) || [];
+    bucket.push(problem);
+    insertions.set(index, bucket);
+  });
+  const mergedProblems = [];
+  retainedProblems.forEach((problem, index) => {
+    mergedProblems.push(...(insertions.get(index) || []), problem);
+  });
+  mergedProblems.push(...(insertions.get(retainedProblems.length) || []));
+
+  const mergedPages = [...basePages, ...appendedPages];
+  const problemOrder = new Map(mergedProblems.map((problem, index) => [problem.id, index]));
+  const pageProblemIds = new Map();
+  mergedProblems.forEach(problem => {
+    const pageId = problem?.sourcePageId || problem?.source_page_id;
+    if (!pageId) return;
+    const ids = pageProblemIds.get(pageId) || [];
+    ids.push(problem.id);
+    pageProblemIds.set(pageId, ids);
+  });
+  mergedPages.forEach(page => {
+    const ids = pageProblemIds.get(page.id) || [];
+    const orderedIds = listUnique(ids)
+      .sort((a, b) => (problemOrder.get(a) ?? 999999) - (problemOrder.get(b) ?? 999999));
+    page.problemIds = orderedIds;
+    page.problem_ids = [...orderedIds];
+  });
+
+  const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
+  const merged = {
+    ...base,
+    session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    input_file_count: sessionReusableSourcePaths(base).length,
+    input_files: sessionReusableSourcePaths(base),
+    rendered_page_paths: concatUnique(base.rendered_page_paths || [], incoming.rendered_page_paths || []),
+    rendered_page_file_uris: concatUnique(base.rendered_page_file_uris || [], incoming.rendered_page_file_uris || []),
+    warning_messages: concatUnique(
+      base.warning_messages || base.warningMessages || [],
+      incoming.warning_messages || incoming.warningMessages || []
+    ),
+    problems: mergedProblems,
+    pages: mergedPages,
+    source_page_count: mergedPages.length,
+    edb_path: null,
+    edb_file_uri: null,
+    edbPath: null,
+    edbFileUri: null,
+  };
+  applyProblemCounts(merged, mergedProblems);
   return merged;
 }
 
@@ -6473,7 +12379,67 @@ const KIND_BY_SUBJECT = {
   social: 'paragraph',
 };
 
-function mapProblemToItem(problem, idx){
+function imageRecordGeometryForProblem(problem, rawSession = null){
+  const sessionContext = rawSession && !Array.isArray(rawSession) ? rawSession : null;
+  if (sessionContext?.template?.metadata?.preserve_source_layout) return null;
+  const suppliedGeometry = problem?.imageRecordGeometry || problem?.image_record_geometry;
+  const hasGeometry = suppliedGeometry && typeof suppliedGeometry === 'object' && !Array.isArray(suppliedGeometry)
+    && firstPositiveFiniteNumber(suppliedGeometry.baseDisplayWidthPx)
+    && firstPositiveFiniteNumber(suppliedGeometry.baseHeightPages);
+  const geometry = hasGeometry ? suppliedGeometry : null;
+  const realImageRecord = String(problem?.recordMode || problem?.record_mode || '').toLowerCase() === 'image-only'
+    && Boolean(problem?.imagePath || problem?.image_path || problem?.boardRenderPath || problem?.board_render_path);
+  if (!hasGeometry && !realImageRecord) return null;
+  const cropFormat = String(sessionContext?.crop_format || sessionContext?.cropFormat || geometry?.cropFormat || 'v1').toLowerCase() === 'v2'
+    ? 'v2'
+    : 'v1';
+  const sourceCropFormat = String(geometry?.cropFormat || cropFormat).toLowerCase() === 'v2' ? 'v2' : 'v1';
+  const maxWidth = firstPositiveFiniteNumber(geometry?.maxDisplayWidthPx)
+    || EDB_CANVAS_WIDTH_PX - EDB_LEFT_MARGIN_PX - EDB_RIGHT_PADDING_PX;
+  const leftZone = firstPositiveFiniteNumber(sessionContext?.template?.fixed_left_zone_ratio) || FIXED_LEFT_ZONE_RATIO;
+  const fallbackWidth = cropFormat === 'v2'
+    ? EDB_V2_DISPLAY_WIDTH_PX
+    : Math.max(
+      EDB_CANVAS_WIDTH_PX * leftZone - EDB_LEFT_MARGIN_PX - EDB_RIGHT_PADDING_PX,
+      Math.min(EDB_V1_DISPLAY_WIDTH_PX, maxWidth)
+    );
+  const sourceWidth = firstPositiveFiniteNumber(geometry?.baseDisplayWidthPx) || fallbackWidth;
+  const baseWidth = sourceCropFormat === cropFormat ? sourceWidth : fallbackWidth;
+  const diagnostics = problem?.layoutDiagnostics || problem?.layout_diagnostics || {};
+  const sourceHeight = firstPositiveFiniteNumber(
+    geometry?.baseHeightPages,
+    diagnostics.actualHeightPages,
+    diagnostics.actual_height_pages,
+    problem?.actualHeightPages,
+    problem?.actual_height_pages,
+    problem?.actualContentHeightPages,
+    problem?.actual_content_height_pages
+  );
+  if (!sourceHeight) return null;
+  const baseHeight = sourceHeight * baseWidth / sourceWidth;
+  const reservedHeight = sourceCropFormat === cropFormat
+    ? firstPositiveFiniteNumber(geometry?.reservedHeightPages) || Math.max(0.72, baseHeight)
+    : Math.max(0.72, baseHeight);
+  const canvasPageHeight = firstPositiveFiniteNumber(geometry?.canvasPageHeightPx) || EDB_CANVAS_PAGE_HEIGHT_PX;
+  const rawGap = geometry?.continuousGapPages;
+  const gap = rawGap !== null && rawGap !== undefined && Number.isFinite(Number(rawGap)) && Number(rawGap) >= 0
+    ? Number(rawGap)
+    : EDB_CONTINUOUS_GAP_PX / canvasPageHeight;
+  return {
+    baseDisplayWidthPx: baseWidth,
+    baseHeightPages: baseHeight,
+    reservedHeightPages: reservedHeight,
+    maxDisplayWidthPx: maxWidth,
+    canvasPageHeightPx: canvasPageHeight,
+    topPaddingPages: Number.isFinite(Number(geometry?.topPaddingPages)) && Number(geometry?.topPaddingPages) >= 0
+      ? Number(geometry.topPaddingPages)
+      : EDB_CONTINUOUS_GAP_PX / canvasPageHeight,
+    continuousGapPages: gap,
+    cropFormat,
+  };
+}
+
+function mapProblemToItem(problem, idx, rawSession = null){
   const title = (problem.title || '').trim();
   const fallbackName = `문항 ${idx + 1}`;
   // strip the noisy "...page-001 problem 1" suffix when present
@@ -6488,20 +12454,33 @@ function mapProblemToItem(problem, idx){
   const problemPlacementMode = problem.placementMode || problem.placement_mode || null;
   const problemUsesContinuousFlow = (problemInputIntent && normalizeInputIntent(problemInputIntent) === 'page-as-is')
     || problemPlacementMode === 'continuous-page-as-is';
-  const initialScale = normalizePlacementScaleRatio(
-    problem.placementScaleRatio ?? problem.placement_scale_ratio,
-    problemUsesContinuousFlow ? PLACEMENT_FIT_WIDTH_SCALE_RATIO : PLACEMENT_SCALE_MAX
+  const initialScale = initialPlacementScaleRatio(problem, problemUsesContinuousFlow);
+  const imageRecordGeometry = imageRecordGeometryForProblem(problem, rawSession);
+  const actualHeightPages = firstPositiveFiniteNumber(
+    imageRecordGeometry?.baseHeightPages,
+    problem.actualHeightPages,
+    problem.actual_height_pages,
+    problem.actualContentHeightPages,
+    problem.actual_content_height_pages
+  ) || 0.8;
+  const startYPages = firstPositiveFiniteNumber(problem.startYPages, problem.start_y_pages);
+  const snappedNextStartYPages = firstPositiveFiniteNumber(
+    problem.snappedNextStartYPages,
+    problem.snapped_next_start_y_pages
   );
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
+    problemNumber: problem.problemNumber ?? problem.problem_number ?? problem.metadata?.problemNumber ?? problem.metadata?.problem_number ?? null,
+    problemNumberSource: problem.problemNumberSource ?? problem.problem_number_source ?? problem.metadata?.problemNumberSource ?? problem.metadata?.problem_number_source ?? '',
     source: problem.sourcePageId || problem.subject || '업로드',
     type: 'image',
     kind: KIND_BY_SUBJECT[problem.subject] || 'paragraph',
     step,
-    heightFrac: typeof problem.actualHeightPages === 'number' && problem.actualHeightPages > 0
-      ? problem.actualHeightPages
-      : 0.8,
+    heightFrac: actualHeightPages,
+    actualHeightPages,
+    actual_height_pages: actualHeightPages,
+    imageRecordGeometry,
     imageUrl: problem.imagePath || null,
     chalkUrl: problem.boardRenderPath || null,
     subject: problem.subject || 'unknown',
@@ -6514,25 +12493,41 @@ function mapProblemToItem(problem, idx){
     parseConfidence: typeof problem.parseConfidence === 'number' ? problem.parseConfidence : null,
     confidence: problem.confidence || null,
     aiStatus: problem.aiStatus || 'unknown',
+    passageGroupId: problem.passageGroupId || problem.passage_group_id || problem.metadata?.passageGroupId || problem.metadata?.passage_group_id || null,
+    passageRole: problem.passageRole || problem.passage_role || problem.metadata?.passageRole || problem.metadata?.passage_role || null,
+    passageRange: problem.passageRange || problem.passage_range || problem.metadata?.passageRange || problem.metadata?.passage_range || null,
+    passageChildProblemNumbers: problem.passageChildProblemNumbers || problem.passage_child_problem_numbers || problem.metadata?.passageChildProblemNumbers || problem.metadata?.passage_child_problem_numbers || [],
+    supplementalItem: Boolean(problem.supplementalItem || problem.supplemental_item || problem.metadata?.supplementalItem || problem.metadata?.supplemental_item),
     inputIntent: problemInputIntent ? normalizeInputIntent(problemInputIntent) : null,
     forceFullPageBounds: Boolean(problem.forceFullPageBounds || problem.force_full_page_bounds),
     placementMode: problemPlacementMode,
-    startYPages: typeof problem.startYPages === 'number' ? problem.startYPages : null,
-    snappedNextStartYPages: typeof problem.snappedNextStartYPages === 'number' ? problem.snappedNextStartYPages : null,
-    overflowAmountPages: typeof problem.overflowAmountPages === 'number' ? problem.overflowAmountPages : 0,
+    startYPages: startYPages ?? 0,
+    snappedNextStartYPages: snappedNextStartYPages ?? null,
+    overflowAmountPages: Number.isFinite(Number(problem.overflowAmountPages ?? problem.overflow_amount_pages))
+      ? Number(problem.overflowAmountPages ?? problem.overflow_amount_pages)
+      : 0,
     overflowViolation: Boolean(problem.overflowViolation),
-    slotSpanCount: Number.isInteger(problem.slotSpanCount) ? problem.slotSpanCount : null,
+    slotSpanCount: Number.isInteger(Number(problem.slotSpanCount ?? problem.slot_span_count))
+      ? Number(problem.slotSpanCount ?? problem.slot_span_count)
+      : null,
     placementXRatio: normalizePlacementXRatio(problem.placementXRatio ?? problem.placement_x_ratio),
     placementXEdited: Boolean(problem.placementXEdited || problem.placement_x_edited),
     placementYRatio: normalizePlacementYRatio(problem.placementYRatio ?? problem.placement_y_ratio),
-    placementScaleRatio: initialScale < 0.95 ? DEFAULT_PLACEMENT_SCALE_RATIO : initialScale,
-    boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
+    placementExtraSlots: placementExtraSlots(problem),
+    placementScaleRatio: initialScale,
+    placementAutoFitDisabled: Boolean(
+      problem.placementAutoFitDisabled || problem.placement_auto_fit_disabled
+    ),
+    placementGapAfterPages: normalizePlacementGapAfterPages(
+      problem.placementGapAfterPages ?? problem.placement_gap_after_pages
+    ),
+    boardColumnCount: normalizeBoardColumns(problem.boardColumnCount ?? problem.board_column_count ?? problem.boardColumns ?? problem.board_columns ?? BOARD_COLUMN_MIN),
     boardColumnIndex: Number.isFinite(Number(problem.boardColumnIndex ?? problem.board_column_index))
       ? Math.max(0, Math.round(Number(problem.boardColumnIndex ?? problem.board_column_index)))
       : 0,
-    placementMagnetColumnIndex: Number.isFinite(Number(problem.placementMagnetColumnIndex ?? problem.placement_magnet_column_index))
-      ? Math.max(0, Math.round(Number(problem.placementMagnetColumnIndex ?? problem.placement_magnet_column_index)))
-      : null,
+    placementMagnetColumnIndex: normalizePlacementMagnetColumnIndex(
+      problem
+    ),
     boardRowHeightPages: Number.isFinite(Number(problem.boardRowHeightPages ?? problem.board_row_height_pages))
       ? Number(problem.boardRowHeightPages ?? problem.board_row_height_pages)
       : null,
@@ -6540,11 +12535,152 @@ function mapProblemToItem(problem, idx){
   };
 }
 
+function placementPersistenceSignature(rawSession){
+  if (!rawSession || !Array.isArray(rawSession.problems)) return '';
+  const stableNumber = value => {
+    if (value === null || value === undefined || value === '') return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? Number(numeric.toFixed(6)) : null;
+  };
+  const mappedItems = rawSession.problems.map((problem, index) => mapProblemToItem(problem, index, rawSession));
+  const signatureItems = mappedItems.some(item => item.imageRecordGeometry)
+    ? reflowItemsForBoardOrder(
+      mappedItems,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      rawSession.boardColumns ?? rawSession.board_columns ?? Math.max(BOARD_COLUMN_MIN, ...mappedItems.map(item => item.boardColumnCount)),
+      normalizeLayoutGapMode(rawSession.layoutGapMode ?? rawSession.layout_gap_mode)
+    )
+    : mappedItems;
+  return JSON.stringify({
+    layoutGapMode: normalizeLayoutGapMode(rawSession.layoutGapMode ?? rawSession.layout_gap_mode),
+    problems: signatureItems.map(item => [
+      String(item.id || ''),
+      item.inputIntent || '',
+      item.placementMode || '',
+      Boolean(item.forceFullPageBounds),
+      stableNumber(item.placementXRatio),
+      Boolean(item.placementXEdited),
+      stableNumber(item.placementYRatio),
+      placementExtraSlots(item),
+      stableNumber(item.placementScaleRatio),
+      Boolean(item.placementAutoFitDisabled),
+      stableNumber(item.placementGapAfterPages),
+      item.boardColumnCount,
+      item.boardColumnIndex,
+      item.placementMagnetColumnIndex,
+      stableNumber(item.boardRowHeightPages),
+      stableNumber(item.startYPages),
+      stableNumber(item.snappedNextStartYPages),
+    ]),
+  });
+}
+
+function sessionEditorDraftSignature(rawSession){
+  if (!rawSession || !Array.isArray(rawSession.problems)) return '';
+  return JSON.stringify({
+    name: String(rawSession.session_name || ''),
+    placement: placementPersistenceSignature(rawSession),
+    problems: rawSession.problems.map((problem, index) => {
+      const item = mapProblemToItem(problem, index, rawSession);
+      return [String(item.id || ''), item.name || '', item.step, normalizeManualCrop(item.manualCrop)];
+    }),
+  });
+}
+
+// Use the same persisted draft for status across every tab. A classification
+// or crop saves this draft first, so the status cannot describe only one item.
+function deriveSessionEditState(session, items, fileName, boardColumns, layoutGapMode, busy = false){
+  if (!Array.isArray(items) || !items.length) {
+    return { dirty: false, busy, canSave: false, label: '자료 없음', tone: 'empty' };
+  }
+  if (!session) {
+    return { dirty: false, busy, canSave: false, label: '샘플 미리보기 · 저장 안 됨', tone: 'preview' };
+  }
+  const draft = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode);
+  const dirty = Boolean(draft && sessionEditorDraftSignature(draft) !== sessionEditorDraftSignature(session));
+  return {
+    dirty,
+    busy,
+    canSave: dirty && !busy,
+    label: busy ? '수업 변경 저장 중…' : dirty ? '수업 변경 있음 · 저장 필요' : '수업 변경 저장됨',
+    tone: busy ? 'busy' : dirty ? 'dirty' : 'saved',
+  };
+}
+
+let latestServerSessionRevision = null;
+let latestServerSessionEpoch = null;
+const retiredServerSessionEpochs = new Set();
+
+function sessionEpochGeneration(epoch){
+  const match = /^(\d{20})-/.exec(String(epoch || '').trim());
+  return match ? match[1] : null;
+}
+
+function sessionEpochIsOlder(candidateEpoch, referenceEpoch){
+  const candidateGeneration = sessionEpochGeneration(candidateEpoch);
+  const referenceGeneration = sessionEpochGeneration(referenceEpoch);
+  return Boolean(
+    candidateGeneration
+    && referenceGeneration
+    && candidateGeneration < referenceGeneration
+  );
+}
+
+function sessionResponseRevisionIsStale(payload){
+  if (!payload || !Object.prototype.hasOwnProperty.call(payload, 'session')) return false;
+  const responseEpoch = String(payload.sessionEpoch || '').trim();
+  if (responseEpoch && retiredServerSessionEpochs.has(responseEpoch)) return true;
+  if (responseEpoch && latestServerSessionEpoch && sessionEpochIsOlder(responseEpoch, latestServerSessionEpoch)) return true;
+  if (responseEpoch && latestServerSessionEpoch && responseEpoch !== latestServerSessionEpoch) return false;
+  const rawRevision = payload.sessionRevision;
+  const revision = rawRevision === null || rawRevision === undefined ? Number.NaN : Number(rawRevision);
+  return Number.isInteger(revision)
+    && Number.isInteger(latestServerSessionRevision)
+    && revision < latestServerSessionRevision;
+}
+
+function captureSessionRevision(payload){
+  const responseEpoch = String(payload?.sessionEpoch || '').trim();
+  if (responseEpoch && retiredServerSessionEpochs.has(responseEpoch)) return payload;
+  if (responseEpoch && latestServerSessionEpoch && sessionEpochIsOlder(responseEpoch, latestServerSessionEpoch)) return payload;
+  if (responseEpoch && responseEpoch !== latestServerSessionEpoch) {
+    if (latestServerSessionEpoch) retiredServerSessionEpochs.add(latestServerSessionEpoch);
+    latestServerSessionEpoch = responseEpoch;
+    latestServerSessionRevision = null;
+  }
+  const rawRevision = payload?.sessionRevision;
+  const revision = rawRevision === null || rawRevision === undefined ? Number.NaN : Number(rawRevision);
+  const shouldCapture = Number.isInteger(revision)
+    && revision >= 0
+    && (
+      !Number.isInteger(latestServerSessionRevision)
+      || revision >= latestServerSessionRevision
+    );
+  if (shouldCapture) latestServerSessionRevision = revision;
+  return payload;
+}
+
+function withExpectedSessionRevision(payload = {}){
+  return {
+    ...(payload || {}),
+    expectedSessionRevision: latestServerSessionRevision,
+    expectedSessionEpoch: latestServerSessionEpoch,
+  };
+}
+
 async function fetchLatestSession(){
-  const resp = await fetch('/api/session/latest');
-  if (resp.status === 404) return null;
-  const json = await expectOkJson(resp, '세션 로드 실패');
+  const json = await fetchLatestSessionState();
   return json.session;
+}
+
+async function fetchLatestSessionState(){
+  const startupRequest = typeof window !== 'undefined' && window.EDB_INITIAL_SESSION_REQUEST;
+  if (startupRequest) delete window.EDB_INITIAL_SESSION_REQUEST;
+  const result = startupRequest ? await startupRequest : { response: await fetch('/api/session/latest') };
+  if (result.error) throw result.error;
+  const resp = result.response;
+  if (resp.status === 404) return { ok: true, session: null };
+  return expectOkJson(resp, '세션 로드 실패');
 }
 
 async function fetchSessionHistory(){
@@ -6557,7 +12693,7 @@ async function postRestoreSessionHistory(id){
   const resp = await fetch('/api/session/history/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id }),
+    body: JSON.stringify(withExpectedSessionRevision({ id })),
   });
   const json = await expectOkJson(resp, '작업 열기 실패');
   return json;
@@ -6576,11 +12712,17 @@ const AI_FALLBACK_ON = {
   saveDebug: false,
 };
 const AI_MODEL_LABELS = {
+  'gemini-3.8-flash': 'Gemini 3.8 Flash (최신)',
+  'gemini-3.6-flash': 'Gemini 3.6 Flash',
+  'gemini-3.5-flash': 'Gemini 3.5 Flash',
   'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
   'gemini-3-pro-preview': 'Gemini 3 Pro',
   'gemini-2.5-pro': 'Gemini 2.5 Pro',
 };
 const DEFAULT_INPUT_INTENT = 'multi-problem';
+const DEFAULT_CONTENT_TARGET = 'all';
+const DEFAULT_RECOGNITION_MAX_DIMENSION = 4096;
+const CONTENT_TARGETS = new Set(['all', 'questions', 'shared-passages']);
 const INPUT_INTENT_OPTIONS = [
   {
     value: 'multi-problem',
@@ -6601,13 +12743,69 @@ const INPUT_INTENT_OPTIONS = [
   {
     value: 'page-as-is',
     label: '원본 페이지 이어붙이기',
-    description: '너비에 맞춰 키우고 높이는 비율대로 이어 배치',
+    description: '페이지를 나누지 않고 1열로, 보드 너비에 맞춰 이어 배치',
     icon: 'rows3',
     badgeLabel: '원본 이어붙임',
-    pills: ['3단계 고화질', '너비 맞춤', '비율 높이', '연속 이어붙이기'],
+    pills: ['원본 해상도 우선', '200 DPI', '1열 기본', '너비 맞춤'],
     exportMode: 'question',
   },
 ];
+// One split choice + one 분할하기 button drive the upload queue. The value is
+// the processQueuedFiles mode, so the selection is exactly what runs.
+const SPLIT_MODE_STORAGE_KEY = 'edb.splitMode';
+const DEFAULT_SPLIT_MODE = 'recognize';
+const SPLIT_MODE_OPTIONS = [
+  {
+    value: 'recognize',
+    label: '자동 분할',
+    description: '문항을 찾아 각각 잘라 칠판에 배치',
+    icon: 'aiBatch',
+  },
+  {
+    value: 'register',
+    label: '페이지 그대로',
+    description: '페이지 전체를 그대로 칠판에 배치',
+    icon: 'pagePng',
+  },
+  {
+    value: 'manual-split',
+    label: '직접 자르기',
+    description: '원본 위에 영역을 그려 자른 뒤 칠판으로',
+    icon: 'pen',
+  },
+];
+
+function normalizeSplitMode(value){
+  const normalized = String(value || '').trim();
+  return SPLIT_MODE_OPTIONS.some(option => option.value === normalized) ? normalized : DEFAULT_SPLIT_MODE;
+}
+
+function splitModeMeta(value){
+  const mode = normalizeSplitMode(value);
+  return SPLIT_MODE_OPTIONS.find(option => option.value === mode) || SPLIT_MODE_OPTIONS[0];
+}
+
+function readStoredSplitMode(){
+  try {
+    return normalizeSplitMode(window.localStorage?.getItem(SPLIT_MODE_STORAGE_KEY));
+  } catch (_err) {
+    return DEFAULT_SPLIT_MODE;
+  }
+}
+
+function storeSplitMode(value){
+  try {
+    window.localStorage?.setItem(SPLIT_MODE_STORAGE_KEY, normalizeSplitMode(value));
+  } catch (_err) {
+    // Local storage is optional; the in-memory choice still works.
+  }
+}
+
+function splitActionLabel(fileCount){
+  return fileCount > 1 ? `${fileCount}개 파일 분할하기` : '분할하기';
+}
+
+
 const INPUT_INTENT_BY_VALUE = Object.freeze(
   INPUT_INTENT_OPTIONS.reduce((acc, option) => {
     acc[option.value] = option;
@@ -6630,6 +12828,11 @@ function normalizeInputIntent(value){
   const normalized = String(value || DEFAULT_INPUT_INTENT).trim().toLowerCase().replace(/_/g, '-');
   if (normalized === 'auto') return DEFAULT_INPUT_INTENT;
   return INPUT_INTENT_META_BY_VALUE[normalized] ? normalized : DEFAULT_INPUT_INTENT;
+}
+
+function normalizeContentTarget(value){
+  const normalized = String(value || DEFAULT_CONTENT_TARGET).trim().toLowerCase().replace(/_/g, '-');
+  return CONTENT_TARGETS.has(normalized) ? normalized : DEFAULT_CONTENT_TARGET;
 }
 
 function inputIntentMeta(value){
@@ -6664,6 +12867,7 @@ const RISK_FLAG_META = {
   no_problem_markers: '문항 번호 부족',
   ocr_disabled: 'OCR 미사용',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   passage_group_source_reuse: '지문 겹침',
   passage_cross_page_merge_check: '병합 확인',
   problem_per_block: '블록 단위 분리',
@@ -6675,10 +12879,13 @@ const RISK_FLAG_META = {
 
 const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   board_placement_overlap: '판서 배치 겹침',
+  duplicate_problem_id: '문항 ID 중복',
   duplicate_problem_number: '중복 번호',
   low_ink_problem_image: '이미지 내용 부족',
+  missing_problem_id: '문항 ID 누락',
   missing_problem_image: '문항 이미지 없음',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   passage_review_queue_remaining: '지문 확인 필요',
   passage_group_source_reuse: '지문 겹침',
   review_flags_remaining: '검수 플래그 남음',
@@ -6696,6 +12903,7 @@ const PASSAGE_REVIEW_REASON_LABELS = {
   passage_fragment: '지문 본문',
   passage_group_source_reuse: '지문 겹침',
   passage_missing_child_questions: '문항 누락',
+  passage_quality_review: '지문 품질 확인',
   source_problem_bbox_overlap: '문항 영역 겹침',
 };
 
@@ -7017,10 +13225,10 @@ function riskFlagLabel(flag){
 
 function hangulRuntimeStatusMeta(hangul){
   const status = String(hangul?.status || '').toLowerCase();
-  if (!hangul) return { label: '점검 중', tone: 'var(--muted)' };
-  if (status === 'ready') return { label: hangul.label || '준비됨', tone: 'var(--ok)' };
-  if (status === 'partial') return { label: hangul.label || '부분 준비', tone: '#aa6516' };
-  return { label: hangul.label || '확인 필요', tone: 'var(--danger)' };
+  if (!hangul) return { label: '점검 중', tone: 'neutral' };
+  if (status === 'ready') return { label: hangul.label || '준비됨', tone: 'ok' };
+  if (status === 'partial') return { label: hangul.label || '부분 준비', tone: 'warn' };
+  return { label: hangul.label || '확인 필요', tone: 'danger' };
 }
 
 function hangulRuntimeSummary(hangul){
@@ -7304,6 +13512,89 @@ function collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts){
   return matched;
 }
 
+function pageReviewProblemIds(page){
+  const rawIds = Array.isArray(page?.problemIds)
+    ? page.problemIds
+    : Array.isArray(page?.problem_ids)
+      ? page.problem_ids
+      : [];
+  return rawIds.map(id => String(id || '').trim()).filter(Boolean);
+}
+
+function pageReviewTargetId(page){
+  const pageId = String(page?.id || '').trim();
+  return pageId ? `page:${pageId}` : '';
+}
+
+function pageReviewConfirmed(page){
+  return Boolean(page?.pageReviewConfirmed || page?.page_review_confirmed);
+}
+
+function collectReviewTargets(session, actionableRiskFlagCounts){
+  const problems = Array.isArray(session?.problems) ? session.problems : [];
+  const pages = Array.isArray(session?.pages) ? session.pages : [];
+  const problemsById = new Map();
+  problems.forEach((problem, index) => {
+    const id = String(problem?.id || problem?.problem_id || `problem-index-${index}`);
+    problemsById.set(id, problem);
+  });
+  const unresolvedIds = collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts);
+  const targets = [];
+  const seenProblemIds = new Set();
+  const addProblemTarget = (problemId) => {
+    if (!problemId || seenProblemIds.has(problemId)) return;
+    const problem = problemsById.get(problemId);
+    if (!problem) return;
+    seenProblemIds.add(problemId);
+    const sourceStatus = deriveProblemStatus(problem);
+    targets.push({
+      id: problemId,
+      type: 'problem',
+      pageId: String(problem?.sourcePageId || problem?.source_page_id || '').trim(),
+      problemIds: [problemId],
+      status: unresolvedIds.has(problemId)
+        ? (sourceStatus === 'failed' ? 'failed' : 'check_needed')
+        : 'normal',
+      sourceStatus,
+      reason: riskFlagsFor(problem)[0] || (sourceStatus === 'failed' ? 'parse_failed' : ''),
+    });
+  };
+
+  pages.forEach(page => {
+    const problemIds = pageReviewProblemIds(page);
+    problemIds.forEach(addProblemTarget);
+    if (problemIds.length) return;
+    const id = pageReviewTargetId(page);
+    if (!id) return;
+    const confirmed = pageReviewConfirmed(page);
+    if (!confirmed && !unresolvedIds.has(id)) return;
+    targets.push({
+      id,
+      type: 'page',
+      pageId: String(page.id || '').trim(),
+      problemIds: [],
+      status: confirmed ? 'normal' : 'check_needed',
+      sourceStatus: normalizeReviewStatus(page?.reviewStatus || page?.review_status) || 'check_needed',
+      reason: confirmed
+        ? String(page?.pageReviewDecision || page?.page_review_decision || 'no_passage')
+        : riskFlagsFor(page)[0] || 'no_passage_detected',
+      decision: String(page?.pageReviewDecision || page?.page_review_decision || ''),
+    });
+  });
+  problemsById.forEach((_problem, id) => addProblemTarget(id));
+  return targets;
+}
+
+function collectReviewTargetStatusCounts(targets){
+  const counts = { all: 0, normal: 0, check_needed: 0, failed: 0 };
+  (targets || []).forEach(target => {
+    const status = normalizeReviewStatus(target?.status) || 'check_needed';
+    counts.all += 1;
+    counts[status] = (counts[status] || 0) + 1;
+  });
+  return counts;
+}
+
 function countActionableReviewMatches(session, actionableRiskFlagCounts, failedCount = 0){
   const matched = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
   return Math.max(matched.size, Math.max(0, Number(failedCount) || 0));
@@ -7584,8 +13875,11 @@ function sessionReviewSummary(session){
   const riskFlagCounts = fallbackRiskFlagCounts;
   const actionableRiskFlagCounts = filterActionableRiskFlagCounts(riskFlagCounts, { hwpCountsMatch: hasHwpCountMatch(raw) });
   const actionableReviewProblemIds = collectActionableReviewProblemIds(session, actionableRiskFlagCounts);
-  const unresolvedReviewProblemIds = collectUnresolvedReviewProblemIds(session, actionableRiskFlagCounts);
-  const actionableNeedsReviewCount = countActionableReviewMatches(session, actionableRiskFlagCounts, reviewStatusCounts.failed);
+  const reviewTargets = collectReviewTargets(session, actionableRiskFlagCounts);
+  const unresolvedReviewTargets = reviewTargets.filter(target => target.status !== 'normal');
+  const unresolvedReviewProblemIds = new Set(unresolvedReviewTargets.map(target => target.id));
+  const reviewTargetStatusCounts = collectReviewTargetStatusCounts(reviewTargets);
+  const actionableNeedsReviewCount = unresolvedReviewTargets.length;
   const passageReviewSummary = collectPassageReviewSummary(session, { actionableProblemIds: unresolvedReviewProblemIds });
   const topRiskFlags = normalizeFilterableRiskFlagItems(session, actionableRiskFlagCounts);
   const warningMessages = Array.isArray(raw.warningMessages)
@@ -7627,6 +13921,11 @@ function sessionReviewSummary(session){
     ?? 0
   );
   const aiStages = normalizeAiStageSummaries(session);
+  const aiCost = session?.ai_cost_summary || session?.aiCostSummary || {};
+  const aiCostEventCount = nonNegativeNumber(aiCost.event_count ?? aiCost.eventCount);
+  const aiCostUsd = nonNegativeNumber(aiCost.estimated_usd ?? aiCost.estimatedUsd);
+  const aiCostKrw = nonNegativeNumber(aiCost.estimated_krw ?? aiCost.estimatedKrw);
+  const aiCostUsdKrwRate = nonNegativeNumber(aiCost.usd_krw_rate ?? aiCost.usdKrwRate) || 1400;
   const duplicateProblemNumberGroups = Array.isArray(session?.duplicateProblemNumberGroups)
     ? session.duplicateProblemNumberGroups
     : Array.isArray(session?.duplicate_problem_number_groups)
@@ -7686,10 +13985,16 @@ function sessionReviewSummary(session){
   return {
     counts,
     reviewStatusCounts,
+    reviewTargetStatusCounts,
     coreReviewStatusCounts: rawCoreStatusCounts,
     supplementalReviewStatusCounts: rawSupplementalStatusCounts,
     needsReviewCount: Math.max(0, reviewStatusCounts.check_needed + reviewStatusCounts.failed),
     actionableNeedsReviewCount,
+    unresolvedReviewProblemIds: Array.from(unresolvedReviewProblemIds),
+    reviewTargets,
+    unresolvedReviewTargets,
+    pageReviewTargetCount: reviewTargets.filter(target => target.type === 'page').length,
+    pendingPageReviewTargetCount: unresolvedReviewTargets.filter(target => target.type === 'page').length,
     riskFlagCounts,
     actionableRiskFlagCounts,
     topRiskFlags,
@@ -7709,6 +14014,10 @@ function sessionReviewSummary(session){
     hwpRendererCacheHitCount: Number.isFinite(hwpRendererCacheHitCount) ? Math.max(0, hwpRendererCacheHitCount) : 0,
     hwpNormalizedCacheHitCount: Number.isFinite(hwpNormalizedCacheHitCount) ? Math.max(0, hwpNormalizedCacheHitCount) : 0,
     aiStages,
+    aiCostEventCount,
+    aiCostUsd,
+    aiCostKrw,
+    aiCostUsdKrwRate,
     hwpProblemCountMismatchCount: Number.isFinite(hwpProblemCountMismatchCount) ? Math.max(0, hwpProblemCountMismatchCount) : 0,
     hwpOversegmentationCount: Number.isFinite(hwpOversegmentationCount) ? Math.max(0, hwpOversegmentationCount) : 0,
     duplicateProblemNumberGroups,
@@ -7734,6 +14043,41 @@ function sessionReviewSummary(session){
     passageReviewPreview: passageReviewSummary.passageReviewPreview,
     passageReviewReasonLabel: passageReviewSummary.passageReviewReasonLabel,
   };
+}
+
+function reviewFlowState(reviewSummary){
+  const targetCounts = reviewSummary?.reviewTargetStatusCounts || reviewSummary?.reviewStatusCounts || {};
+  const total = Math.max(0, Number(targetCounts.all) || 0);
+  const unresolvedTargets = Array.isArray(reviewSummary?.unresolvedReviewTargets)
+    ? reviewSummary.unresolvedReviewTargets.filter(target => target?.id)
+    : Array.isArray(reviewSummary?.unresolvedReviewProblemIds)
+      ? reviewSummary.unresolvedReviewProblemIds.filter(Boolean)
+      : [];
+  const remaining = Math.min(total, Math.max(
+    unresolvedTargets.length,
+    Number(reviewSummary?.actionableNeedsReviewCount) || 0,
+    Number(reviewSummary?.passageReviewItemCount) || 0
+  ));
+  return {
+    total,
+    remaining,
+    reviewed: Math.max(0, total - remaining),
+    complete: total > 0 && remaining === 0,
+  };
+}
+
+function recognitionReviewNeedsAttention(session){
+  const summary = sessionReviewSummary(session);
+  return (
+    (summary.unresolvedReviewProblemIds || []).length > 0
+    || Number(summary.actionableNeedsReviewCount) > 0
+    || Number(summary.passageReviewItemCount) > 0
+  );
+}
+
+function resolveRecognitionReviewDestination(session, destination){
+  if (destination !== 'review-needed') return destination;
+  return recognitionReviewNeedsAttention(session) ? destination : 'review-all';
 }
 
 function publishReviewWarningMessage(session, publishReviewSummary){
@@ -7811,6 +14155,10 @@ function normalizeEdbParts(raw, fallback = {}){
         edb_file_exists: exists === undefined ? true : exists !== false,
         recordCount: Math.max(0, Number(part.recordCount ?? part.record_count ?? 0) || 0),
         record_count: Math.max(0, Number(part.recordCount ?? part.record_count ?? 0) || 0),
+        placementCount: Math.max(0, Number(part.placementCount ?? part.placement_count ?? 0) || 0),
+        placement_count: Math.max(0, Number(part.placementCount ?? part.placement_count ?? 0) || 0),
+        flowEndPages: Math.max(0, Number(part.flowEndPages ?? part.flow_end_pages ?? 0) || 0),
+        flow_end_pages: Math.max(0, Number(part.flowEndPages ?? part.flow_end_pages ?? 0) || 0),
         pageCountHint: Math.max(0, Number(part.pageCountHint ?? part.page_count_hint ?? 0) || 0),
         page_count_hint: Math.max(0, Number(part.pageCountHint ?? part.page_count_hint ?? 0) || 0),
       };
@@ -7833,6 +14181,10 @@ function normalizeEdbParts(raw, fallback = {}){
       edb_file_exists: fallbackExists === undefined ? true : fallbackExists !== false,
       recordCount: Math.max(0, Number(fallback.recordCount || 0) || 0),
       record_count: Math.max(0, Number(fallback.recordCount || 0) || 0),
+      placementCount: Math.max(0, Number(fallback.placementCount || 0) || 0),
+      placement_count: Math.max(0, Number(fallback.placementCount || 0) || 0),
+      flowEndPages: Math.max(0, Number(fallback.flowEndPages || 0) || 0),
+      flow_end_pages: Math.max(0, Number(fallback.flowEndPages || 0) || 0),
       pageCountHint: Math.max(0, Number(fallback.pageCountHint || 0) || 0),
       page_count_hint: Math.max(0, Number(fallback.pageCountHint || 0) || 0),
     });
@@ -8293,28 +14645,59 @@ function formatProblemCount(counts){
   return `${core}문항`;
 }
 
+function formatReviewStageCount(mode, counts, options = {}){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.formatReviewModeCount;
+  if (typeof helper === 'function') return helper(mode, counts, options);
+  if (mode === 'shared-passages') {
+    const total = Number(counts?.total ?? counts?.all ?? 0);
+    return `${options.compact ? '지문' : '공통 지문'} ${Number.isFinite(total) ? Math.max(0, total) : 0}개`;
+  }
+  if (mode === 'page-as-is') {
+    const pageCount = Number(options.pageCount ?? counts?.total ?? counts?.all ?? 0);
+    return options.compact ? '페이지 원본' : `${Number.isFinite(pageCount) ? Math.max(0, pageCount) : 0}페이지`;
+  }
+  return formatProblemCount(counts);
+}
+
+function reviewStageCopyFor(session, counts, pageCount){
+  const helper = globalThis.EDB_REVIEW_FILTERS?.reviewModeCopy;
+  if (typeof helper === 'function') return helper(session, counts, { pageCount });
+  const passageOnly = normalizeContentTarget(session?.contentTarget || session?.content_target) === 'shared-passages';
+  const pageAsIs = normalizeInputIntent(session?.inputIntent || session?.input_intent) === 'page-as-is';
+  const mode = passageOnly ? 'shared-passages' : pageAsIs ? 'page-as-is' : 'problems';
+  const countLabel = formatReviewStageCount(mode, counts, { pageCount });
+  const compactCountLabel = formatReviewStageCount(mode, counts, { pageCount, compact: true });
+  if (mode === 'shared-passages') {
+    return { mode, title: '지문 검수', subtitle: '공통 지문 영역', countLabel, headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}` };
+  }
+  if (mode === 'page-as-is') {
+    return { mode, title: '페이지 검수', subtitle: '원본 보존', countLabel, headerCountLabel: `${pageCount}페이지 원본` };
+  }
+  return { mode, title: '문항 검수', subtitle: '검출 영역', countLabel, headerCountLabel: `${pageCount}페이지 · ${compactCountLabel}` };
+}
+
+function recentSessionCountLabel(entry){
+  const pageCount = Number(entry?.pageCount ?? entry?.page_count ?? 0);
+  return reviewStageCopyFor(entry, {
+    core: entry?.coreProblemCount ?? entry?.core_problem_count,
+    supplemental: entry?.supplementalItemCount ?? entry?.supplemental_item_count,
+    total: entry?.detectedProblemCount ?? entry?.detected_problem_count,
+  }, Number.isFinite(pageCount) ? Math.max(0, pageCount) : 0).countLabel;
+}
+
+function filterRecentSessions(entries, query){
+  const normalize = value => String(value || '').normalize('NFKC').toLocaleLowerCase();
+  const terms = normalize(query).trim().split(/\s+/).filter(Boolean);
+  const sessions = Array.isArray(entries) ? entries.filter(entry => entry?.id) : [];
+  if (!terms.length) return sessions;
+  return sessions.filter(entry => {
+    const name = normalize(entry.sessionName || entry.session_name || '이름 없는 작업');
+    return terms.every(term => name.includes(term));
+  });
+}
+
 function hasReviewPages(session){
   return Array.isArray(session?.pages) && session.pages.length > 0;
-}
-
-function sessionRiskCount(session){
-  const problemRiskCount = (session?.problems || []).filter(p => Array.isArray(p?.riskFlags) && p.riskFlags.length > 0).length;
-  const pageRiskCount = (session?.pages || []).filter(page => {
-    const flags = page?.riskFlags || page?.risk_flags || [];
-    return Array.isArray(flags) && flags.length > 0;
-  }).length;
-  const warningCount = Array.isArray(session?.warning_messages)
-    ? session.warning_messages.length
-    : Array.isArray(session?.warningMessages)
-      ? session.warningMessages.length
-      : 0;
-  return problemRiskCount + pageRiskCount + warningCount;
-}
-
-function shouldOpenReview(session){
-  if (!hasReviewPages(session)) return false;
-  const problemCount = Array.isArray(session?.problems) ? session.problems.length : 0;
-  return problemCount > 1 || sessionRiskCount(session) > 0;
 }
 
 function summarizeRecognitionSession(session, pageIds){
@@ -8330,6 +14713,19 @@ function summarizeRecognitionSession(session, pageIds){
   });
   const riskCount = problems.filter(problem => deriveProblemStatus(problem) !== 'normal').length;
   const counts = countSessionProblems(problems);
+  const passageQualities = problems
+    .filter(problem => isPassageFragmentProblem(problem))
+    .map(problem => problem?.passageQuality || problem?.passage_quality)
+    .filter(quality => quality && typeof quality === 'object');
+  const passageQualityScores = passageQualities
+    .map(quality => Number(quality.score_10 ?? quality.score10))
+    .filter(score => Number.isFinite(score));
+  const passageQualityScore = passageQualityScores.length
+    ? passageQualityScores.reduce((total, score) => total + score, 0) / passageQualityScores.length
+    : null;
+  const passageQualityReviewCount = passageQualities.filter(quality => (
+    String(quality.grade || '').toLowerCase() !== 'good'
+  )).length;
   return {
     pages: visiblePages.length,
     problems: counts.total,
@@ -8337,6 +14733,9 @@ function summarizeRecognitionSession(session, pageIds){
     supplementalItems: counts.supplemental,
     problemLabel: formatProblemCount(counts),
     riskCount,
+    passageQualityCount: passageQualities.length,
+    passageQualityScore,
+    passageQualityReviewCount,
   };
 }
 
@@ -8516,7 +14915,21 @@ async function readJsonResponse(resp, fallbackMessage){
 
 function assertOkJson(resp, json, fallbackMessage){
   if (!resp.ok || !json.ok) {
-    throw new Error(json?.error || `${fallbackMessage || '요청 실패'} (${resp.status})`);
+    const error = new Error(formatApiError(json, fallbackMessage || `요청 실패 (${resp.status})`));
+    error.code = json?.code || null;
+    error.latestSession = json?.session || null;
+    error.hasLatestSessionState = Boolean(
+      json && Object.prototype.hasOwnProperty.call(json, 'session')
+    );
+    error.sessionRevision = json?.sessionRevision !== null
+      && json?.sessionRevision !== undefined
+      && Number.isInteger(Number(json.sessionRevision))
+      ? Number(json.sessionRevision)
+      : null;
+    error.sessionEpoch = String(json?.sessionEpoch || '').trim() || null;
+    error.retryable = json?.retryable !== false;
+    error.recoverySteps = Array.isArray(json?.recoverySteps) ? json.recoverySteps.slice(0, 5) : [];
+    throw error;
   }
   return json;
 }
@@ -8537,12 +14950,20 @@ function edbFileNameFromSessionName(value, fallback = 'classin'){
 
 async function expectOkJson(resp, fallbackMessage){
   const json = await readJsonResponse(resp, fallbackMessage);
-  return assertOkJson(resp, json, fallbackMessage);
+  const checked = assertOkJson(resp, json, fallbackMessage);
+  if (sessionResponseRevisionIsStale(checked)) {
+    const error = new Error('더 최신 작업이 완료되어 늦게 도착한 응답을 적용하지 않았습니다.');
+    error.code = 'stale_session_response';
+    throw error;
+  }
+  return captureSessionRevision(checked);
 }
 
 async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT, options = {}){
   const resolvedInputIntent = normalizeInputIntent(inputIntent);
+  const resolvedContentTarget = normalizeContentTarget(options.contentTarget);
   const inputIntentConfig = INPUT_INTENT_BY_VALUE[resolvedInputIntent] || INPUT_INTENT_BY_VALUE[DEFAULT_INPUT_INTENT];
+  assertExportPayloadFits(files);
   const filesPayload = await Promise.all(files.map(async (f) => ({
     fileName: f.name,
     fileDataBase64: await fileToBase64(f),
@@ -8552,12 +14973,14 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+    body: JSON.stringify(withExpectedSessionRevision({
       files: filesPayload,
       preview: !!options.preview,
       exportMode: inputIntentConfig.exportMode,
       inputIntent: resolvedInputIntent,
       input_intent: resolvedInputIntent,
+      contentTarget: resolvedContentTarget,
+      content_target: resolvedContentTarget,
       sourceMode: 'auto',
       source_mode: 'auto',
       subject: 'unknown',
@@ -8569,12 +14992,118 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
         : files.some(f => !isDocumentLikeFile(f)),
       skipDeskew: !!options.skipDeskew,
       skipCrop: !!options.skipCrop,
-      maxDimension: options.maxDimension || 2400,
+      pdfDpi: options.pdfDpi || 200,
+      // Full-page exports are the display master. Recognition keeps ordinary
+      // 200/300-DPI sources intact and only bounds unusually large scans.
+      maxDimension: resolvedInputIntent === 'page-as-is'
+        ? null
+        : (options.maxDimension || DEFAULT_RECOGNITION_MAX_DIMENSION),
+      // Full-page input stays as one page/one column by default. Column tiling
+      // remains an explicit API option, never an implicit page-as-is behavior.
+      pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off',
+      aiEnabled: options.aiEnabled !== false,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
-    }),
+    })),
   });
   const json = await readJsonResponse(resp, '파싱 실행 실패');
-  if (!resp.ok || !json.ok) throw new Error(formatApiError(json, `파싱 실행 실패 (${resp.status})`));
+  if (!resp.ok || !json.ok) {
+    throw operationErrorFromResponse(json, resp, 'session_export', `파싱 실행 실패 (${resp.status})`);
+  }
+  if (sessionResponseRevisionIsStale(json)) {
+    throw new Error('더 최신 작업이 완료되어 늦게 도착한 파싱 결과를 적용하지 않았습니다.');
+  }
+  captureSessionRevision(json);
+  return json.session;
+}
+
+async function postPublishPlan(publishRequest, options = {}){
+  const resp = await fetch('/api/session/publish-plan', {
+    method: 'POST',
+    signal: options.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(withExpectedSessionRevision({
+      order: publishRequest.order,
+      excluded: publishRequest.excluded,
+      placements: publishRequest.placements,
+      session: publishRequest.sessionForPublish,
+    })),
+  });
+  const json = await readJsonResponse(resp, 'EDB 분할 계산 실패');
+  if (!resp.ok || !json.ok) {
+    throw operationErrorFromResponse(
+      json,
+      resp,
+      'session_publish_plan',
+      `EDB 분할 계산 실패 (${resp.status})`
+    );
+  }
+  captureSessionRevision(json);
+  const rawParts = Array.isArray(json.projectedParts)
+    ? json.projectedParts
+    : Array.isArray(json.projected_parts)
+      ? json.projected_parts
+      : [];
+  const parts = rawParts.map((part, index) => ({
+    ...part,
+    partIndex: Math.max(1, Number(part.partIndex ?? part.part_index ?? index + 1) || index + 1),
+    problemCount: Math.max(0, Number(part.problemCount ?? part.problem_count ?? 0) || 0),
+    estimatedFlowEndPages: Math.max(
+      0,
+      Number(part.estimatedFlowEndPages ?? part.estimated_flow_end_pages ?? 0) || 0
+    ),
+  }));
+  return {
+    ...json,
+    projectedPartCount: Math.max(
+      parts.length,
+      Number(json.projectedPartCount ?? json.projected_part_count ?? 0) || 0
+    ),
+    projectedParts: parts,
+  };
+}
+
+async function postReextractSharedPassages(options = {}){
+  const sourcePaths = sessionReusableSourcePaths(options.session);
+  if (!sourcePaths.length) {
+    throw new Error('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.');
+  }
+  const resp = await fetch('/api/export', {
+    method: 'POST',
+    signal: options.signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(withExpectedSessionRevision({
+      preview: true,
+      exportEdb: false,
+      reuseSessionSources: true,
+      reuse_session_sources: true,
+      exportMode: 'question',
+      inputIntent: 'multi-problem',
+      input_intent: 'multi-problem',
+      contentTarget: 'shared-passages',
+      content_target: 'shared-passages',
+      sourceMode: 'auto',
+      source_mode: 'auto',
+      subject: 'korean',
+      ocr: options.ocr || 'auto',
+      edbName: edbFileNameFromSessionName(options.edbName, sourcePaths[0] || 'classin'),
+      detectPerspective: false,
+      skipDeskew: false,
+      skipCrop: false,
+      pdfDpi: options.pdfDpi || 200,
+      maxDimension: options.maxDimension || DEFAULT_RECOGNITION_MAX_DIMENSION,
+      pageTileMode: 'off',
+      aiEnabled: options.aiEnabled !== false,
+      aiFallback: AI_FALLBACK_OFF,
+    })),
+  });
+  const json = await readJsonResponse(resp, '공통 지문 재추출 실패');
+  if (!resp.ok || !json.ok) {
+    throw new Error(formatApiError(json, `공통 지문 재추출 실패 (${resp.status})`));
+  }
+  if (sessionResponseRevisionIsStale(json)) {
+    throw new Error('더 최신 작업이 완료되어 늦게 도착한 공통 지문 결과를 적용하지 않았습니다.');
+  }
+  captureSessionRevision(json);
   return json.session;
 }
 
@@ -8587,15 +15116,148 @@ function formatApiError(payload, fallbackMessage){
   return `${baseMessage}\n\n다음 조치:\n${steps.map((step, index) => `${index + 1}. ${step}`).join('\n')}`;
 }
 
+function operationErrorFromResponse(payload, response, operation, fallbackMessage){
+  const error = new Error(formatApiError(payload, fallbackMessage));
+  error.code = String(payload?.code || `http_${response?.status || 'unknown'}`).slice(0, 120);
+  error.operation = String(payload?.operation || operation || 'ui_action').slice(0, 80);
+  error.status = Number(response?.status) || 0;
+  error.retryable = payload?.retryable !== false;
+  error.recoverySteps = Array.isArray(payload?.recoverySteps) ? payload.recoverySteps.slice(0, 5) : [];
+  error.latestSession = payload?.session || null;
+  error.hasLatestSessionState = Boolean(
+    payload && Object.prototype.hasOwnProperty.call(payload, 'session')
+  );
+  error.sessionRevision = payload?.sessionRevision !== null
+    && payload?.sessionRevision !== undefined
+    && Number.isInteger(Number(payload.sessionRevision))
+    ? Number(payload.sessionRevision)
+    : null;
+  error.sessionEpoch = String(payload?.sessionEpoch || '').trim() || null;
+  return error;
+}
+
+function operationErrorClipboardText(error){
+  if (!error) return '';
+  return [
+    'ClassIn EDB 작업 오류',
+    `시각: ${error.timestamp || new Date().toISOString()}`,
+    `작업: ${error.operation || 'session_publish'}`,
+    `코드: ${error.code || 'unknown'}`,
+    error.status ? `HTTP: ${error.status}` : '',
+    `내용: ${String(error.message || '알 수 없는 오류').trim()}`,
+  ].filter(Boolean).join('\n');
+}
+
+const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
+  publish_output_unavailable: '제작 파일을 저장할 폴더를 사용할 수 없습니다.',
+  publish_build_failed: '자료를 EDB 형식으로 구성하는 중 문제가 발생했습니다.',
+  edb_write_failed: '완성된 EDB 파일을 저장하는 중 문제가 발생했습니다.',
+  publish_connection_failed: '앱과의 연결이 끊겨 제작 요청을 완료하지 못했습니다.',
+  publish_unknown_failed: '예상하지 못한 오류로 EDB 제작을 완료하지 못했습니다.',
+  publish_download_failed: 'EDB 제작은 완료됐지만 다운로드를 시작하지 못했습니다.',
+  publish_download_unavailable: 'EDB 제작은 완료됐지만 내려받을 제작본을 찾지 못했습니다.',
+  session_conflict: '다른 작업이 먼저 저장되어 현재 화면과 최신 저장 상태가 달라졌습니다.',
+  session_missing: '서버의 최신 작업이 빈 상태로 바뀌어 현재 화면과 달라졌습니다.',
+  artifact_cleanup_busy: '다른 작업이 제작 파일을 사용 중이라 초기화를 마치지 못했습니다.',
+  recognition_failed: 'PDF 또는 이미지에서 문제를 인식하는 중 문제가 발생했습니다.',
+  recognition_connection_failed: '인식 중 앱과의 연결이 끊겼습니다.',
+  local_server_unavailable: '로컬 앱 서버가 종료되어 요청을 처리할 수 없습니다.',
+  registration_failed: 'PDF 또는 이미지 페이지를 등록하는 중 문제가 발생했습니다.',
+  registration_connection_failed: '자료 등록 중 앱과의 연결이 끊겼습니다.',
+  reset_failed: '작업 목록과 최근 저장 상태를 초기화하는 중 문제가 발생했습니다.',
+  reset_connection_failed: '초기화 중 앱과의 연결이 끊겼습니다.',
+  restore_failed: '최근 저장 상태를 불러오는 중 문제가 발생했습니다.',
+  restore_connection_failed: '최근 저장 상태를 불러오는 중 앱과의 연결이 끊겼습니다.',
+  session_rebase_failed: '최신 저장 상태에 현재 배치를 합치지 못했습니다.',
+  pdf_preprocess_failed: 'PDF를 수업 자료용 페이지로 변환하는 중 문제가 발생했습니다.',
+  pdf_render_failed: 'PDF 페이지를 이미지로 만드는 중 문제가 발생했습니다.',
+  payload_too_large: '등록할 파일이 한 번에 처리할 수 있는 크기를 넘었습니다.',
+  session_rebased_ready: '최신 저장 상태에 현재 배치를 안전하게 합쳤습니다. 작업을 다시 시도해 주세요.',
+});
+
+function operationRecoverySummary(error){
+  const knownSummary = OPERATION_RECOVERY_SUMMARIES[String(error?.code || '')];
+  if (knownSummary) return knownSummary;
+  return String(error?.message || 'EDB 제작 중 예상하지 못한 오류가 발생했습니다.').split('\n')[0];
+}
+
+function operationRecoveryStateTransition(state, event){
+  const current = state && typeof state === 'object'
+    ? state
+    : { recovery: null, dismissed: false };
+  if (event?.type === 'activate') {
+    return { recovery: event.recovery || null, dismissed: false };
+  }
+  if (event?.type === 'dismiss') {
+    if (current.recovery?.conflict) return current;
+    return current.recovery ? { ...current, dismissed: true } : current;
+  }
+  if (event?.type === 'replace') {
+    return { recovery: event.recovery || null, dismissed: Boolean(event.dismissed) };
+  }
+  if (event?.type === 'clear') {
+    return { recovery: null, dismissed: false };
+  }
+  return current;
+}
+
+function isNetworkRequestError(error){
+  const raw = String(error?.message || error || '').trim();
+  return /failed to fetch|networkerror|load failed|network/i.test(raw);
+}
+
+async function probeLocalServerHealth(timeoutMs = 1200){
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch('/api/health', {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => null);
+    return Boolean(response.ok && payload?.ok);
+  } catch (_healthError) {
+    return false;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+async function classifyNetworkRequestError(error, fallbackCode){
+  if (!isNetworkRequestError(error)) return error;
+  const serverAvailable = await probeLocalServerHealth(1200);
+  const classified = new Error(serverAvailable
+    ? '로컬 앱 서버 연결은 복구됐지만 요청이 중간에 끊겼습니다.'
+    : '로컬 앱 서버가 종료되었거나 응답하지 않습니다. ClassIn EDB 실행 파일을 다시 열어 주세요.');
+  classified.code = serverAvailable ? fallbackCode : 'local_server_unavailable';
+  classified.retryable = true;
+  classified.recoverySteps = serverAvailable
+    ? [
+      '잠시 기다린 뒤 같은 파일로 다시 시도해 주세요.',
+      '반복되면 버그 리포트에 오류 시각을 함께 보내 주세요.',
+    ]
+    : [
+      'ClassIn EDB 실행 파일을 다시 열어 로컬 서버를 시작해 주세요.',
+      '이 화면으로 돌아와 대기열을 유지한 채 다시 시도해 주세요.',
+      '반복되면 진단 정보 포함을 켠 채 버그 리포트를 보내 주세요.',
+    ];
+  classified.originalError = String(error?.message || error || '').trim();
+  return classified;
+}
+
 function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
   const raw = String(error?.message || error || '').trim();
-  if (/failed to fetch|networkerror|load failed|network/i.test(raw)) {
-    return `${fallbackMessage} · 로컬 앱 연결 확인`;
+  if (isNetworkRequestError(error)) {
+    return `${fallbackMessage} · 앱을 다시 실행해 주세요`;
+  }
+  if (/한 번에 처리할 수 있는 범위|파일을 나누어 등록/i.test(raw)) {
+    return `${fallbackMessage} · 파일을 나누어 등록하세요`;
   }
   if (/413|too large|payload|용량|크기/i.test(raw)) {
     return `${fallbackMessage} · 파일이 너무 큽니다`;
   }
-  if (/api key|apikey|gemini|openai|unauthorized|인증|키/i.test(raw)) {
+  if (/api key|apikey|gemini|unauthorized|인증|키/i.test(raw)) {
     return `${fallbackMessage} · API 키 확인 필요`;
   }
   if (/hwp|hwpx|한글|libreoffice|rhwp|pdf 변환|converter/i.test(raw)) {
@@ -8619,14 +15281,83 @@ async function fetchRuntimeDiagnostics(){
   return json;
 }
 
+function runtimeErrorsForBugReport(entries = window.EDB_RUNTIME_DIAGNOSTICS){
+  if (!Array.isArray(entries)) return [];
+  return entries.slice(-10).map(entry => {
+    const detail = entry && typeof entry === 'object' ? entry : {};
+    const rawError = detail.error || detail.reason;
+    const message = detail.message || rawError?.message || rawError || '알 수 없는 오류';
+    const safe = {
+      type: String(detail.type || 'runtime').slice(0, 80),
+      message: String(message).slice(0, 1500),
+    };
+    if (detail.filename) safe.filename = String(detail.filename).slice(0, 240);
+    if (detail.componentStack) safe.componentStack = String(detail.componentStack).slice(0, 4000);
+    if (detail.operation) safe.operation = String(detail.operation).slice(0, 80);
+    if (detail.code) safe.code = String(detail.code).slice(0, 120);
+    if (detail.timestamp) safe.timestamp = String(detail.timestamp).slice(0, 100);
+    if (Number.isFinite(Number(detail.lineno))) safe.lineno = Number(detail.lineno);
+    if (Number.isFinite(Number(detail.colno))) safe.colno = Number(detail.colno);
+    if (Number.isFinite(Number(detail.status))) safe.status = Number(detail.status);
+    if ('retryable' in detail) safe.retryable = Boolean(detail.retryable);
+    return safe;
+  });
+}
+
+async function submitBugReport(payload){
+  const resp = await fetch('/api/bug-report', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return expectOkJson(resp, '리포트 전송 실패');
+}
+
 async function fetchAppUpdateStatus(){
   const resp = await fetch('/api/app/update');
   const json = await expectOkJson(resp, '업데이트 확인 실패');
   return json;
 }
 
+async function postAppUpdateInstall(pin){
+  const resp = await fetch('/api/app/update/install', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin }),
+  });
+  return expectOkJson(resp, '자동 업데이트 시작 실패');
+}
+
+function isUpdateArchitectureMismatch(info){
+  const channelStatus = String(info?.channelStatus || '').trim();
+  const code = String(info?.code || '').trim();
+  return channelStatus === 'unsupported_architecture'
+    || code === 'update_architecture_mismatch'
+    || code === 'unsupported_architecture';
+}
+
+function updateArchitectureRecoverySteps(info){
+  const provided = Array.isArray(info?.recoverySteps)
+    ? info.recoverySteps.map(step => String(step || '').trim()).filter(Boolean)
+    : [];
+  return listUnique([
+    '현재 아키텍처용 설치 파일을 선택해 주세요.',
+    ...provided,
+    '지원 파일이 보이지 않으면 설정 → 도움말 및 문제 신고에서 버그 리포트를 보내 주세요.',
+  ]).slice(0, 3);
+}
+
+function updateArchitectureNotice(info){
+  return `이 기기용 업데이트 파일 없음 · ${updateArchitectureRecoverySteps(info).join(' ')}`;
+}
+
 async function clearSession(){
-  const resp = await fetch('/api/session/latest', { method: 'DELETE' });
+  const revision = latestServerSessionRevision;
+  const queryParams = new URLSearchParams();
+  if (Number.isInteger(revision)) queryParams.set('expectedSessionRevision', String(revision));
+  if (latestServerSessionEpoch) queryParams.set('expectedSessionEpoch', latestServerSessionEpoch);
+  const query = queryParams.size ? `?${queryParams.toString()}` : '';
+  const resp = await fetch(`/api/session/latest${query}`, { method: 'DELETE' });
   if (resp.status === 404) return { history: [] }; // already cleared
   const json = await expectOkJson(resp, '세션 초기화 실패');
   return json;
@@ -8652,7 +15383,7 @@ async function postMutate(action, args){
   const resp = await fetch('/api/session/mutate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...args }),
+    body: JSON.stringify(withExpectedSessionRevision({ action, ...args })),
   });
   const json = await expectOkJson(resp, '검수 수정 실패');
   return json.session;
@@ -8690,11 +15421,11 @@ async function fetchProblemImageDownload(problemId, args = {}){
     ? await fetch('/api/session/problem-image', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(withExpectedSessionRevision({
           problemId: id,
           variant: args?.variant || 'board',
           session: payloadSession,
-        }),
+        })),
       })
     : await fetch(`/api/session/problem-image?problemId=${encodeURIComponent(id)}&variant=${encodeURIComponent(args?.variant || 'board')}`);
   if (!resp.ok) {
@@ -8724,7 +15455,7 @@ async function postRetryAi(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...(args || {}), preview: !!options.preview }),
+    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), preview: !!options.preview })),
   });
   const json = await expectOkJson(resp, 'AI 재인식 실패');
   return json;
@@ -8735,7 +15466,7 @@ async function postEnhanceImage(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(args || {}),
+    body: JSON.stringify(withExpectedSessionRevision(args || {})),
   });
   const json = await expectOkJson(resp, '고화질 처리 실패');
   return json;
@@ -8745,17 +15476,71 @@ async function postRestore(snapshot){
   const resp = await fetch('/api/session/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session: snapshot }),
+    body: JSON.stringify(withExpectedSessionRevision({ session: snapshot })),
   });
   const json = await expectOkJson(resp, '이전 상태 복원 실패');
   return json.session;
+}
+
+function assertPublishResponseSession(value, expectedIds){
+  const problems = value && !Array.isArray(value) && Array.isArray(value.problems) ? value.problems : [];
+  const ids = problems.map(problem => (
+    problem && !Array.isArray(problem) && (typeof problem.id === 'string' || typeof problem.id === 'number')
+      ? String(problem.id).trim() : ''
+  ));
+  const expected = new Set((expectedIds || []).map(String));
+  if (ids.length > 0 && ids.length === expected.size && new Set(ids).size === ids.length
+    && ids.every(id => id && expected.has(id))) return value;
+  const error = new Error('제작 응답의 문항 목록이 요청과 일치하지 않습니다. 편집 내용은 유지했어요.');
+  error.code = 'invalid_publish_response';
+  throw error;
+}
+
+function assertPlacementSaveSession(value){
+  if (value && Array.isArray(value.problems) && value.problems.length > 0) return value;
+  const error = new Error('배치 저장 응답에 유효한 세션이 없습니다.');
+  error.code = 'invalid_placement_save_response';
+  throw error;
+}
+
+async function postRestoreBoardLayoutWithConflictRetry(candidate, boardColumns){
+  try {
+    return {
+      session: assertPlacementSaveSession(await postRestore(candidate)),
+      conflictBase: null,
+    };
+  } catch (error) {
+    const latestSession = error?.latestSession;
+    if (
+      error?.code !== 'session_conflict'
+      || !error?.hasLatestSessionState
+      || !latestSession
+      || !Array.isArray(latestSession.problems)
+      || latestSession.problems.length === 0
+    ) {
+      throw error;
+    }
+    const conflictPayload = {
+      session: latestSession,
+      sessionRevision: error.sessionRevision,
+      sessionEpoch: error.sessionEpoch,
+    };
+    if (sessionResponseRevisionIsStale(conflictPayload)) throw error;
+    captureSessionRevision(conflictPayload);
+    const rebased = rebaseSessionBoardLayout(latestSession, candidate, boardColumns);
+    if (!rebased) throw error;
+    return {
+      session: assertPlacementSaveSession(await postRestore(rebased)),
+      conflictBase: cloneSession(latestSession),
+    };
+  }
 }
 
 async function postClassinReviewResult(payload){
   const resp = await fetch('/api/session/classin-review', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload || {}),
+    body: JSON.stringify(withExpectedSessionRevision(payload || {})),
   });
   const json = await expectOkJson(resp, 'ClassIn 검수 저장 실패');
   return json.session;
@@ -8793,7 +15578,7 @@ async function saveUserSettings(settings){
 
 // ─── APP ──────────────────────────────────────────────────────────────────
 function App(){
-  const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const [t, setTweak] = useTweaks(useMemo(initialTweakValues, []));
   useEffect(() => {
     document.body.classList.toggle('dark', !!t.dark);
     document.documentElement.style.setProperty('--accent', t.accent);
@@ -8801,12 +15586,35 @@ function App(){
   }, [t.dark, t.accent, t.boardColor]);
 
   const [items, setItems] = useState([]);
+  const [focusMode, setFocusMode] = useStoredPreference('edb.editorFocusMode', false, isStoredBoolean);
+  const [focusPanelCollapsed, setFocusPanelCollapsed] = useState(false);
+  const [focusRailExpanded, setFocusRailExpanded] = useState(true);
+  const [homeUpdateOpen, setHomeUpdateOpen] = useState(false);
+  const focusPanelReopenRef = useRef(null);
   const [activeId, setActiveId] = useState(null);
+  const [moveFeedback, setMoveFeedback] = useState(null);
   const [fileName, setFileName] = useState('새 세션');
   const [bulk, setBulk] = useState(false);
+  const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
+    try {
+      return window.localStorage?.getItem(LEFT_RAIL_COLLAPSED_KEY) === '1';
+    } catch (_err) {
+      return false;
+    }
+  });
+  const toggleLeftRailCollapsed = useCallback(() => {
+    setLeftRailCollapsed(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem(LEFT_RAIL_COLLAPSED_KEY, next ? '1' : '0'); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  }, []);
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
   const [session, setSession] = useState(null);
+  const [layoutGapMode, setLayoutGapModeState] = useState(LAYOUT_GAP_MODE_GRID);
+  const [initialSessionLoaded, setInitialSessionLoaded] = useState(false);
+  const [initialSessionError, setInitialSessionError] = useState(null);
   const [loading, setLoading] = useState(null); // {label, hint, startedAt} when busy
   const [backgroundJobs, setBackgroundJobs] = useState([]);
   const [recognitionReview, setRecognitionReview] = useState(null);
@@ -8816,38 +15624,157 @@ function App(){
   const [runtimeDiagnostics, setRuntimeDiagnostics] = useState(null);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const updateCheckInFlightRef = useRef(false);
+  const [updatePanelRequest, setUpdatePanelRequest] = useState(0);
+  const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
-  const [inputIntent, setInputIntent] = useState(DEFAULT_INPUT_INTENT);
+  const [aiToggleBusy, setAiToggleBusy] = useState(false);
+  const [splitMode, setSplitModeState] = useState(readStoredSplitMode);
+  const inputIntent = normalizeSplitMode(splitMode) === 'recognize' ? 'multi-problem' : 'page-as-is';
+  const setSplitMode = useCallback((value) => {
+    const next = normalizeSplitMode(value);
+    setSplitModeState(next);
+    storeSplitMode(next);
+  }, []);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedProblemIds, setSelectedProblemIds] = useState(() => new Set());
+  const [reviewUi, setReviewUi] = useState({
+    filter: 'all',
+    riskFilter: null,
+    zoom: 1,
+    scrollTop: 0,
+  });
+  const [boardScrollTop, setBoardScrollTop] = useState(0);
+  const [actionToast, setActionToast] = useState(null);
+  const [viewTransitionBanner, setViewTransitionBanner] = useState(null);
+  const [operationRecoveryState, setOperationRecoveryState] = useState({ recovery: null, dismissed: false });
+  const [bugReportRequest, setBugReportRequest] = useState(null);
+  const [bugReportDraft, setBugReportDraft] = useState('');
+  const [resetBusy, setResetBusy] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishPlan, setPublishPlan] = useState(null);
+  const [publishPlanBusy, setPublishPlanBusy] = useState(false);
+  const [publishPlanFailed, setPublishPlanFailed] = useState(false);
+  const [downloadBusy, setDownloadBusy] = useState(false);
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
+  useEffect(() => {
+    if (items.length || pendingFiles.length) setHomeUpdateOpen(false);
+  }, [items.length, pendingFiles.length]);
   const [selectedPendingFileKey, setSelectedPendingFileKey] = useState(null);
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
   const [view, setView] = useState(initialViewRef.current);
+  const focusEditorActive = focusMode && view === 'board' && items.length > 0;
+  const effectiveRailCollapsed = focusEditorActive ? !focusRailExpanded : leftRailCollapsed;
+  const [mobilePane, setMobilePane] = useState('stage');
   const [reviewFocus, setReviewFocus] = useState(null);
+  const [reviewEditorActive, setReviewEditorActive] = useState(false);
+  const [reviewEditScope, setReviewEditScope] = useState(null);
+  const revealSidePanel = useCallback(() => {
+    setFocusPanelCollapsed(false);
+    if (!reviewEditorActive) setMobilePane('panel');
+  }, [reviewEditorActive]);
   const [mutating, setMutating] = useState(false);
   const mutatingRef = useRef(false);
+  const resetInFlightRef = useRef(false);
+  const restoreInFlightRef = useRef(false);
+  const refreshInFlightRef = useRef(false);
+  const publishInFlightRef = useRef(false);
+  const publishPlanRequestRef = useRef(0);
+  const downloadInFlightRef = useRef(false);
+  const bugReportSequenceRef = useRef(0);
   // Undo history: each entry is a prior session snapshot. Pushed before
   // any successful mutation; popped by Ctrl/Cmd+Z (wired in Step 7).
   const [historyStack, setHistoryStack] = useState([]);
+  const historyStackRef = useRef([]);
+  const placementGapHistoryRef = useRef([]);
+  const undoPlacementGapRef = useRef(null);
+  const [placementGapUndoCount, setPlacementGapUndoCount] = useState(0);
+  // A legacy session keeps its own column count. Empty/new work always starts
+  // with one column; viewing either editor mode never rewrites a saved layout.
   const boardColumns = normalizeBoardColumns(t.boardColumns);
+  useEffect(() => {
+    if (!session) setTweak('boardColumns', BOARD_COLUMN_MIN);
+  }, [session, setTweak]);
+  // Gap undo belongs to this server baseline and layout mode. Selection and
+  // local position/scale edits deliberately do not clear it.
+  useEffect(() => {
+    placementGapHistoryRef.current = [];
+    setPlacementGapUndoCount(0);
+  }, [session, usingMock, boardColumns, layoutGapMode]);
+  const boardColumnsRef = useRef(boardColumns);
+  boardColumnsRef.current = boardColumns;
   const fileInputRef = useRef(null);
   const toastTimerRef = useRef(null);
+  const moveFeedbackTimerRef = useRef(null);
+  const moveSequenceRef = useRef(0);
+  const actionToastTimerRef = useRef(null);
+  const viewTransitionTimerRef = useRef(null);
+  const activeViewTransitionRef = useRef(null);
   const jobControllersRef = useRef(new Map());
+  const jobDismissTimersRef = useRef(new Map());
   const sessionHistoryRequestRef = useRef(0);
+  const pendingFilesRef = useRef([]);
   const pendingFileKeysRef = useRef(new Set());
   const queueGenerationRef = useRef(0);
+  const recognitionInFlightRef = useRef(false);
+  const recognitionApplyInFlightRef = useRef(false);
+  const queueRegistrationInFlightRef = useRef(false);
+  const sessionRecognitionInFlightRef = useRef(false);
+  const sessionRecognitionGuardUntilRef = useRef(0);
 
   const reviewAvailable = Array.isArray(session?.pages) && session.pages.length > 0;
+  useEffect(() => {
+    setMobilePane(!items.length && pendingFiles.length ? 'rail' : 'stage');
+  }, [items.length, pendingFiles.length]);
+  const reviewAttentionCount = useMemo(
+    () => (session ? Math.max(0, Number(sessionReviewSummary(session).actionableNeedsReviewCount) || 0) : 0),
+    [session]
+  );
   // auto-revert to board view if the session is cleared or never had pages
   useEffect(() => {
     if (view === 'review' && !reviewAvailable) setView('board');
   }, [view, reviewAvailable]);
-  const canUndo = historyStack.length > 0 && !mutating;
+  // A queued 직접 자르기 request is one-shot: once the user is back on the
+  // board, reopening 검수 must not restart the editor on the same page.
+  useEffect(() => {
+    if (view === 'review') return;
+    setReviewFocus(prev => {
+      if (!prev || (!prev.manualSplitPageId && !prev.manualSplitPageIds)) return prev;
+      const { manualSplitPageId, manualSplitPageIds, ...rest } = prev;
+      return rest;
+    });
+  }, [view]);
+  const finishManualSplitFlow = useCallback(() => {
+    setView('board');
+  }, []);
+  useEffect(() => {
+    if (view !== 'review') setReviewEditorActive(false);
+  }, [view]);
+  useEffect(() => {
+    historyStackRef.current = historyStack;
+  }, [historyStack]);
+  useEffect(() => {
+    const validIds = new Set(items.map(item => String(item.id)));
+    setSelectedProblemIds(prev => {
+      const next = new Set(Array.from(prev).filter(id => validIds.has(String(id))));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [items]);
+  useEffect(() => () => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    if (moveFeedbackTimerRef.current) window.clearTimeout(moveFeedbackTimerRef.current);
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
+    jobDismissTimersRef.current.forEach(timer => window.clearTimeout(timer));
+    jobDismissTimersRef.current.clear();
+    activeViewTransitionRef.current?.skipTransition?.();
+  }, []);
+  const canUndo = historyStack.length > 0 && !mutating && !reviewEditorActive;
 
   const activeIndex = items.findIndex(i => i.id === activeId);
   const active = activeIndex >= 0 ? items[activeIndex] : null;
@@ -8855,25 +15782,256 @@ function App(){
     () => pendingFiles.find(file => fileQueueKey(file) === selectedPendingFileKey) || null,
     [pendingFiles, selectedPendingFileKey]
   );
-  const processed = items.filter(i => i.step !== 'raw').length;
-  const progress = items.length ? processed / items.length : 0;
+  const reusableSessionSourcePaths = useMemo(
+    () => sessionReusableSourcePaths(session),
+    [session]
+  );
+  const publishRequestDraft = useMemo(
+    () => prepareSessionPublishRequest(
+      session,
+      items,
+      fileName,
+      boardColumns,
+      layoutGapMode
+    ),
+    [session, items, fileName, boardColumns, layoutGapMode]
+  );
+  const publishPlanSignature = useMemo(
+    () => publishPlanRequestSignature(publishRequestDraft),
+    [publishRequestDraft]
+  );
   const hasRunningQueueRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'queue-recognition');
   const hasRunningSessionRecognition = backgroundJobs.some(job => job.status === 'running' && job.scope === 'session-recognition');
   const hasRunningImageEnhance = backgroundJobs.some(job => job.status === 'running' && job.scope === 'image-enhance');
+  const hasRunningBackgroundJobs = backgroundJobs.some(job => job.status === 'running');
   const runningRecognitionJob = backgroundJobs.find(job => (
     job.status === 'running' && String(job.scope || '').includes('recognition')
   )) || null;
+  const operationRecovery = operationRecoveryState.recovery;
+  const operationRecoveryDismissed = operationRecoveryState.dismissed;
+  const lastOperationError = operationRecovery?.error || null;
+  const hasPendingSessionConflict = Boolean(operationRecovery?.conflict);
+  const sessionEditState = useMemo(
+    () => deriveSessionEditState(session, items, fileName, boardColumns, layoutGapMode, mutating || publishBusy || confirmingRecognition),
+    [session, items, fileName, boardColumns, layoutGapMode, mutating, publishBusy, confirmingRecognition]
+  );
+  const sourcePageCount = session?.pages?.length || 0;
+  const recognitionDisabledReason = !sourcePageCount
+    ? '문항을 찾을 원본 페이지가 없습니다.'
+    : hasPendingSessionConflict
+      ? '최신 수업 상태를 확인한 뒤 다시 실행하세요.'
+      : pendingFiles.length > 0
+        ? '대기 중인 자료를 먼저 처리하거나 목록에서 제거하세요.'
+        : recognitionReview || reviewEditorActive
+          ? '현재 영역 편집을 적용하거나 취소한 뒤 실행하세요.'
+          : loading || mutating || hasRunningBackgroundJobs
+            ? '진행 중인 작업이 끝나면 다시 실행할 수 있습니다.'
+            : !aiEnabled
+              ? '앱 설정에서 AI 기능 사용을 허용하세요.'
+              : !userSettings?.hasGeminiApiKey
+                ? '앱 설정에서 Gemini API 키를 연결하세요. 현재는 로컬 처리를 사용할 수 있습니다.'
+                : '';
+  const canRecognizeSession = sourcePageCount > 0 && !recognitionDisabledReason;
 
-  const showToast = useCallback((msg) => {
+  useEffect(() => {
+    const actualSummary = published ? sessionPublishSummary(session) : null;
+    setPublishPlanFailed(false);
+    if (actualSummary?.edbParts?.length) {
+      setPublishPlan({
+        projectedPartCount: actualSummary.edbPartCount,
+        projectedParts: actualSummary.edbParts.map(part => ({
+          partIndex: part.partIndex,
+          problemCount: part.recordCount,
+          estimatedFlowEndPages: part.flowEndPages,
+        })),
+        actual: true,
+      });
+      setPublishPlanBusy(false);
+      return undefined;
+    }
+    if (
+      !initialSessionLoaded
+      || usingMock
+      || !publishRequestDraft
+      || !publishRequestDraft.order.length
+      || normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN
+    ) {
+      publishPlanRequestRef.current += 1;
+      setPublishPlan(null);
+      setPublishPlanBusy(false);
+      return undefined;
+    }
+
+    const requestId = ++publishPlanRequestRef.current;
+    const controller = new AbortController();
+    setPublishPlanBusy(true);
+    const timer = window.setTimeout(() => {
+      void postPublishPlan(publishRequestDraft, { signal: controller.signal })
+        .then(plan => {
+          if (requestId !== publishPlanRequestRef.current) return;
+          setPublishPlan(plan);
+        })
+        .catch(error => {
+          if (controller.signal.aborted || requestId !== publishPlanRequestRef.current) return;
+          setPublishPlan(null);
+          setPublishPlanFailed(true);
+          console.info('[board] EDB split preview unavailable:', error.message);
+        })
+        .finally(() => {
+          if (requestId === publishPlanRequestRef.current) setPublishPlanBusy(false);
+        });
+    }, 650);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [
+    publishPlanSignature,
+    published,
+    initialSessionLoaded,
+    usingMock,
+    boardColumns, layoutGapMode,
+  ]);
+
+  const showToast = useCallback((msg, type = 'info') => {
+    const options = typeof type === 'object' && type !== null ? type : {};
+    const tone = typeof type === 'string' ? type : 'info';
     if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
-    setToast(msg);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
+    if (actionToastTimerRef.current) {
+      window.clearTimeout(actionToastTimerRef.current);
+      actionToastTimerRef.current = null;
+    }
+    setActionToast(null);
+    const toastObj = typeof msg === 'object' && msg !== null && 'message' in msg
+      ? { message: String(msg.message || ''), type: msg.type || tone }
+      : { message: String(msg || ''), type: tone };
+    setToast(toastObj);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), options.duration || 2500);
   }, []);
 
-  const showSimpleErrorToast = useCallback((error, fallbackMessage) => {
-    console.warn(`[board] ${fallbackMessage || '작업 실패'}:`, error);
-    showToast(simpleToastErrorMessage(error, fallbackMessage));
+  const showActionToast = useCallback((message, actionLabel, onAction) => {
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
+    setToast(null);
+    if (actionToastTimerRef.current) window.clearTimeout(actionToastTimerRef.current);
+    setActionToast({ message, actionLabel, onAction });
+    actionToastTimerRef.current = window.setTimeout(() => setActionToast(null), 6500);
+  }, []);
+
+  const showSimpleErrorToast = useCallback((error, fallbackMessage, detail = {}) => {
+    const diagnostic = captureRecoverableDiagnostic(error, {
+      operation: detail.operation || error?.operation || 'ui_action',
+      code: detail.code || error?.code || 'ui_action_failed',
+      status: detail.status ?? error?.status ?? 0,
+      retryable: detail.retryable ?? error?.retryable ?? true,
+      recoverySteps: Array.isArray(error?.recoverySteps)
+        ? error.recoverySteps.map(step => String(step || '').trim()).filter(Boolean).slice(0, 5)
+        : [],
+    });
+    showToast(simpleToastErrorMessage(error, fallbackMessage), 'error');
+    return diagnostic;
   }, [showToast]);
+
+  const clearOperationRecovery = useCallback(() => {
+    setOperationRecoveryState(state => operationRecoveryStateTransition(state, { type: 'clear' }));
+  }, []);
+
+  const activateOperationRecovery = useCallback((error, fallbackMessage, detail = {}, recovery = {}) => {
+    const networkUnavailable = isNetworkRequestError(error)
+      && Number(detail.status ?? error?.status ?? 0) === 0
+      && String(detail.code || error?.code || '') !== 'local_server_unavailable';
+    const recoveryError = networkUnavailable
+      ? Object.assign(new Error('로컬 앱 서버가 종료되었거나 응답하지 않습니다. ClassIn EDB 앱을 다시 실행해 주세요.'), {
+          ...error,
+          code: 'local_server_unavailable',
+          operation: detail.operation || error?.operation || 'ui_action',
+          status: 0,
+          retryable: true,
+          recoverySteps: [
+            'ClassIn EDB 앱을 다시 실행해 로컬 서버를 시작해 주세요.',
+            '이 화면을 닫지 말고 연결 복구 안내를 기다려 주세요.',
+            '연결됨 표시가 나오면 중단된 작업을 다시 시도해 주세요.',
+          ],
+          originalError: String(error?.message || error || '').trim(),
+        })
+      : error;
+    const recoveryDetail = networkUnavailable
+      ? { ...detail, code: 'local_server_unavailable', status: 0, retryable: true }
+      : detail;
+    const diagnostic = showSimpleErrorToast(recoveryError, fallbackMessage, recoveryDetail);
+    const isSessionStateConflict = (
+      recoveryError?.code === 'session_conflict' || recoveryError?.code === 'session_missing'
+    ) && recoveryError?.hasLatestSessionState;
+    const conflict = isSessionStateConflict
+      ? {
+          latestSession: recoveryError.latestSession,
+          hasLatestSessionState: true,
+          sessionRevision: recoveryError.sessionRevision,
+          sessionEpoch: recoveryError.sessionEpoch,
+          localDraft: recovery.localDraft || null,
+        }
+      : recovery.conflict || null;
+    const { localDraft: _localDraft, conflict: _conflict, ...safeRecovery } = recovery;
+    const nextRecovery = {
+      ...safeRecovery,
+      kind: recovery.kind || 'publish',
+      error: diagnostic,
+      conflict,
+    };
+    setOperationRecoveryState(state => operationRecoveryStateTransition(state, {
+      type: 'activate',
+      recovery: nextRecovery,
+    }));
+    return diagnostic;
+  }, [showSimpleErrorToast]);
+
+  const requestViewChange = useCallback((nextView, options = {}) => {
+    const target = nextView === 'review' ? 'review' : 'board';
+    if (target === view && typeof options.beforeCommit !== 'function') return true;
+    if (reviewEditorActive && !options.force) {
+      showToast('영역 편집을 적용하거나 취소한 뒤 화면을 이동해 주세요');
+      return false;
+    }
+    const commitView = () => {
+      if (typeof ReactDOM.flushSync === 'function') {
+        ReactDOM.flushSync(() => {
+          options.beforeCommit?.();
+          setView(target);
+        });
+      } else {
+        options.beforeCommit?.();
+        setView(target);
+      }
+    };
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const canAnimate = !reduceMotion && typeof document.startViewTransition === 'function';
+    if (canAnimate) {
+      activeViewTransitionRef.current?.skipTransition?.();
+      try {
+        const transition = document.startViewTransition(commitView);
+        activeViewTransitionRef.current = transition;
+        void transition.finished
+          .catch(() => {})
+          .finally(() => {
+            if (activeViewTransitionRef.current === transition) {
+              activeViewTransitionRef.current = null;
+            }
+          });
+      } catch (_error) {
+        commitView();
+      }
+    } else {
+      commitView();
+    }
+    const selectedCount = selectedProblemIds.size;
+    setViewTransitionBanner(
+      target === 'review'
+        ? `검수로 이동 · ${selectedCount ? `선택 ${selectedCount}개와 ` : ''}필터·배율을 유지했어요`
+        : `칠판으로 이동 · ${selectedCount ? `선택 ${selectedCount}개를 ` : ''}그대로 이어갑니다`
+    );
+    if (viewTransitionTimerRef.current) window.clearTimeout(viewTransitionTimerRef.current);
+    viewTransitionTimerRef.current = window.setTimeout(() => setViewTransitionBanner(null), 2600);
+    return true;
+  }, [reviewEditorActive, selectedProblemIds.size, showToast, view]);
 
   const selectBoardItem = useCallback((id) => {
     setSelectedPendingFileKey(null);
@@ -8891,12 +16049,13 @@ function App(){
   }, [showSimpleErrorToast]);
 
   const setPendingFilesTracked = useCallback((updater) => {
-    setPendingFiles(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      pendingFileKeysRef.current = new Set((next || []).map(fileQueueKey));
-      queueGenerationRef.current += 1;
-      return next || [];
-    });
+    const prev = pendingFilesRef.current;
+    const next = (typeof updater === 'function' ? updater(prev) : updater) || [];
+    if (next === prev) return;
+    pendingFilesRef.current = next;
+    pendingFileKeysRef.current = new Set(next.map(fileQueueKey));
+    queueGenerationRef.current += 1;
+    setPendingFiles(next);
   }, []);
 
   const queueRequestIsCurrent = useCallback((generation, fileKeys) => (
@@ -8921,6 +16080,7 @@ function App(){
 
   const updateStatusToast = (info) => {
     if (!info) return '업데이트 정보를 확인하지 못했습니다';
+    if (isUpdateArchitectureMismatch(info)) return updateArchitectureNotice(info);
     if (info.updateAvailable) {
       const latestVersion = info.latest?.version || '새 버전';
       return `업데이트 가능 · ${latestVersion}`;
@@ -8935,6 +16095,8 @@ function App(){
   };
 
   const checkForUpdates = useCallback(async (options = {}) => {
+    if (updateCheckInFlightRef.current) return null;
+    updateCheckInFlightRef.current = true;
     setUpdateBusy(true);
     try {
       const info = await fetchAppUpdateStatus();
@@ -8946,9 +16108,17 @@ function App(){
       console.warn('[board] update check skipped:', e.message);
       return null;
     } finally {
+      updateCheckInFlightRef.current = false;
       setUpdateBusy(false);
     }
   }, [showSimpleErrorToast, showToast]);
+
+  const openUpdateSettings = useCallback(() => {
+    if (!items.length && !pendingFiles.length) setHomeUpdateOpen(true);
+    else revealSidePanel();
+    setUpdatePanelRequest(previous => previous + 1);
+    void checkForUpdates({ silent: true });
+  }, [items.length, pendingFiles.length, revealSidePanel, checkForUpdates]);
 
   const openUpdatePage = useCallback(async () => {
     if (updateBusy) {
@@ -8956,6 +16126,10 @@ function App(){
       return;
     }
     const info = updateInfo || await checkForUpdates({ silent: true });
+    if (isUpdateArchitectureMismatch(info)) {
+      showToast(updateArchitectureNotice(info));
+      return;
+    }
     const url = info?.downloadUrl || info?.latest?.downloadUrl || '';
     if (!url) {
       showToast('업데이트 다운로드 URL이 없습니다');
@@ -8968,6 +16142,58 @@ function App(){
       showSimpleErrorToast(e, '다운로드 페이지 열기 실패');
     }
   }, [updateInfo, updateBusy, checkForUpdates, showSimpleErrorToast, showToast]);
+
+  const installUpdateVersion = useCallback(async (pin) => {
+    if (updateBusy || updateInstallBusy) {
+      showToast('다른 업데이트 작업이 끝난 뒤 다시 눌러 주세요');
+      return false;
+    }
+    const normalizedPin = String(pin || '').trim();
+    if (!/^\d{4,12}$/.test(normalizedPin)) {
+      showToast('업데이트 PIN은 숫자 4~12자리로 입력해 주세요');
+      return false;
+    }
+    const info = updateInfo || await checkForUpdates({ silent: true });
+    if (!info?.updateAvailable) {
+      showToast(info?.channelStatus === 'up_to_date' ? '현재 최신 버전입니다' : '설치할 새 버전이 없습니다');
+      return false;
+    }
+    if (!info?.automaticUpdateEnabled) {
+      showToast('이 배포본에는 업데이트 PIN이 설정되어 있지 않습니다');
+      return false;
+    }
+    if (!info?.automaticUpdateReady) {
+      showToast('자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다');
+      return false;
+    }
+    setUpdateInstallBusy(true);
+    try {
+      const result = await postAppUpdateInstall(normalizedPin);
+      const targetVersion = result?.targetVersion || info?.latest?.version || '새 버전';
+      showToast(`${targetVersion} 업데이트 준비 완료 · 앱을 종료한 뒤 자동으로 다시 엽니다`);
+      return true;
+    } catch (error) {
+      if (error?.code === 'invalid_update_pin') {
+        showToast('업데이트 PIN이 올바르지 않습니다');
+        return false;
+      }
+      if (error?.code === 'update_pin_rate_limited') {
+        showToast(error?.message || 'PIN 입력이 잠시 잠겼습니다. 잠시 후 다시 시도해 주세요');
+        return false;
+      }
+      showSimpleErrorToast(error, '자동 업데이트 시작 실패');
+      return false;
+    } finally {
+      setUpdateInstallBusy(false);
+    }
+  }, [
+    updateInfo,
+    updateBusy,
+    updateInstallBusy,
+    checkForUpdates,
+    showSimpleErrorToast,
+    showToast,
+  ]);
 
   const refreshSessionHistory = useCallback(async () => {
     const requestId = sessionHistoryRequestRef.current + 1;
@@ -8985,6 +16211,11 @@ function App(){
   }, []);
 
   const dismissBackgroundJob = useCallback((id) => {
+    const timer = jobDismissTimersRef.current.get(id);
+    if (timer) {
+      window.clearTimeout(timer);
+      jobDismissTimersRef.current.delete(id);
+    }
     setBackgroundJobs(prev => prev.filter(job => job.id !== id));
     jobControllersRef.current.delete(id);
   }, []);
@@ -8992,10 +16223,17 @@ function App(){
   const settleBackgroundJob = useCallback((id, patch, autoDismissMs = 1800) => {
     jobControllersRef.current.delete(id);
     setBackgroundJobs(prev => prev.map(job => job.id === id ? { ...job, ...patch } : job));
+    const prevTimer = jobDismissTimersRef.current.get(id);
+    if (prevTimer) {
+      window.clearTimeout(prevTimer);
+      jobDismissTimersRef.current.delete(id);
+    }
     if (autoDismissMs) {
-      window.setTimeout(() => {
+      const timer = window.setTimeout(() => {
+        jobDismissTimersRef.current.delete(id);
         setBackgroundJobs(prev => prev.filter(job => job.id !== id));
       }, autoDismissMs);
+      jobDismissTimersRef.current.set(id, timer);
     }
   }, []);
 
@@ -9035,6 +16273,8 @@ function App(){
     return () => {
       jobControllersRef.current.forEach(controller => controller.abort());
       jobControllersRef.current.clear();
+      jobDismissTimersRef.current.forEach(timer => window.clearTimeout(timer));
+      jobDismissTimersRef.current.clear();
       if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current);
     };
   }, []);
@@ -9043,6 +16283,7 @@ function App(){
     const mockItems = freshInitialItems();
     setRecognitionReview(null);
     setSession(null);
+    setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
     setItems(mockItems);
     setActiveId(mockItems[0]?.id || null);
     setUsingMock(true);
@@ -9056,6 +16297,7 @@ function App(){
   const hideMockItems = (message = '빈 세션으로 전환했어요') => {
     setRecognitionReview(null);
     setSession(null);
+    setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
     setItems([]);
     setActiveId(null);
     setUsingMock(false);
@@ -9070,24 +16312,32 @@ function App(){
     if (!rawSession || !Array.isArray(rawSession.problems) || rawSession.problems.length === 0) {
       return false;
     }
+    const restoredGapMode = normalizeLayoutGapMode(rawSession.layoutGapMode ?? rawSession.layout_gap_mode);
+    const restoredColumns = sessionBoardColumns(rawSession);
+    boardColumnsRef.current = restoredColumns;
+    setTweak('boardColumns', restoredColumns);
     const mapped = reflowItemsForBoardOrder(
-      rawSession.problems.map((p, idx) => mapProblemToItem(p, idx)),
+      rawSession.problems.map((p, idx) => mapProblemToItem(p, idx, rawSession)),
       DEFAULT_SLOT_HEIGHT_PAGES,
-      boardColumns
+      restoredColumns,
+      restoredGapMode
     );
     setItems(mapped);
     setActiveId(mapped[0].id);
     setSession(rawSession);
+    setLayoutGapModeState(restoredGapMode);
     setUsingMock(false);
     setPublished(!!sessionPublishSummary(rawSession));
     if (rawSession.session_name) setFileName(rawSession.session_name);
-    const wantsReview = (!initialViewConsumedRef.current && initialViewRef.current === 'review') || shouldOpenReview(rawSession);
+    // Only an explicit ?view=review opens the review stage on load; every
+    // other result lands on the board; optional review actions flag risks.
+    const wantsReview = !initialViewConsumedRef.current && initialViewRef.current === 'review';
     if (hasReviewPages(rawSession) && wantsReview) {
       setView('review');
       initialViewConsumedRef.current = true;
     }
     return true;
-  }, [boardColumns]);
+  }, []);
 
   // Replace state from a mutation response: similar to applySession but
   // tries to preserve the user's current item ordering when the mutation
@@ -9134,13 +16384,23 @@ function App(){
       }
     }
     const orderedProblems = orderedIds.map(id => nextProblemsById.get(id)).filter(Boolean);
+    const restoredGapMode = normalizeLayoutGapMode(
+      nextSession.layoutGapMode ?? nextSession.layout_gap_mode ?? layoutGapMode
+    );
+    nextSession.layoutGapMode = restoredGapMode;
+    nextSession.layout_gap_mode = restoredGapMode;
+    const restoredColumns = sessionBoardColumns(nextSession);
+    boardColumnsRef.current = restoredColumns;
+    setTweak('boardColumns', restoredColumns);
     const mapped = reflowItemsForBoardOrder(
-      orderedProblems.map((p, idx) => mapProblemToItem(p, idx)),
+      orderedProblems.map((p, idx) => mapProblemToItem(p, idx, nextSession)),
       DEFAULT_SLOT_HEIGHT_PAGES,
-      boardColumns
+      restoredColumns,
+      restoredGapMode
     );
     setItems(mapped);
     setSession(nextSession);
+    setLayoutGapModeState(restoredGapMode);
     setPublished(false);
     if (mapped.length === 0) {
       setActiveId(null);
@@ -9151,12 +16411,12 @@ function App(){
         .find(id => nextProblemsById.has(id));
       setActiveId(replacementActiveId || mapped[0]?.id || null);
     }
-  }, [items, activeId, boardColumns]);
+  }, [items, activeId, boardColumns, layoutGapMode]);
 
   // Run a server-side mutation (split / merge / crop / exclude). Captures the
   // current session into the undo history *before* the request goes out
   // so that a failed mutation does not clutter the stack.
-  const mutateSession = useCallback(async (action, args) => {
+  const mutateSession = useCallback(async (action, args, options = {}) => {
     if (!session) {
       showToast('변경할 세션이 없습니다');
       return;
@@ -9171,14 +16431,22 @@ function App(){
       label: action === 'split' ? '문제를 가르는 중…'
         : action === 'merge' ? '문제를 합치는 중…'
         : action === 'crop' ? '이미지를 자르는 중…'
+        : action === 'stitch-crop' ? '지문 영역을 이어붙이는 중…'
         : action === 'bulk-crop' ? '수동 분할을 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
+        : action === 'confirm' ? '확인 상태를 저장하는 중…'
+        : action === 'confirm-page' ? '페이지 확인 상태를 저장하는 중…'
+        : action === 'classify' ? '자료 분류를 저장하는 중…'
+        : action === 'problem-number' ? '원문 문제 번호를 저장하는 중…'
         : '변경 중…',
       startedAt: Date.now(),
     });
-    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns) || session;
+    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session;
+    const mutationDraft = Array.isArray(options.items)
+      ? materializeSessionForItems(session, options.items, fileName, boardColumns, layoutGapMode) || snapshotBefore
+      : snapshotBefore;
     try {
-      await postRestore(snapshotBefore);
+      await postRestore(mutationDraft);
       const next = await postMutate(action, args);
       setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
       adoptMutatedSession(next, snapshotBefore);
@@ -9187,11 +16455,27 @@ function App(){
         action === 'split' ? '문제를 두 개로 갈랐어요'
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
+        : action === 'stitch-crop' ? '선택 영역을 한 지문으로 합쳤어요'
         : action === 'bulk-crop' ? '수동 분할을 적용했어요'
+        : action === 'confirm' ? '확인 상태를 저장했어요'
+        : action === 'confirm-page' ? '지문 없음으로 확인했어요'
+        : action === 'classify' ? '자료 분류를 변경했어요'
+        : action === 'problem-number' ? '원문 문제 번호를 저장했어요'
         : '문제를 제외했어요'
       );
       return next;
     } catch (e) {
+      if (e?.code === 'session_conflict' && e.latestSession) {
+        const conflictPayload = {
+          session: e.latestSession,
+          sessionRevision: e.sessionRevision,
+          sessionEpoch: e.sessionEpoch,
+        };
+        if (!sessionResponseRevisionIsStale(conflictPayload)) {
+          captureSessionRevision(conflictPayload);
+          adoptMutatedSession(e.latestSession, snapshotBefore);
+        }
+      }
       showSimpleErrorToast(e, '수정 실패');
       return null;
     } finally {
@@ -9199,7 +16483,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [session, items, fileName, boardColumns, adoptMutatedSession, refreshSessionHistory, showSimpleErrorToast, showToast]);
+  }, [session, items, fileName, boardColumns, layoutGapMode, adoptMutatedSession, refreshSessionHistory, showSimpleErrorToast, showToast]);
 
   const retryAiSession = useCallback(async (args) => {
     if (!session) {
@@ -9210,6 +16494,19 @@ function App(){
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
     }
+    if (!aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
+      return;
+    }
+    if (
+      sessionRecognitionInFlightRef.current
+      || Date.now() < sessionRecognitionGuardUntilRef.current
+    ) {
+      showToast('이미 세션 인식 작업을 진행 중입니다');
+      return;
+    }
+    sessionRecognitionInFlightRef.current = true;
+    sessionRecognitionGuardUntilRef.current = Date.now() + 1500;
     const pageIds = listUnique((args?.pageIds || args?.page_ids || []).filter(Boolean));
     const problemIds = listUnique((args?.problemIds || args?.problem_ids || []).filter(Boolean));
     const isPartialRetry = Boolean(args?.partial || args?.partialRetry || args?.partial_retry) && problemIds.length > 0;
@@ -9218,45 +16515,38 @@ function App(){
         .map(id => (session.problems || []).find(problem => problem?.id === id)?.sourcePageId)
         .filter(Boolean))
       : pageIds;
-    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session);
+    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session);
     const job = startBackgroundJob({
       scope: 'session-recognition',
       label: isPartialRetry
         ? (problemIds.length === 1 ? '부분 경계 보정 중' : `${problemIds.length}개 부분 경계 보정 중`)
         : (pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`),
       hint: isPartialRetry
-        ? '선택한 원본 영역에서 경계를 다시 찾습니다. 완료되면 확인 팝업이 열립니다.'
-        : '보드 작업은 계속할 수 있습니다. 완료되면 확인 팝업이 열립니다.',
+        ? '선택한 원본 영역에서 경계를 다시 찾습니다. 완료되면 바로 반영합니다.'
+        : '보드 작업은 계속할 수 있습니다. 완료되면 바로 반영합니다.',
     });
     try {
       await postRestore(snapshotBefore);
       const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
       if (job.controller.signal.aborted) return;
       const next = result.session;
-      const fallbackMessage = aiModelFallbackToast(next);
-      if (fallbackMessage) showToast(fallbackMessage);
-      const applied = (result.retry || []).filter(row => row.status === 'applied').length;
       settleBackgroundJob(job.id, {
         status: 'done',
         label: 'AI 인식 완료',
-        hint: '결과 확인 팝업에서 문제 경계를 확인하세요.',
+        hint: '인식 결과를 바로 반영합니다.',
       });
       setRecognitionReview({
         id: `review-${job.id}`,
         kind: 'retry-ai',
         partial: isPartialRetry,
-        title: isPartialRetry
-          ? (applied ? `${applied}개 부분 경계를 보정했어요` : '부분 경계 보정 결과를 확인해 주세요')
-          : (applied ? `${applied}개 페이지를 다시 인식했어요` : 'AI 인식 결과를 확인해 주세요'),
-        subtitle: isPartialRetry
-          ? '선택한 원본 영역에서 다시 찾은 문제 경계입니다. 맞으면 기존 자리만 바꿔 반영합니다.'
-          : '문제 경계가 맞으면 바로 칠판에 분할해서 붙입니다.',
+        fallbackMessage: aiModelFallbackToast(next),
         session: next,
         pageIds: targetPageIds,
         problemIds,
         snapshotBefore,
         retrySummary: result.retry || [],
       });
+      return result;
     } catch (e) {
       if (e?.name === 'AbortError') {
         settleBackgroundJob(job.id, {
@@ -9272,12 +16562,18 @@ function App(){
         hint: e.message,
       }, 5000);
       showSimpleErrorToast(e, 'AI 재인식 실패');
+    } finally {
+      sessionRecognitionInFlightRef.current = false;
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
 
   const recognizeCurrentSession = useCallback(async () => {
     if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
       showToast('문제 인식할 원본 페이지가 없습니다');
+      return;
+    }
+    if (!aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
       return;
     }
     if (!userSettings?.hasGeminiApiKey) {
@@ -9286,17 +16582,113 @@ function App(){
     }
     const pageIds = listUnique(session.pages.map(page => page.id).filter(Boolean));
     await retryAiSession({ pageIds });
-  }, [session, userSettings, retryAiSession]);
+  }, [session, userSettings, aiEnabled, retryAiSession]);
 
-  const exportSessionImages = useCallback(async () => {
+  const reextractSharedPassagesFromSession = useCallback(async () => {
+    if (!session || usingMock) {
+      showToast('공통 지문을 다시 추출할 실제 세션이 없습니다');
+      return;
+    }
+    if (!sessionReusableSourcePaths(session).length) {
+      showToast('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다');
+      return;
+    }
+    if (
+      mutatingRef.current
+      || hasRunningSessionRecognition
+      || sessionRecognitionInFlightRef.current
+      || Date.now() < sessionRecognitionGuardUntilRef.current
+    ) {
+      showToast('진행 중인 세션 작업이 끝난 뒤 다시 시도해 주세요');
+      return;
+    }
+    sessionRecognitionInFlightRef.current = true;
+    sessionRecognitionGuardUntilRef.current = Date.now() + 1500;
+    const job = startBackgroundJob({
+      scope: 'session-recognition',
+      label: '현재 원본에서 공통 지문 추출 중',
+      hint: '원본 PDF·이미지를 다시 읽습니다. 기존 문항은 결과를 적용할 때 그대로 유지됩니다.',
+    });
+    try {
+      const incomingSession = await postReextractSharedPassages({
+        session,
+        signal: job.controller.signal,
+        edbName: fileName,
+        ocr: aiEnabled ? 'auto' : 'local',
+        aiEnabled,
+      });
+      if (job.controller.signal.aborted) return;
+      const incomingFragments = (incomingSession?.problems || []).filter(isPassageFragmentProblem);
+      const summary = summarizeRecognitionSession(incomingSession);
+      settleBackgroundJob(job.id, {
+        status: 'done',
+        label: '공통 지문 재추출 완료',
+        hint: incomingFragments.length
+          ? `${incomingFragments.length}개 결과를 확인한 뒤 적용할 수 있습니다.`
+          : '찾은 공통 지문이 없습니다. 원본과 문항 범위를 확인해 주세요.',
+      });
+      setRecognitionReview({
+        id: `review-${job.id}`,
+        kind: 'session-passage-reextract',
+        title: incomingFragments.length
+          ? `현재 원본에서 공통 지문 ${incomingFragments.length}개를 찾았어요`
+          : '현재 원본에서 공통 지문을 찾지 못했어요',
+        subtitle: incomingFragments.length
+          ? '기존 문항 crop은 유지하고 자동 지문만 교체합니다. 문항에 잘못 붙인 공통 지문 표시는 문항으로 되돌립니다.'
+          : '기존 문항과 지문은 변경되지 않습니다. 적용하지 않고 닫아 주세요.',
+        contentTarget: 'shared-passages',
+        session: incomingSession,
+        incomingSession,
+        fileCount: reusableSessionSourcePaths.length,
+        sourcePaths: reusableSessionSourcePaths,
+        summary,
+      });
+    } catch (e) {
+      if (e?.name === 'AbortError') {
+        settleBackgroundJob(job.id, {
+          status: 'canceled',
+          label: '공통 지문 재추출 취소됨',
+          hint: '결과를 적용하지 않았습니다.',
+        });
+        return;
+      }
+      const connectionLost = isNetworkRequestError(e);
+      settleBackgroundJob(job.id, {
+        status: 'failed',
+        label: connectionLost ? '로컬 앱 연결 끊김' : '공통 지문 재추출 실패',
+        hint: connectionLost
+          ? '앱을 다시 실행한 뒤 공통 지문 추출을 다시 눌러 주세요.'
+          : e.message,
+      }, 5000);
+      showSimpleErrorToast(e, '공통 지문 재추출 실패');
+    } finally {
+      sessionRecognitionInFlightRef.current = false;
+    }
+  }, [
+    session,
+    usingMock,
+    hasRunningSessionRecognition,
+    fileName,
+    aiEnabled,
+    reusableSessionSourcePaths,
+    startBackgroundJob,
+    settleBackgroundJob,
+    showSimpleErrorToast,
+    showToast,
+  ]);
+
+  const exportSessionImages = useCallback(async (requestedProblemIds = null) => {
     if (!session) {
       showToast('다운로드할 세션이 없습니다');
       return;
     }
-    const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
-    const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns) || session;
+    const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
+    const sessionForExport = materializeSessionForItems(session, itemsForExport, fileName, boardColumns, layoutGapMode) || session;
+    const requestedIdSet = Array.isArray(requestedProblemIds)
+      ? new Set(requestedProblemIds.map(String))
+      : null;
     const problemIds = listUnique(itemsForExport
-      .filter(item => item?.id && !item.excluded)
+      .filter(item => item?.id && !item.excluded && (!requestedIdSet || requestedIdSet.has(String(item.id))))
       .map(item => item.id));
     if (!problemIds.length) {
       showToast('다운로드할 이미지가 없습니다');
@@ -9308,12 +16700,7 @@ function App(){
       if (!result?.downloadUrl) {
         throw new Error('다운로드 URL이 없습니다');
       }
-      const a = document.createElement('a');
-      a.href = result.downloadUrl;
-      a.download = result.fileName || `${(session.session_name || fileName || 'classin').trim() || 'classin'}_images.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
+      triggerServerFileDownload(result.downloadUrl);
       const missingCount = Array.isArray(result.missing) ? result.missing.length : 0;
       showToast(missingCount
         ? `PNG 묶음을 준비했어요 · 누락 ${missingCount}개는 manifest에서 확인`
@@ -9323,7 +16710,10 @@ function App(){
     } finally {
       setExportingImages(false);
     }
-  }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
+  }, [session, items, fileName, boardColumns, layoutGapMode, showSimpleErrorToast]);
+  const exportSelectedImages = useCallback((problemIds) => {
+    void exportSessionImages(problemIds);
+  }, [exportSessionImages]);
 
   const downloadItemImage = useCallback(async (item) => {
     if (!session) {
@@ -9336,8 +16726,8 @@ function App(){
     }
     setDownloadingItemId(item.id);
     try {
-      const itemsForDownload = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
-      const sessionForDownload = materializeSessionForItems(session, itemsForDownload, fileName, boardColumns) || session;
+      const itemsForDownload = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
+      const sessionForDownload = materializeSessionForItems(session, itemsForDownload, fileName, boardColumns, layoutGapMode) || session;
       const result = await fetchProblemImageDownload(item.id, { session: sessionForDownload });
       triggerBlobDownload(result.blob, result.fileName);
       showToast('PNG 다운로드 시작');
@@ -9346,19 +16736,25 @@ function App(){
     } finally {
       setDownloadingItemId(null);
     }
-  }, [session, items, fileName, boardColumns, showSimpleErrorToast]);
+  }, [session, items, fileName, boardColumns, layoutGapMode, showSimpleErrorToast]);
 
   const undoMutation = useCallback(async () => {
-    if (historyStack.length === 0) return;
-    const snapshot = historyStack[historyStack.length - 1];
+    if (reviewEditorActive || mutatingRef.current) return false;
+    const currentHistory = historyStackRef.current;
+    if (currentHistory.length === 0) return;
+    const snapshot = currentHistory[currentHistory.length - 1];
     const viewBeforeUndo = view;
     const activeBeforeUndo = activeId;
     mutatingRef.current = true;
     setMutating(true);
     setLoading({ label: '되돌리는 중…', startedAt: Date.now() });
     try {
-      const restored = await postRestore(snapshot);
-      setHistoryStack(prev => prev.slice(0, -1));
+      const restored = assertPlacementSaveSession(await postRestore(snapshot));
+      setHistoryStack(prev => {
+        const next = prev.slice(0, -1);
+        historyStackRef.current = next;
+        return next;
+      });
       applySession(restored);
       setView(viewBeforeUndo);
       if ((restored?.problems || []).some(problem => problem?.id === activeBeforeUndo)) {
@@ -9373,7 +16769,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [historyStack, view, activeId, applySession, refreshSessionHistory, showSimpleErrorToast]);
+  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast, reviewEditorActive]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -9384,13 +16780,13 @@ function App(){
       if (evt.shiftKey) return;  // reserve Ctrl/Cmd+Shift+Z for future redo
       const target = evt.target;
       if (isEditableKeyboardTarget(target)) return;
-      if (historyStack.length === 0 || mutating) return;
+      if (historyStack.length === 0 || mutating || reviewEditorActive) return;
       evt.preventDefault();
       undoMutation();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [historyStack.length, mutating, undoMutation]);
+  }, [historyStack.length, mutating, undoMutation, reviewEditorActive]);
 
   // initial session fetch — empty editor on 404, no automatic dummy data.
   useEffect(() => {
@@ -9400,8 +16796,13 @@ function App(){
         const s = await fetchLatestSession();
         if (cancelled) return;
         if (s) applySession(s);
+        setInitialSessionError(null);
+        if (!cancelled) setInitialSessionLoaded(true);
       } catch (e) {
-        if (!cancelled) console.warn('[board] session load skipped:', e.message);
+        if (!cancelled) {
+          setInitialSessionError(simpleToastErrorMessage(e, '세션 로드 실패'));
+          console.warn('[board] session load skipped:', e.message);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -9419,8 +16820,7 @@ function App(){
         const s = await fetchUserSettings();
         if (cancelled) return;
         setUserSettings(s);
-        // default AI on if key is present
-        setAiEnabled(!!s?.hasGeminiApiKey);
+        setAiEnabled(s?.aiEnabled !== false);
       } catch (e) {
         if (!cancelled) console.warn('[board] user-settings load skipped:', e.message);
       }
@@ -9445,19 +16845,31 @@ function App(){
     try {
       const s = await saveUserSettings({ geminiApiKey: key || '' });
       setUserSettings(s);
+      setAiEnabled(s?.aiEnabled !== false);
       showToast(key ? 'Gemini 키 저장됨' : 'Gemini 키 삭제됨');
+      return true;
     } catch (e) {
       showSimpleErrorToast(e, '저장 실패');
+      return false;
     }
   }, [showSimpleErrorToast, showToast]);
 
-  const onSaveOpenAiKey = useCallback(async (key) => {
+
+  const onToggleAi = useCallback(async (enabled) => {
+    setAiToggleBusy(true);
     try {
-      const s = await saveUserSettings({ openAiApiKey: key || '' });
+      const s = await saveUserSettings({ aiEnabled: !!enabled });
       setUserSettings(s);
-      showToast(key ? 'OpenAI 키 저장됨' : 'OpenAI 키 삭제됨');
+      setAiEnabled(s?.aiEnabled !== false);
+      showToast(enabled
+        ? (s?.hasGeminiApiKey ? 'AI 기능을 켰어요' : 'AI를 켰어요 · API 키를 저장하면 사용할 수 있어요')
+        : 'AI 기능을 껐어요 · OCR과 보정은 로컬로 처리합니다');
+      return true;
     } catch (e) {
-      showSimpleErrorToast(e, '저장 실패');
+      showSimpleErrorToast(e, 'AI 설정 저장 실패');
+      return false;
+    } finally {
+      setAiToggleBusy(false);
     }
   }, [showSimpleErrorToast, showToast]);
 
@@ -9467,6 +16879,10 @@ function App(){
       return;
     }
     const mode = ['auto', 'preserve', 'ai'].includes(options?.mode) ? options.mode : 'auto';
+    if (mode === 'ai' && !aiEnabled) {
+      showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
+      return;
+    }
     if (mode === 'ai' && !userSettings?.hasGeminiApiKey) {
       showToast('Gemini API 키를 먼저 저장해 주세요');
       return;
@@ -9476,7 +16892,7 @@ function App(){
       showToast('업스케일할 문항을 선택해 주세요');
       return;
     }
-    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session);
+    const snapshotBefore = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session);
     const isPreserve = mode === 'preserve';
     const job = startBackgroundJob({
       scope: 'image-enhance',
@@ -9485,10 +16901,11 @@ function App(){
         : (ids.length === 1 ? '고화질 재구성 중' : `${ids.length}개 문항 고화질 처리 중`),
       hint: isPreserve
         ? '원본 글자 형태를 유지하며 로컬 2K 확대와 투명 배경 처리를 적용합니다.'
-        : '과목에 맞는 보존형 또는 Nano Banana 2K 경로를 선택합니다.',
+        : '원문 보존형 또는 선택형 Nano Banana 1K 경로를 사용합니다.',
     });
     try {
-      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode, size: '2K' }, { signal: job.controller.signal });
+      const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
+      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       const appliedRows = (result.enhance || []).filter(row => row.status === 'applied');
@@ -9520,35 +16937,69 @@ function App(){
       }, 5000);
       showSimpleErrorToast(e, '고화질 처리 실패');
     }
-  }, [session, userSettings, items, fileName, boardColumns, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, showToast]);
 
   const resetSession = useCallback(async () => {
-    if (loading) {
+    if (recognitionInFlightRef.current || queueRegistrationInFlightRef.current) {
+      showToast('자료 처리가 끝난 뒤 초기화해 주세요');
+      return false;
+    }
+    if (downloadInFlightRef.current || downloadBusy) {
+      showToast('EDB 다운로드 준비가 끝난 뒤 초기화해 주세요');
+      return false;
+    }
+    if (publishInFlightRef.current || publishBusy) {
+      showToast('EDB 제작이 끝난 뒤 초기화해 주세요');
+      return false;
+    }
+    if (loading || resetInFlightRef.current) {
       showToast('작업 중에는 초기화할 수 없습니다');
-      return;
+      return false;
+    }
+    if (backgroundJobs.some(job => job.status === 'running')) {
+      showToast('진행 중인 작업을 취소하거나 완료한 뒤 초기화해 주세요');
+      return false;
     }
     if (!session && items.length === 0 && pendingFiles.length === 0 && recentSessions.length === 0) {
       showToast('이미 빈 세션입니다');
-      return;
+      return false;
     }
-    if (!window.confirm('세션을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 모두 사라집니다.')) return;
+    if (!window.confirm('작업 목록을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 사라집니다. 이미 만든 EDB·PNG 출력 파일은 보관됩니다.')) return false;
+    const localDraft = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session;
+    resetInFlightRef.current = true;
+    setResetBusy(true);
+    setLoading({ label: '작업 목록을 초기화하는 중…', startedAt: Date.now() });
     try {
+      if (session || recentSessions.length) {
+        const result = await clearSession();
+        setRecentSessionsAuthoritative(result?.history);
+      }
       jobControllersRef.current.forEach(controller => controller.abort());
       jobControllersRef.current.clear();
       setBackgroundJobs([]);
       setRecognitionReview(null);
       setConfirmingRecognition(false);
-      if (session || recentSessions.length) {
-        const result = await clearSession();
-        setRecentSessionsAuthoritative(result?.history);
-      }
       setPendingFilesTracked([]);
       setReviewFocus(null);
       hideMockItems('초기화 완료 · 빈 세션');
+      clearOperationRecovery();
+      return true;
     } catch (e) {
-      showSimpleErrorToast(e, '초기화 실패');
+      activateOperationRecovery(e, '초기화 실패', {
+        operation: 'session_reset',
+        code: e?.code || (isNetworkRequestError(e) ? 'reset_connection_failed' : 'reset_failed'),
+      }, {
+        kind: 'reset',
+        retryLabel: '초기화 다시 시도',
+        localDraft,
+      });
+      return false;
+    } finally {
+      resetInFlightRef.current = false;
+      setResetBusy(false);
+      setLoading(null);
     }
-  }, [loading, session, items.length, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative, showSimpleErrorToast, showToast]);
+  }, [loading, downloadBusy, publishBusy, backgroundJobs, session, items, fileName, boardColumns, layoutGapMode, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, showToast]);
 
   const shutdownApp = useCallback(async () => {
     if (!window.confirm('로컬 앱을 종료할까요? 브라우저 창은 직접 닫으면 됩니다.')) return;
@@ -9561,16 +17012,40 @@ function App(){
   }, [showSimpleErrorToast, showToast]);
 
   const refreshSession = useCallback(async () => {
+    if (refreshInFlightRef.current || restoreInFlightRef.current || loading || hasRunningBackgroundJobs || mutatingRef.current) {
+      showToast('진행 중인 작업이 끝난 뒤 새로고침해 주세요');
+      return;
+    }
+    const localDraft = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode);
+    const draftChanged = Boolean(localDraft
+      && sessionEditorDraftSignature(localDraft) !== sessionEditorDraftSignature(session));
+    if (draftChanged && !window.confirm(
+      '새로고침하면 저장되지 않은 변경을 저장된 상태로 바꿉니다. 현재 변경은 실행 취소로 되돌릴 수 있습니다. 계속할까요?'
+    )) return false;
+    const viewBeforeRefresh = view;
+    const activeBeforeRefresh = activeId;
+    refreshInFlightRef.current = true;
     setRefreshing(true);
     try {
       const s = await fetchLatestSession();
+      if (draftChanged) {
+        setHistoryStack(previous => {
+          const next = appendBoundedHistory(previous, localDraft, UNDO_HISTORY_LIMIT);
+          historyStackRef.current = next;
+          return next;
+        });
+      }
       if (s && Array.isArray(s.problems) && s.problems.length) {
         applySession(s);
-        refreshSessionHistory();
+        setView(viewBeforeRefresh);
+        if (s.problems.some(problem => problem?.id === activeBeforeRefresh)) {
+          setActiveId(activeBeforeRefresh);
+        }
         showToast(`새로고침 완료 · ${formatProblemCount(sessionProblemCounts(s))}`);
       } else {
         if (!usingMock) {
           setSession(null);
+          setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
           setItems([]);
           setActiveId(null);
           setPublished(false);
@@ -9578,15 +17053,45 @@ function App(){
         }
         showToast(usingMock ? '저장된 세션 없음 · 더미 유지' : '저장된 세션 없음 · 빈 세션');
       }
+      refreshSessionHistory();
+      setInitialSessionError(null);
+      setInitialSessionLoaded(true);
+      clearOperationRecovery();
     } catch (e) {
+      if (!initialSessionLoaded) setInitialSessionError(simpleToastErrorMessage(e, '세션 로드 실패'));
       showSimpleErrorToast(e, '새로고침 실패');
     } finally {
+      refreshInFlightRef.current = false;
       setRefreshing(false);
     }
-  }, [applySession, usingMock, refreshSessionHistory, showSimpleErrorToast, showToast]);
+  }, [applySession, usingMock, refreshSessionHistory, clearOperationRecovery, showSimpleErrorToast, showToast, loading, hasRunningBackgroundJobs, initialSessionLoaded, session, items, fileName, boardColumns, layoutGapMode, view, activeId]);
 
-  const restoreRecentSession = useCallback(async (id) => {
-    if (!id || restoringSessionId) return;
+  const restoreRecentSession = useCallback(async (id, options = {}) => {
+    if (!id) return false;
+    if (restoreInFlightRef.current || restoringSessionId) {
+      showToast('이미 최근 작업을 여는 중입니다');
+      return false;
+    }
+    if (!initialSessionLoaded) {
+      showToast('저장된 작업을 먼저 불러온 뒤 최근 작업을 열어 주세요');
+      return false;
+    }
+    if (
+      loading || refreshInFlightRef.current || resetInFlightRef.current || publishInFlightRef.current
+      || recognitionInFlightRef.current || queueRegistrationInFlightRef.current
+      || sessionRecognitionInFlightRef.current || mutatingRef.current || hasRunningBackgroundJobs
+      || hasPendingSessionConflict
+    ) {
+      showToast('진행 중인 작업이 끝난 뒤 최근 작업을 열어 주세요');
+      return false;
+    }
+    const recoveryDraft = options.recoveryDraft
+      || materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode)
+      || session;
+    if (recoveryDraft && options.confirmOverwrite !== false && !window.confirm(
+      '최근 저장본을 열면 현재 화면의 저장되지 않은 배치를 덮어씁니다. 현재 배치는 되돌리기용으로 보관하고 계속할까요?'
+    )) return false;
+    restoreInFlightRef.current = true;
     setRestoringSessionId(id);
     setLoading({ label: '최근 작업을 여는 중…', startedAt: Date.now() });
     try {
@@ -9594,52 +17099,66 @@ function App(){
       if (Array.isArray(result.history)) setRecentSessionsAuthoritative(result.history);
       setRecognitionReview(null);
       applySession(result.session);
-      setHistoryStack([]);
+      setHistoryStack(recoveryDraft
+        ? prev => appendBoundedHistory(prev, recoveryDraft, UNDO_HISTORY_LIMIT)
+        : []);
       setReviewFocus(null);
+      clearOperationRecovery();
       showToast('최근 작업을 열었어요');
+      return true;
     } catch (e) {
-      showSimpleErrorToast(e, '작업 열기 실패');
+      activateOperationRecovery(e, '작업 열기 실패', {
+        operation: 'session_restore_history',
+        code: e?.code || (isNetworkRequestError(e) ? 'restore_connection_failed' : 'restore_failed'),
+      }, {
+        kind: 'restore',
+        retryLabel: '최근 작업 다시 열기',
+        restoreSessionId: id,
+        recoveryDraft,
+        localDraft: recoveryDraft,
+      });
+      return false;
     } finally {
+      restoreInFlightRef.current = false;
       setRestoringSessionId(null);
       setLoading(null);
     }
-  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, showSimpleErrorToast, showToast]);
+  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, session, items, fileName, boardColumns, layoutGapMode, showToast, initialSessionLoaded, loading, hasRunningBackgroundJobs, hasPendingSessionConflict]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
   const handleFiles = (fileList) => {
     const files = Array.from(fileList || []);
     if (!files.length) return;
-    setRecognitionReview(null);
-    const existingKeys = new Set(pendingFiles.map(fileQueueKey));
-    const firstAddedKey = files.map(fileQueueKey).find(key => !existingKeys.has(key)) || null;
-    setPendingFilesTracked(prev => {
-      const seen = new Set(prev.map(fileQueueKey));
-      const next = [...prev];
-      files.forEach(file => {
-        const key = fileQueueKey(file);
-        if (!seen.has(key)) {
-          seen.add(key);
-          next.push(file);
-        }
-      });
-      return next;
-    });
-    if (firstAddedKey) selectPendingFile(firstAddedKey);
-    showToast(`${files.length}개 파일을 대기열에 추가했어요`);
+    const addition = appendUniquePendingFiles(pendingFilesRef.current, files);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (!addition.addedFiles.length) {
+      showToast('이미 대기열에 있는 파일입니다');
+      return;
+    }
+    setRecognitionReview(null);
+    setPendingFilesTracked(addition.files);
+    selectPendingFile(fileQueueKey(addition.addedFiles[0]));
+    showToast(`${addition.addedFiles.length}개 파일을 대기열에 추가했어요${addition.duplicateCount ? ` · 중복 ${addition.duplicateCount}개 제외` : ''}`);
   };
 
   const removePendingFile = useCallback((key) => {
     setPendingFilesTracked(prev => prev.filter(file => fileQueueKey(file) !== key));
-  }, [setPendingFilesTracked]);
+    if (
+      (operationRecovery?.kind === 'recognition' || operationRecovery?.kind === 'registration')
+      && operationRecovery.retryTargetKey === key
+    ) clearOperationRecovery();
+  }, [operationRecovery, setPendingFilesTracked, clearOperationRecovery]);
 
   const clearPendingFiles = useCallback(() => {
     setRecognitionReview(null);
     setSelectedPendingFileKey(null);
     setPendingFilesTracked([]);
+    if (operationRecovery?.kind === 'recognition' || operationRecovery?.kind === 'registration') {
+      clearOperationRecovery();
+    }
     showToast('업로드 대기열을 비웠어요');
-  }, [setPendingFilesTracked]);
+  }, [operationRecovery, setPendingFilesTracked, clearOperationRecovery, showToast]);
 
   useEffect(() => {
     if (recognitionReview?.kind !== 'queue-recognition') return;
@@ -9649,6 +17168,22 @@ function App(){
   }, [recognitionReview, pendingFiles, queueRequestIsCurrent]);
 
   const processQueuedFiles = useCallback(async (mode, targetKey = null) => {
+    if (!initialSessionLoaded) {
+      showToast('기존 작업을 불러오는 중입니다. 잠시 후 다시 시도해 주세요');
+      return;
+    }
+    if (restoreInFlightRef.current || refreshInFlightRef.current || resetInFlightRef.current || publishInFlightRef.current) {
+      showToast('진행 중인 작업이 끝난 뒤 자료를 처리해 주세요');
+      return;
+    }
+    if (operationRecovery?.conflict) {
+      showToast('먼저 최신 상태를 불러오거나 현재 배치를 안전하게 합쳐 주세요');
+      return;
+    }
+    if (recognitionInFlightRef.current || queueRegistrationInFlightRef.current) {
+      showToast('이미 자료를 처리하고 있습니다');
+      return;
+    }
     const files = targetKey
       ? pendingFiles.filter(file => fileQueueKey(file) === targetKey)
       : [...pendingFiles];
@@ -9656,23 +17191,34 @@ function App(){
       showToast(targetKey ? '해당 파일이 대기열에 없습니다' : '대기열에 파일이 없습니다');
       return;
     }
-    const isRecognition = mode === 'recognize';
+    const isPassageOnly = mode === 'passage-only';
+    const isRecognition = mode === 'recognize' || isPassageOnly;
     const isManualSplit = mode === 'manual-split';
     const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';
-    const fastImageRecognition = isRecognition && isImageOnlyFileBatch(files);
-    const aiFallback = isRecognition && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
+    const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files);
+    const aiFallback = isRecognition && !isPassageOnly && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;
-    const recognitionOcr = fastImageRecognition ? 'none' : 'auto';
+    const recognitionOcr = fastImageRecognition ? 'none' : (aiEnabled ? 'auto' : 'local');
     if (isRecognition) {
+      if (recognitionInFlightRef.current) {
+        showToast('이미 인식을 진행 중입니다');
+        return;
+      }
+      clearOperationRecovery();
+      recognitionInFlightRef.current = true;
       const fileKeys = files.map(fileQueueKey);
       const queueGeneration = queueGenerationRef.current;
       const job = startBackgroundJob({
         scope: 'queue-recognition',
-        label: fastImageRecognition
+        label: isPassageOnly
+          ? (files.length === 1 ? '1개 파일 공통 지문 추출 중' : `${files.length}개 파일 공통 지문 추출 중`)
+          : fastImageRecognition
           ? (files.length === 1 ? '1개 이미지 빠른 문항 분할 중' : `${files.length}개 이미지 빠른 문항 분할 중`)
           : (files.length === 1 ? '1개 파일 AI 문제 인식 중' : `${files.length}개 파일 AI 문제 인식 중`),
-        hint: fastImageRecognition
+        hint: isPassageOnly
+          ? '여러 문항이 함께 쓰는 긴 지문만 찾아 1열 전체 너비로 준비합니다.'
+          : fastImageRecognition
           ? '이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다.'
           : aiFallback.enabled
           ? 'Gemini AI 보정으로 문항 경계를 확인합니다.'
@@ -9684,8 +17230,10 @@ function App(){
           preview: true,
           edbName: fileName,
           ocr: recognitionOcr,
+          aiEnabled,
           detectPerspective: !fastImageRecognition,
           skipDeskew: fastImageRecognition,
+          contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET,
         });
         if (job.controller.signal.aborted) return;
         if (!queueRequestIsCurrent(queueGeneration, fileKeys)) {
@@ -9696,21 +17244,18 @@ function App(){
           }, 2200);
           return;
         }
-        const fallbackMessage = aiModelFallbackToast(incomingSession);
-        if (fallbackMessage) showToast(fallbackMessage);
         const summary = summarizeRecognitionSession(incomingSession);
         settleBackgroundJob(job.id, {
           status: 'done',
-          label: '문제 인식 완료',
-          hint: `${summary.problemLabel}을 찾았습니다.`,
+          label: isPassageOnly ? '공통 지문 추출 완료' : '문제 인식 완료',
+          hint: isPassageOnly ? `공통 지문 ${summary.problems}개를 찾았습니다.` : `${summary.problemLabel}을 찾았습니다. 바로 칠판에 배치합니다.`,
         });
+        // Applied by the effect below as soon as the app is idle; no popup.
         setRecognitionReview({
           id: `review-${job.id}`,
           kind: 'queue-recognition',
-          title: files.length === 1
-            ? `${files[0].name || '파일'} · ${summary.problemLabel}로 인식했어요`
-            : `${summary.problemLabel}로 인식했어요`,
-          subtitle: '문제 경계가 맞으면 검수 화면에서 원본 위 박스를 확인합니다.',
+          fallbackMessage: aiModelFallbackToast(incomingSession),
+          contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET,
           session: incomingSession,
           incomingSession,
           fileKeys,
@@ -9722,28 +17267,43 @@ function App(){
         if (e?.name === 'AbortError') {
           settleBackgroundJob(job.id, {
             status: 'canceled',
-            label: '문제 인식 취소됨',
+            label: isPassageOnly ? '공통 지문 추출 취소됨' : '문제 인식 취소됨',
             hint: '대기열은 그대로 유지했습니다.',
           });
           return;
         }
+        const failure = await classifyNetworkRequestError(e, 'recognition_connection_failed');
         settleBackgroundJob(job.id, {
           status: 'failed',
-          label: '문제 인식 실패',
-          hint: e.message,
+          label: isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패',
+          hint: failure.message,
         }, 5000);
-        showSimpleErrorToast(e, '문제 인식 실패');
+        activateOperationRecovery(failure, isPassageOnly ? '공통 지문 추출 실패' : '문제 인식 실패', {
+          operation: isPassageOnly ? 'queue_passage_recognition' : 'queue_recognition',
+          code: failure?.code || 'recognition_failed',
+        }, {
+          kind: 'recognition',
+          retryMode: mode,
+          retryTargetKey: targetKey,
+          retryLabel: isPassageOnly ? '공통 지문 다시 추출' : '문제 인식 다시 시도',
+          alternativeMode: 'register',
+          alternativeLabel: '페이지 PNG로 등록',
+          localDraft: materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session,
+        });
       } finally {
+        recognitionInFlightRef.current = false;
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
       return;
     }
+    queueRegistrationInFlightRef.current = true;
+    clearOperationRecovery();
     setLoading({
       label: isRecognition
         ? `${files.length}개 파일에서 문제 인식 중...`
         : isManualSplit
-          ? (files.length === 1 ? '1개 파일을 수동 쪼개기용으로 여는 중...' : `${files.length}개 파일을 수동 쪼개기용으로 여는 중...`)
-          : files.length === 1 ? '1개 파일을 페이지 PNG로 등록 중...' : `${files.length}개 파일을 페이지 PNG로 등록 중...`,
+          ? (files.length === 1 ? '1개 파일을 직접 자르기용으로 여는 중...' : `${files.length}개 파일을 직접 자르기용으로 여는 중...`)
+          : files.length === 1 ? '1개 파일을 페이지 그대로 넣는 중...' : `${files.length}개 파일을 페이지 그대로 넣는 중...`,
       hint: isRecognition
         ? (fastImageRecognition
             ? '이미지는 AI 보정 없이 원본 경계 중심으로 빠르게 나눕니다.'
@@ -9751,8 +17311,8 @@ function App(){
             ? 'Gemini AI 보정으로 문항 경계를 다시 확인합니다.'
             : 'Gemini 키가 없어 기본 문항 인식만 실행합니다.')
         : isManualSplit
-          ? '인식 없이 원본 페이지를 열고 검수 화면에서 직접 영역을 그립니다.'
-          : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 하나의 PNG 자료로 등록합니다.',
+          ? '인식 없이 원본 페이지를 열고 직접 영역을 그립니다. 다 자르면 칠판으로 돌아갑니다.'
+          : '문제 파싱 없이 각 이미지와 PDF/HWP 페이지를 그대로 칠판에 배치합니다.',
       startedAt: Date.now(),
     });
     const previousItemIds = new Set(items.map(item => item.id).filter(Boolean));
@@ -9760,17 +17320,22 @@ function App(){
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
         edbName: fileName,
         ocr: recognitionOcr,
+        aiEnabled,
         preview: true,
         exportEdb: false,
+        contentTarget: DEFAULT_CONTENT_TARGET,
       });
       const registeredSession = isManualSplit ? s : fitWidthPageAsIsSession(s, { fileName, boardColumns });
       let sessionToApply = registeredSession;
       let baseSnapshotForReviewScope = null;
       if (session && !usingMock) {
-        const currentSnapshot = materializeSessionForItems(session, items, fileName, boardColumns);
+        const currentSnapshot = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode);
         baseSnapshotForReviewScope = currentSnapshot;
         const merged = mergeSessions(currentSnapshot, registeredSession, fileName, boardColumns);
         sessionToApply = await postRestore(merged);
+        if (currentSnapshot) {
+          setHistoryStack(prev => appendBoundedHistory(prev, currentSnapshot, UNDO_HISTORY_LIMIT));
+        }
       } else if (!isManualSplit && sessionToApply !== s) {
         sessionToApply = await postRestore(sessionToApply);
       }
@@ -9788,40 +17353,95 @@ function App(){
           || (sessionToApply?.pages || []).find(page => (page.problemIds || []).some(id => !previousItemIds.has(id)))?.id
           || sessionToApply?.pages?.[0]?.id
           || null;
+        // Every newly added page is cut in turn; the editor returns to the
+        // board after the last one (see ReviewStage guided split).
+        const manualSplitPageIds = listUnique([
+          manualSplitPageId,
+          ...(nextReviewFocus?.scopePageIds || []),
+        ].filter(Boolean));
         setReviewFocus({
           ...(nextReviewFocus || { source: 'queue-manual-split' }),
           filter: 'all',
           manualSplitPageId,
+          manualSplitPageIds,
         });
         setView('review');
       } else {
         setReviewFocus(nextReviewFocus);
+        setView('board');
       }
       refreshSessionHistory();
       const appliedKeys = new Set(files.map(fileQueueKey));
       setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
-      const intentLabel = isRecognition ? '문항 AI 인식' : isManualSplit ? '수동 쪼개기 준비' : '페이지 PNG 등록';
+      const intentLabel = isPassageOnly ? '공통 지문 추출' : isRecognition ? '문항 AI 인식' : isManualSplit ? '직접 자르기 준비' : '페이지 그대로 넣기';
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
     } catch (e) {
-      showSimpleErrorToast(e, isManualSplit ? '수동 쪼개기 실패' : '등록 실패');
+      const failure = await classifyNetworkRequestError(e, 'registration_connection_failed');
+      activateOperationRecovery(failure, isManualSplit ? '수동 쪼개기 실패' : '등록 실패', {
+        operation: isManualSplit ? 'queue_manual_split' : 'queue_registration',
+        code: failure?.code || 'registration_failed',
+      }, {
+        kind: 'registration',
+        retryMode: mode,
+        retryTargetKey: targetKey,
+        retryLabel: isManualSplit ? '수동 쪼개기 다시 열기' : '페이지 PNG 등록 다시 시도',
+        alternativeMode: isManualSplit ? 'register' : 'manual-split',
+        alternativeLabel: isManualSplit ? '페이지 PNG로 등록' : '수동 쪼개기로 열기',
+        localDraft: materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session,
+      });
     } finally {
+      queueRegistrationInFlightRef.current = false;
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, showSimpleErrorToast]);
+  }, [initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
 
-  const cancelRecognitionReview = useCallback(() => {
-    if (confirmingRecognition) return;
-    setRecognitionReview(null);
-    showToast('인식 결과를 적용하지 않았어요');
-  }, [confirmingRecognition]);
-
-  const confirmRecognitionReview = useCallback(async () => {
+  // Recognition results are applied as soon as they arrive (no confirm
+  // popup). Ctrl+Z restores the previous board when one existed.
+  const applyRecognitionResult = useCallback(async () => {
     const review = recognitionReview;
-    if (!review) return;
+    if (!review || recognitionApplyInFlightRef.current) return;
+    recognitionApplyInFlightRef.current = true;
+    let destinationView = null;
     setConfirmingRecognition(true);
     try {
-      if (review.kind === 'queue-recognition') {
+      if (review.kind === 'session-passage-reextract') {
+        const incomingSession = review.incomingSession || review.session;
+        const incomingFragments = (incomingSession?.problems || []).filter(isPassageFragmentProblem);
+        if (!incomingFragments.length) {
+          setRecognitionReview(null);
+          showToast('적용할 공통 지문이 없습니다');
+          return;
+        }
+        const currentSnapshot = session && !usingMock
+          ? materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode)
+          : null;
+        if (!currentSnapshot) {
+          throw new Error('기존 문항을 보존할 현재 세션을 찾지 못했습니다.');
+        }
+        const candidate = mergeReextractedSharedPassages(
+          currentSnapshot,
+          incomingSession,
+          fileName
+        );
+        const restored = await postRestore(candidate);
+        setHistoryStack(prev => appendBoundedHistory(
+          prev,
+          currentSnapshot,
+          UNDO_HISTORY_LIMIT
+        ));
+        applySession(restored);
+        const reextractedIds = (restored?.problems || [])
+          .filter(problem => (
+            isPassageFragmentProblem(problem)
+            && !isManualIndependentPassage(problem)
+          ))
+          .map(problem => problem.id)
+          .filter(Boolean);
+        setReviewFocus({ filter: 'all', problemIds: reextractedIds, source: 'session-passage-reextract' });
+        refreshSessionHistory();
+        showToast(`공통 지문 ${incomingFragments.length}개 교체 · 기존 문항 유지`);
+      } else if (review.kind === 'queue-recognition') {
         if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || [])) {
           setRecognitionReview(null);
           showToast('Upload queue changed. Please run recognition again.');
@@ -9829,23 +17449,35 @@ function App(){
         }
         const incomingSession = review.incomingSession || review.session;
         const currentSnapshot = session && !usingMock
-          ? materializeSessionForItems(session, items, fileName, boardColumns)
+          ? materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode)
           : null;
         const candidate = currentSnapshot
           ? mergeSessions(currentSnapshot, incomingSession, fileName, boardColumns)
           : cloneSession(incomingSession);
         const restored = await postRestore(candidate);
+        if (currentSnapshot) {
+          setHistoryStack(prev => appendBoundedHistory(prev, currentSnapshot, UNDO_HISTORY_LIMIT));
+        }
         applySession(restored);
-        setReviewFocus(reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition'));
+        const nextScope = reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition');
+        setReviewFocus(nextScope);
+        destinationView = 'board';
         refreshSessionHistory();
-        setView('review');
+        setView('board');
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         const summary = summarizeRecognitionSession(incomingSession);
-        showToast(`검수로 이동 · ${summary.problemLabel}을 확인하세요`);
+        // Same count as the optional review shortcut and EDB 제작 warning.
+        const attentionCount = Math.max(0, Number(sessionReviewSummary(incomingSession).actionableNeedsReviewCount) || 0);
+        showToast([
+          review.fallbackMessage,
+          `분할 완료 · ${summary.problemLabel} 칠판에 배치했어요`,
+          attentionCount ? `확인 필요 ${attentionCount}개는 칠판의 검수 버튼에서 확인` : '',
+          currentSnapshot ? 'Ctrl+Z로 되돌리기' : '',
+        ].filter(Boolean).join(' · '), { duration: 4500 });
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
-          ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
+          ? (materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session))
           : cloneSession(review.snapshotBefore);
         const candidate = mergeRetryCandidateIntoCurrent(currentSnapshot, review.session, review.pageIds, {
           partial: !!review.partial,
@@ -9863,14 +17495,22 @@ function App(){
           applySession(restored);
         }
         refreshSessionHistory();
-        setView('board');
         const summary = summarizeRecognitionSession(restored, review.pageIds);
-        showToast(`AI 인식 적용 · ${summary.problemLabel}`);
+        showToast([
+          review.fallbackMessage,
+          `AI 인식 적용 · ${summary.problemLabel}`,
+          'Ctrl+Z로 되돌리기',
+        ].filter(Boolean).join(' · '), { duration: 4500 });
       }
+      if (destinationView) requestViewChange(destinationView, { force: true });
       setRecognitionReview(null);
     } catch (e) {
+      // Drop the result so the auto-apply effect does not retry forever;
+      // queued files stay in the queue and can be split again.
+      setRecognitionReview(null);
       showSimpleErrorToast(e, '적용 실패');
     } finally {
+      recognitionApplyInFlightRef.current = false;
       setConfirmingRecognition(false);
     }
   }, [
@@ -9880,19 +17520,59 @@ function App(){
     usingMock,
     items,
     fileName,
-    boardColumns,
+    boardColumns, layoutGapMode,
     applySession,
     adoptMutatedSession,
     refreshSessionHistory,
     queueRequestIsCurrent,
+    requestViewChange,
     setPendingFilesTracked,
     showSimpleErrorToast,
   ]);
+
+  useEffect(() => {
+    if (!recognitionReview || confirmingRecognition || mutating || loading || hasPendingSessionConflict) return;
+    void applyRecognitionResult();
+  }, [recognitionReview, confirmingRecognition, mutating, loading, hasPendingSessionConflict, applyRecognitionResult]);
 
   const setStep = (id, step) => {
     const nextStep = normalizeProcessingStep(step);
     setItems(it => it.map(x => x.id === id ? { ...x, step: nextStep } : x));
     setPublished(false);
+  };
+  const applySelectedStep = (problemIds, step) => {
+    const selectedIdSet = new Set((problemIds || []).map(String));
+    if (!selectedIdSet.size) return;
+    const nextStep = normalizeProcessingStep(step);
+    const previousSteps = new Map(items
+      .filter(item => selectedIdSet.has(String(item.id)))
+      .map(item => [String(item.id), item.step]));
+    setItems(prev => prev.map(item => (
+      selectedIdSet.has(String(item.id)) ? { ...item, step: nextStep } : item
+    )));
+    setPublished(false);
+    showActionToast(
+      `${selectedIdSet.size}개 문제를 ${stepLabel(nextStep)}로 변경했어요`,
+      '실행 취소',
+      () => {
+        setItems(prev => prev.map(item => (
+          previousSteps.has(String(item.id))
+            ? { ...item, step: previousSteps.get(String(item.id)) }
+            : item
+        )));
+        setActionToast(null);
+        showToast('처리 단계 변경을 취소했어요');
+      }
+    );
+  };
+  const classifySelected = async (problemIds, classification) => {
+    const ids = listUnique((problemIds || []).map(String).filter(Boolean));
+    if (!ids.length) return;
+    if (!session) {
+      showToast('실제 세션에서만 자료 분류를 변경할 수 있어요');
+      return;
+    }
+    await mutateSession('classify', { problemIds: ids, classification });
   };
   const applyToAll = (step, options = {}) => {
     if (!items.length) {
@@ -9901,57 +17581,215 @@ function App(){
     }
     const nextStep = normalizeProcessingStep(step);
     setItems(it => it.map(x => ({ ...x, step: nextStep })));
+    setPublished(false);
     if (options.silent) return;
     showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요`);
   };
-  const setPlacement = (id, patch) => {
-    const wantsFitWidth = !!patch?.fitWidth;
-    const scaleChanged = wantsFitWidth || Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio');
+  const setPlacements = (updates) => {
+    const validUpdates = Array.isArray(updates)
+      ? updates.filter(update => update?.id != null && update?.patch)
+      : [];
+    if (!validUpdates.length) return;
+    const patchById = new Map(validUpdates.map(update => [String(update.id), update.patch]));
+    const layoutChanged = validUpdates.some(update => (
+      update.patch.fitWidth
+      || Object.prototype.hasOwnProperty.call(update.patch, 'extraSlots')
+      || Object.prototype.hasOwnProperty.call(update.patch, 'scaleRatio')
+      || Object.prototype.hasOwnProperty.call(update.patch, 'gapAfterPages')
+    ));
     setItems(it => {
+      let changed = false;
       const nextItems = it.map(x => {
-        if (x.id !== id) return x;
-        const next = { ...x };
-        if (Object.prototype.hasOwnProperty.call(patch || {}, 'xRatio')) {
-          next.placementXRatio = normalizePlacementXRatio(patch.xRatio);
-          next.placementXEdited = patch.xEdited === false ? false : true;
-          if (Object.prototype.hasOwnProperty.call(patch || {}, 'magnetColumnIndex')) {
-            next.placementMagnetColumnIndex = patch.magnetColumnIndex;
-          }
-        }
-        if (wantsFitWidth) {
-          return fitWidthContinuousPageItem(next, patch);
-        } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio')) {
-          next.placementScaleRatio = normalizePlacementScaleRatio(patch.scaleRatio, maxPlacementScaleRatio(next));
-        }
-        if (Object.prototype.hasOwnProperty.call(patch || {}, 'yRatio')) {
-          next.placementYRatio = verticalPlacementRoomPages(next, next.placementScaleRatio) > 0.001
-            ? normalizePlacementYRatio(patch.yRatio)
-            : DEFAULT_PLACEMENT_Y_RATIO;
-        } else if (Object.prototype.hasOwnProperty.call(patch || {}, 'scaleRatio') && verticalPlacementRoomPages(next, next.placementScaleRatio) <= 0.001) {
-          next.placementYRatio = DEFAULT_PLACEMENT_Y_RATIO;
-        }
-        return next;
+        const patch = patchById.get(String(x.id));
+        if (!patch) return x;
+        changed = true;
+        return applyPlacementPatchToItem(x, patch);
       });
-      return scaleChanged ? reflowItemsForBoardOrder(nextItems, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns) : nextItems;
+      if (!changed) return it;
+      return layoutChanged
+        ? reflowItemsForBoardOrder(nextItems, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode)
+        : nextItems;
     });
     setPublished(false);
+  };
+  const setPlacement = (id, patch) => setPlacements([{ id, patch }]);
+  const undoPlacementGap = () => {
+    if (mutatingRef.current || sessionEditState?.busy) return;
+    const restoreUpdates = placementGapHistoryRef.current.pop();
+    if (!restoreUpdates) return;
+    setPlacements(restoreUpdates);
+    setPlacementGapUndoCount(placementGapHistoryRef.current.length);
+    showToast('뒤 여백을 이전 값으로 되돌렸어요');
+  };
+  undoPlacementGapRef.current = undoPlacementGap;
+  const reducePlacementGap = (id) => {
+    if (mutatingRef.current || sessionEditState?.busy) return;
+    const action = derivePlacementGapAction(items, id, boardColumns, layoutGapMode);
+    if (!action.ids.length) return;
+    placementGapHistoryRef.current.push(action.restoreUpdates);
+    setPlacementGapUndoCount(placementGapHistoryRef.current.length);
+    setPlacements(action.applyUpdates);
+    showActionToast('뒤 여백을 줄였어요', '되돌리기', () => undoPlacementGapRef.current?.());
+  };
+  const updateLayoutGapMode = (value) => {
+    const nextMode = normalizeLayoutGapMode(value);
+    if (nextMode === layoutGapMode) return;
+    if (
+      nextMode === LAYOUT_GAP_MODE_COMPACT
+      && !window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요? 미리보기에서 확인한 뒤 저장할 수 있습니다.')
+    ) return;
+    setLayoutGapModeState(nextMode);
+    setItems(previous => reflowItemsForBoardOrder(
+      previous,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      nextMode
+    ));
+    setPublished(false);
+    showToast(nextMode === LAYOUT_GAP_MODE_COMPACT
+      ? '전체 문항 사이 여백을 제거했어요'
+      : '1.2 맞춤 여백을 복원했어요');
+  };
+  const resetPlacementGaps = () => {
+    placementGapHistoryRef.current = [];
+    setPlacementGapUndoCount(0);
+    setItems(previous => reflowItemsForBoardOrder(
+      previous.map(item => applyPlacementPatchToItem(item, { gapAfterPages: null })),
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      layoutGapMode
+    ));
+    setPublished(false);
+    showToast('개별 여백 삭제 설정을 모두 해제했어요');
+  };
+  const savePlacement = async () => {
+    if (!items.length) return false;
+    if (!session) {
+      showToast('배치를 미리보기에 적용했어요');
+      return true;
+    }
+    if (mutatingRef.current) {
+      showToast('이전 변경을 적용하는 중입니다');
+      return false;
+    }
+    let snapshotBefore = cloneSession(session);
+    const nextItems = reflowItemsForBoardOrder(
+      items,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      layoutGapMode
+    );
+    const candidate = materializeSessionForItems(
+      session,
+      nextItems,
+      fileName,
+      boardColumns,
+      layoutGapMode
+    );
+    if (!candidate) {
+      showToast('저장할 배치 정보를 만들지 못했습니다');
+      return false;
+    }
+    if (sessionEditorDraftSignature(candidate) === sessionEditorDraftSignature(session)) {
+      showToast('수업 변경이 이미 저장되어 있어요');
+      return true;
+    }
+    mutatingRef.current = true;
+    setMutating(true);
+    setLoading({ label: '수업 배치 변경 저장 중…', startedAt: Date.now() });
+    try {
+      const result = await postRestoreBoardLayoutWithConflictRetry(candidate, boardColumns);
+      const restored = result.session;
+      if (result.conflictBase) snapshotBefore = result.conflictBase;
+      // A conflict retry merges layout only. Preserve locally changed processing
+      // choices as unsaved drafts instead of silently replacing them with the
+      // server's version while claiming every lesson change was saved.
+      const pendingProcessing = new Map(result.conflictBase ? nextItems.filter(item => {
+        const savedProblem = session.problems.find(problem => problem.id === item.id);
+        return savedProblem && item.step !== mapProblemToItem(savedProblem, 0, session).step;
+      }).map(item => [item.id, item.step]) : []);
+      const persistedItems = reflowItemsForBoardOrder(
+        (restored?.problems || []).map((problem, index) => {
+          const item = mapProblemToItem(problem, index, restored);
+          return pendingProcessing.has(item.id) ? { ...item, step: pendingProcessing.get(item.id) } : item;
+        }),
+        DEFAULT_SLOT_HEIGHT_PAGES,
+        boardColumns,
+        normalizeLayoutGapMode(restored?.layoutGapMode ?? restored?.layout_gap_mode ?? layoutGapMode)
+      );
+      setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
+      setItems(persistedItems);
+      setActiveId(currentId => (
+        persistedItems.some(item => item.id === currentId)
+          ? currentId
+          : persistedItems[0]?.id || null
+      ));
+      setSession(restored);
+      setPublished(false);
+      refreshSessionHistory();
+      showToast(result.conflictBase
+        ? '최신 수업에 배치를 합쳤어요 · 남은 변경은 저장 상태를 확인해 주세요'
+        : '수업 변경을 저장했어요 · 배치·처리 방식·수업명 포함');
+      return true;
+    } catch (error) {
+      showSimpleErrorToast(error, '배치 저장 실패 · 조정값은 화면에 유지했어요');
+      return false;
+    } finally {
+      mutatingRef.current = false;
+      setMutating(false);
+      setLoading(null);
+    }
   };
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
     if (mutatingRef.current) {
       showToast('이전 변경을 적용하는 중입니다');
-      return;
+      return false;
     }
-    const reordered = reorderItemsForDrop(items, fromId, toId, dropPosition);
-    if (reordered === items) return;
+    const requestedSourceIds = Array.isArray(options?.sourceIds) && options.sourceIds.length
+      ? options.sourceIds
+      : [fromId];
+    const sourceIdSet = new Set(requestedSourceIds.map(id => String(id)));
+    const sourceIds = items
+      .map(item => String(item.id))
+      .filter(id => sourceIdSet.has(id));
+    const reordered = sourceIds.length > 1
+      ? reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)
+      : reorderItemsForDrop(items, fromId, toId, dropPosition);
+    if (reordered === items) return false;
+    const previousOrder = items.map(item => String(item.id)).join('|');
+    const nextOrder = reordered.map(item => String(item.id)).join('|');
+    if (previousOrder === nextOrder) return false;
+    const previousIndex = items.findIndex(item => String(item.id) === String(fromId));
     const snapshotBefore = session
-      ? (materializeSessionForItems(session, items, fileName, boardColumns) || cloneSession(session))
+      ? (materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session))
       : null;
-    const resetItems = reordered.map(item => String(item.id) === String(fromId) ? resetItemPlacement(item) : item);
-    const nextItems = reflowItemsForBoardOrder(options?.resetPlacement ? resetItems : reordered, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const resetItems = reordered.map(item => sourceIdSet.has(String(item.id)) ? resetItemPlacement(item) : item);
+    const nextItems = reflowItemsForBoardOrder(
+      options?.resetPlacement ? resetItems : reordered,
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      boardColumns,
+      layoutGapMode
+    );
+    const nextIndex = nextItems.findIndex(item => String(item.id) === String(fromId));
+    moveSequenceRef.current += 1;
+    setMoveFeedback({
+      id: fromId,
+      direction: nextIndex < previousIndex ? 'up' : 'down',
+      fromIndex: previousIndex,
+      toIndex: nextIndex,
+      sequence: moveSequenceRef.current,
+    });
+    if (moveFeedbackTimerRef.current) {
+      window.clearTimeout(moveFeedbackTimerRef.current);
+    }
+    moveFeedbackTimerRef.current = window.setTimeout(() => {
+      setMoveFeedback(null);
+      moveFeedbackTimerRef.current = null;
+    }, 900);
     setItems(nextItems);
     setActiveId(fromId);
     if (session) {
-      const nextSession = materializeSessionForItems(session, nextItems, fileName, boardColumns) || session;
+      const nextSession = materializeSessionForItems(session, nextItems, fileName, boardColumns, layoutGapMode) || session;
       if (snapshotBefore) {
         setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
       }
@@ -9960,34 +17798,88 @@ function App(){
       setMutating(true);
       postRestore(nextSession)
         .then(() => refreshSessionHistory())
-        .catch(e => showSimpleErrorToast(e, '순서 저장 실패'))
+        .catch(e => {
+          if (snapshotBefore) {
+            const rollbackItems = reflowItemsForBoardOrder(
+              (snapshotBefore.problems || []).map((problem, index) => mapProblemToItem(problem, index, snapshotBefore)),
+              DEFAULT_SLOT_HEIGHT_PAGES,
+              boardColumns,
+              normalizeLayoutGapMode(snapshotBefore.layoutGapMode ?? snapshotBefore.layout_gap_mode)
+            );
+            setItems(rollbackItems);
+            setSession(snapshotBefore);
+            setActiveId(rollbackItems.some(item => String(item.id) === String(fromId)) ? fromId : rollbackItems[0]?.id || null);
+            setHistoryStack(prev => prev[prev.length - 1] === snapshotBefore ? prev.slice(0, -1) : prev);
+          }
+          showSimpleErrorToast(e, '순서 저장 실패 · 이전 순서로 복구했습니다');
+        })
         .finally(() => {
           mutatingRef.current = false;
           setMutating(false);
         });
     }
     setPublished(false);
-    showToast('문제 순서를 변경했어요 · Ctrl/Cmd+Z로 되돌릴 수 있어요');
+    showToast(sourceIds.length > 1
+      ? `${sourceIds.length}개 문제를 ${Math.max(0, nextIndex) + 1}번부터 함께 이동했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`
+      : `문제를 ${Math.max(0, nextIndex) + 1}번으로 이동했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`);
+    return true;
   };
-  const removeItem = (id) => {
+  const removeItem = async (id, options = {}) => {
+    const requestedIds = Array.isArray(options?.problemIds) && options.problemIds.length
+      ? options.problemIds
+      : [id];
+    const existingIdSet = new Set(items.map(item => String(item.id)));
+    const problemIds = listUnique(requestedIds.map(value => String(value)).filter(value => existingIdSet.has(value)));
+    if (!problemIds.length) return false;
     if (session) {
       if (mutating) {
         showToast('이전 변경을 적용하는 중입니다');
-        return;
+        return false;
       }
-      void mutateSession('exclude', { problemId: id });
-      return;
+      const nextSession = problemIds.length === 1
+        ? await mutateSession('exclude', { problemId: id })
+        : await mutateSession('exclude', { problemIds });
+      if (!nextSession) return false;
+      showActionToast(
+        `${problemIds.length}개 문제를 삭제했어요`,
+        '실행 취소',
+        () => { void undoMutation(); }
+      );
+      return true;
     }
-    const nextItems = reflowItemsForBoardOrder(items.filter(x => x.id !== id), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
+    const previousItems = items;
+    const previousActiveId = activeId;
+    const previousUsingMock = usingMock;
+    const previousFileName = fileName;
+    const problemIdSet = new Set(problemIds);
+    const firstRemovedIndex = items.findIndex(item => problemIdSet.has(String(item.id)));
+    const nextItems = reflowItemsForBoardOrder(items.filter(
+      x => !problemIdSet.has(String(x.id))
+    ), DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
     setItems(nextItems);
-    if (activeId === id) {
-      setActiveId(nextItems[0]?.id || null);
+    if (problemIdSet.has(String(activeId))) {
+      const fallbackIndex = Math.max(0, Math.min(firstRemovedIndex, nextItems.length - 1));
+      setActiveId(nextItems[fallbackIndex]?.id || null);
     }
     if (!session && usingMock && nextItems.length === 0) {
       setUsingMock(false);
       setFileName('새 세션');
     }
     setPublished(false);
+    showActionToast(
+      `${problemIds.length}개 문제를 삭제했어요`,
+      '실행 취소',
+      () => {
+        setItems(previousItems);
+        setActiveId(previousActiveId);
+        setUsingMock(previousUsingMock);
+        setFileName(previousFileName);
+        setSelectedProblemIds(new Set(problemIds));
+        setActionToast(null);
+        showToast('삭제를 취소했어요');
+      }
+    );
+    return true;
   };
   const addMockSample = () => {
     if (session) {
@@ -10028,33 +17920,62 @@ function App(){
     triggerUpload();
   };
 
-  const onConfirm = (id, options = {}) => {
+  const onConfirm = async (id, options = {}) => {
+    if (mutatingRef.current) {
+      showToast('이전 변경을 적용하는 중입니다');
+      return false;
+    }
     const explicitProblemIds = Array.isArray(options.problemIds) ? options.problemIds : null;
     const targetIds = explicitProblemIds?.length
       ? explicitProblemIds
       : options.bulk ? items.map(item => item.id) : [id];
     const confirmedIds = new Set(targetIds.filter(Boolean));
-    if (!confirmedIds.size) return;
-    const nextItemsForSnapshot = items.map(item => (
-      confirmedIds.has(item.id) ? confirmedItemState(item) : item
-    ));
-    const confirmedSession = markSessionProblemsConfirmed(session, confirmedIds);
-    const nextSession = confirmedSession
-      ? (materializeSessionForItems(confirmedSession, nextItemsForSnapshot, fileName, boardColumns) || confirmedSession)
+    if (!confirmedIds.size) return false;
+    const processingStep = options.processingStep != null
+      ? normalizeProcessingStep(options.processingStep)
       : null;
-    setItems(prev => prev.map(item => (
-      confirmedIds.has(item.id) ? confirmedItemState(item) : item
-    )));
-    setSession(prev => nextSession || markSessionProblemsConfirmed(prev, confirmedIds));
-    if (nextSession) {
-      postRestore(nextSession).catch(e => console.warn('[board] confirm persist failed:', e.message));
+    const confirmationItems = processingStep
+      ? items.map(item => confirmedIds.has(item.id) ? { ...item, step: processingStep } : item)
+      : items;
+    if (!session) {
+      const allItemsConfirmedByBulk = options.bulk
+        && items.length > 0
+        && items.every(item => confirmedIds.has(item.id));
+      setItems(prev => prev.map(item => (
+        confirmedIds.has(item.id)
+          ? confirmedItemState(processingStep ? { ...item, step: processingStep } : item)
+          : item
+      )));
+      setPublished(false);
+      if (allItemsConfirmedByBulk) {
+        setReviewFocus(null);
+        requestViewChange('board', { force: true });
+        showToast('일괄 확인 완료 · 칠판 미리보기로 이동했어요');
+      } else {
+        showToast(options.bulk
+          ? `전체 ${confirmedIds.size}개 확인 완료`
+          : `"${items.find(i=>i.id===id)?.name}" 확인 완료`);
+      }
+      return true;
     }
-    setPublished(false);
-    if (options.bulk) {
-      showToast(`전체 ${confirmedIds.size}개 확인 완료`);
-      return;
+    if (processingStep) {
+      setItems(confirmationItems);
+      setPublished(false);
     }
-    showToast(`"${items.find(i=>i.id===id)?.name}" 확인 완료`);
+    const beforeFlow = reviewFlowState(sessionReviewSummary(session));
+    const nextSession = processingStep
+      ? await mutateSession('confirm', { problemIds: [...confirmedIds] }, { items: confirmationItems })
+      : await mutateSession('confirm', { problemIds: [...confirmedIds] });
+    if (!nextSession) return false;
+    const afterFlow = reviewFlowState(sessionReviewSummary(nextSession));
+    if (afterFlow.complete && (beforeFlow.remaining > 0 || options.bulk)) {
+      setReviewFocus(null);
+      requestViewChange('board', { force: true });
+      showToast(options.bulk
+        ? '일괄 확인 완료 · 칠판 미리보기로 이동했어요'
+        : '검수 완료 · 칠판 미리보기로 이동했어요');
+    }
+    return nextSession;
   };
 
   const markClassinReviewComplete = useCallback(async () => {
@@ -10081,12 +18002,38 @@ function App(){
       showToast('내보낼 자료가 없습니다. 먼저 파싱해 주세요.');
       return;
     }
-    const sessionIds = new Set(session.problems.map(p => p.id));
-    const currentIds = items.map(i => i.id);
-    const order = currentIds.filter(id => sessionIds.has(id));
-    const excluded = [...sessionIds].filter(id => !currentIds.includes(id));
-    const itemsForPublish = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns);
-    const sessionForPublish = materializeSessionForItems(session, itemsForPublish, fileName, boardColumns) || session;
+    if (publishInFlightRef.current) {
+      showToast('이미 EDB를 제작 중입니다');
+      return;
+    }
+    if (operationRecovery?.conflict) {
+      showToast('오류 안내에서 최신 상태를 먼저 불러오거나 현재 배치를 안전하게 합쳐 주세요');
+      return;
+    }
+    if (normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN) {
+      showToast('기존 다중 칸 배치는 그대로 저장할 수 있습니다. 현재 EDB 제작은 1칸 배치만 지원하므로 이 자료의 제작은 실행하지 않았습니다.');
+      return;
+    }
+    clearOperationRecovery();
+    const publishRequest = publishRequestDraft || prepareSessionPublishRequest(
+      session,
+      items,
+      fileName,
+      boardColumns,
+      layoutGapMode
+    );
+    if (!publishRequest) {
+      showToast('현재 배치로 제작 요청을 준비하지 못했습니다.');
+      return;
+    }
+    const {
+      sessionIds,
+      order,
+      excluded,
+      itemsForPublish,
+      sessionForPublish,
+      placements,
+    } = publishRequest;
     const publishReviewSummary = sessionReviewSummary(sessionForPublish);
     const passageSourceReuseIssues = findPassageGroupSourceReuse(sessionForPublish.problems || [])
       .filter(issue => issue.type === 'passage_group_source_reuse');
@@ -10124,7 +18071,11 @@ function App(){
       );
       return;
     }
-    const placementOverlapIssues = findBoardPlacementOverlaps(items, { sessionProblemIds: sessionIds })
+    const placementOverlapIssues = findBoardPlacementOverlaps(itemsForPublish, {
+      sessionProblemIds: sessionIds,
+      layoutGapMode,
+      resolvedPlacements: true,
+    })
       .filter(issue => issue.type === 'board_placement_overlap');
     if (placementOverlapIssues.length > 0) {
       const firstIssue = placementOverlapIssues[0];
@@ -10144,17 +18095,8 @@ function App(){
         return;
       }
     }
-    const placements = Object.fromEntries(
-      itemsForPublish
-        .filter(item => sessionIds.has(item.id))
-        .map(item => [item.id, {
-          xRatio: normalizePlacementXRatio(item.placementXRatio),
-          yRatio: verticalPlacementRoomPages(item) > 0.001
-            ? normalizePlacementYRatio(item.placementYRatio)
-            : DEFAULT_PLACEMENT_Y_RATIO,
-          scaleRatio: normalizePlacementScaleRatio(item.placementScaleRatio, maxPlacementScaleRatio(item)),
-        }])
-    );
+    publishInFlightRef.current = true;
+    setPublishBusy(true);
     setLoading({
       label: '편집된 .edb 파일 생성 중...',
       hint: order.length === sessionIds.size
@@ -10166,23 +18108,57 @@ function App(){
       const resp = await fetch('/api/session/publish', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: JSON.stringify(withExpectedSessionRevision({
           order,
           excluded,
           placements,
           edbName: edbFileNameFromSessionName(fileName, sessionForPublish?.session_name || 'classin'),
           session: sessionForPublish,
-        }),
+        })),
       });
       const json = await readJsonResponse(resp, 'publish 실패');
       if (!resp.ok || !json.ok) {
+        if (resp.status === 404 && /no session available/i.test(String(json?.error || ''))) {
+          const missingSessionError = operationErrorFromResponse(
+            json,
+            resp,
+            'session_publish',
+            '서버의 최신 작업을 찾지 못했습니다.'
+          );
+          missingSessionError.code = 'session_missing';
+          missingSessionError.message = '서버의 최신 작업이 빈 상태로 바뀌어 현재 편집본을 바로 제작할 수 없습니다.';
+          missingSessionError.retryable = false;
+          missingSessionError.latestSession = null;
+          missingSessionError.hasLatestSessionState = true;
+          missingSessionError.recoverySteps = [
+            '빈 최신 상태를 불러와 새 원본부터 시작해 주세요.',
+            '현재 편집본이 필요하면 초기화하기 전에 버그 리포트로 오류를 보내 주세요.',
+          ];
+          try {
+            const latestState = await fetchLatestSessionState();
+            missingSessionError.latestSession = latestState.session || null;
+            missingSessionError.hasLatestSessionState = Object.prototype.hasOwnProperty.call(latestState, 'session');
+            missingSessionError.sessionRevision = Number.isInteger(Number(latestState.sessionRevision))
+              ? Number(latestState.sessionRevision)
+              : null;
+            missingSessionError.sessionEpoch = String(latestState.sessionEpoch || '').trim() || null;
+            if (latestState.session) {
+              missingSessionError.code = 'session_conflict';
+              missingSessionError.message = '제작 요청 후 서버에 더 최신 작업이 확인됐습니다.';
+            }
+          } catch (_latestStateError) {
+            // The publish 404 already proves that its server-side session was empty.
+            // Keep the conflict boundary even when the follow-up revision refresh fails.
+          }
+          throw missingSessionError;
+        }
         const blockedPublish = normalizePublishPreflightBlock(json);
         if (blockedPublish) {
           const markedSession = applyPublishPreflightIssuesToSession(sessionForPublish, blockedPublish);
           const blockedTarget = publishBlockedTarget(blockedPublish);
           if (markedSession && markedSession !== sessionForPublish) {
             setSession(markedSession);
-            setItems((markedSession.problems || []).map((problem, idx) => mapProblemToItem(problem, idx)));
+            setItems((markedSession.problems || []).map((problem, idx) => mapProblemToItem(problem, idx, markedSession)));
           }
           setReviewFocus(blockedTarget.reviewFocus);
           setView(blockedTarget.view);
@@ -10192,51 +18168,484 @@ function App(){
           );
           return;
         }
-        throw new Error(json.error || `publish 실패 (${resp.status})`);
+        throw operationErrorFromResponse(
+          json,
+          resp,
+          'session_publish',
+          `EDB 제작 실패 (${resp.status})`
+        );
       }
+      if (sessionResponseRevisionIsStale(json)) {
+        throw new Error('더 최신 작업이 완료되어 늦게 도착한 제작 결과를 적용하지 않았습니다.');
+      }
+      assertPublishResponseSession(json.session, order);
+      captureSessionRevision(json);
+      const publishedGapMode = normalizeLayoutGapMode(
+        json.session?.layoutGapMode ?? json.session?.layout_gap_mode ?? layoutGapMode
+      );
+      const publishedItems = reflowItemsForBoardOrder(
+        (json.session?.problems || []).map((problem, index) => mapProblemToItem(problem, index, json.session)),
+        DEFAULT_SLOT_HEIGHT_PAGES,
+        boardColumns,
+        publishedGapMode
+      );
       setSession(json.session);
+      setItems(publishedItems);
+      setActiveId(currentId => (
+        publishedItems.some(item => item.id === currentId) ? currentId : publishedItems[0]?.id || null
+      ));
+      setLayoutGapModeState(publishedGapMode);
       refreshSessionHistory();
       const publishSummary = json.publishSummary || json.publish_summary || json.session?.publishSummary || json.session?.publish_summary;
       const normalizedPublishSummary = normalizePublishSummary(publishSummary, json.session);
-      if (normalizedPublishSummary?.canDownload) {
-        downloadPublishSummary(normalizedPublishSummary);
-      }
       setPublished(true);
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
+      if (!normalizedPublishSummary?.canDownload) {
+        const downloadError = new Error('EDB 제작본은 저장됐지만 다운로드할 파일을 찾지 못했습니다.');
+        downloadError.code = 'publish_download_unavailable';
+        activateOperationRecovery(downloadError, '다운로드 실패', {
+          operation: 'publish_download',
+          code: downloadError.code,
+        }, {
+          kind: 'download',
+          downloadTarget: normalizedPublishSummary,
+          retryLabel: 'EDB 다운로드 다시 시도',
+        });
+        return;
+      }
+      setDownloadBusy(true);
+      let downloadResult;
+      try {
+        downloadResult = await downloadPublishSummary(normalizedPublishSummary);
+      } catch (downloadError) {
+        downloadResult = { ok: false, error: downloadError };
+      }
+      setDownloadBusy(false);
+      if (!downloadResult?.ok) {
+        const downloadError = downloadResult?.error || new Error('EDB 다운로드를 시작하지 못했습니다.');
+        downloadError.code = downloadError.code || 'publish_download_failed';
+        activateOperationRecovery(downloadError, '다운로드 실패', {
+          operation: 'publish_download',
+          code: downloadError.code,
+        }, {
+          kind: 'download',
+          downloadTarget: normalizedPublishSummary,
+          retryLabel: 'EDB 다운로드 다시 시도',
+        });
+        return;
+      }
+      clearOperationRecovery();
       showToast(`${publishLabel}로 EDB 제작 완료 · 다운로드 시작`);
     } catch (e) {
-      showSimpleErrorToast(e, '제작 실패');
+      setDownloadBusy(false);
+      activateOperationRecovery(e, '제작 실패', {
+        operation: 'session_publish',
+        code: e?.code || (isNetworkRequestError(e) ? 'publish_connection_failed' : 'publish_unknown_failed'),
+      }, {
+        kind: 'publish',
+        retryLabel: 'EDB 다시 제작',
+        localDraft: sessionForPublish,
+      });
+      setPublished(false);
+    } finally {
+      publishInFlightRef.current = false;
+      setPublishBusy(false);
+      setDownloadBusy(false);
+      setLoading(null);
+    }
+  };
+
+  const handlePublishDownload = async (target) => {
+    if (!target || downloadInFlightRef.current) return false;
+    downloadInFlightRef.current = true;
+    setDownloadBusy(true);
+    let result;
+    try {
+      result = await downloadPublishSummary(target);
+    } catch (error) {
+      result = { ok: false, error };
+    } finally {
+      downloadInFlightRef.current = false;
+      setDownloadBusy(false);
+    }
+    if (result?.ok) {
+      if (operationRecovery?.kind === 'download') clearOperationRecovery();
+      showToast('EDB 다운로드를 시작했습니다');
+      return true;
+    }
+    const error = result?.error || new Error('EDB 다운로드를 시작하지 못했습니다.');
+    error.code = error.code || 'publish_download_failed';
+    activateOperationRecovery(error, '다운로드 실패', {
+      operation: 'publish_download',
+      code: error.code,
+    }, {
+      kind: 'download',
+      downloadTarget: target,
+      retryLabel: 'EDB 다운로드 다시 시도',
+    });
+    return false;
+  };
+
+  const reopenLatestAfterPublishError = async () => {
+    const latest = recentSessions[0];
+    if (!latest?.id) {
+      showToast('열 수 있는 최근 작업이 없습니다');
+      return;
+    }
+    const recoveryDraft = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session;
+    const restored = await restoreRecentSession(latest.id, { recoveryDraft });
+    if (restored) clearOperationRecovery();
+  };
+
+  const copyLastOperationError = async () => {
+    const text = operationErrorClipboardText(lastOperationError);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast('오류 정보를 복사했습니다');
+    } catch (error) {
+      showSimpleErrorToast(error, '오류 정보 복사 실패', { operation: 'copy_operation_error' });
+    }
+  };
+
+  const openBugReportAfterOperationError = () => {
+    const snapshot = lastOperationError ? {
+      type: lastOperationError.type,
+      message: lastOperationError.message,
+      timestamp: lastOperationError.timestamp,
+      operation: lastOperationError.operation,
+      code: lastOperationError.code,
+      status: lastOperationError.status,
+      retryable: lastOperationError.retryable,
+      recoverySteps: Array.isArray(lastOperationError.recoverySteps) ? [...lastOperationError.recoverySteps] : [],
+    } : null;
+    bugReportSequenceRef.current += 1;
+    setBugReportRequest({ id: bugReportSequenceRef.current, errorSnapshot: snapshot });
+  };
+
+  const openBugReport = () => {
+    bugReportSequenceRef.current += 1;
+    const activeElement = document.activeElement;
+    const returnFocus = activeElement?.closest?.('[role="menu"]') || activeElement === document.body
+      ? document.querySelector('[aria-controls="topbar-more-menu"]') : activeElement;
+    setBugReportRequest({ id: bugReportSequenceRef.current, errorSnapshot: null, returnFocus });
+  };
+
+  const retryRecoveryOperation = () => {
+    const recovery = operationRecovery;
+    if (!recovery) return;
+    if (recovery.conflict && recovery.kind !== 'reset') {
+      showToast('먼저 최신 상태를 불러오거나 내 배치를 안전하게 합쳐 주세요');
+      return;
+    }
+    if (recovery.error?.retryable === false && !recovery.conflict) {
+      showToast('표시된 권장 조치를 먼저 적용한 뒤 다시 제작해 주세요');
+      return;
+    }
+    if (recovery.kind === 'download') {
+      void handlePublishDownload(recovery.downloadTarget);
+      return;
+    }
+    if (recovery.kind === 'recognition' || recovery.kind === 'registration') {
+      if (
+        recovery.retryTargetKey
+        && !pendingFiles.some(file => fileQueueKey(file) === recovery.retryTargetKey)
+      ) {
+        clearOperationRecovery();
+        showToast('실패한 원본 파일이 대기열에 없습니다. 파일을 다시 추가해 주세요');
+        return;
+      }
+      void processQueuedFiles(recovery.retryMode || 'register', recovery.retryTargetKey || null);
+      return;
+    }
+    if (recovery.kind === 'restore') {
+      void restoreRecentSession(recovery.restoreSessionId, {
+        recoveryDraft: recovery.recoveryDraft,
+        confirmOverwrite: false,
+      });
+      return;
+    }
+    if (recovery.kind === 'reset') {
+      if (recovery.conflict) {
+        const payload = {
+          session: recovery.conflict.latestSession || null,
+          sessionRevision: recovery.conflict.sessionRevision,
+          sessionEpoch: recovery.conflict.sessionEpoch,
+        };
+        if (!sessionResponseRevisionIsStale(payload)) captureSessionRevision(payload);
+      }
+      void resetSession();
+      return;
+    }
+    void onPublish();
+  };
+
+  const resetAfterOperationError = () => {
+    const conflict = operationRecovery?.conflict;
+    if (conflict) {
+      const payload = {
+        session: conflict.latestSession || null,
+        sessionRevision: conflict.sessionRevision,
+        sessionEpoch: conflict.sessionEpoch,
+      };
+      if (sessionResponseRevisionIsStale(payload)) {
+        showToast('충돌 안내보다 더 최신 상태가 있습니다. 새로고침 후 초기화해 주세요');
+        return;
+      }
+      captureSessionRevision(payload);
+    }
+    void resetSession();
+  };
+
+  const runRecoveryAlternative = () => {
+    const recovery = operationRecovery;
+    if (recovery?.kind === 'recognition' || recovery?.kind === 'registration') {
+      if (
+        recovery.retryTargetKey
+        && !pendingFiles.some(file => fileQueueKey(file) === recovery.retryTargetKey)
+      ) {
+        clearOperationRecovery();
+        showToast('실패한 원본 파일이 대기열에 없습니다. 파일을 다시 추가해 주세요');
+        return;
+      }
+      void processQueuedFiles(recovery.alternativeMode || 'register', recovery.retryTargetKey || null);
+      return;
+    }
+    void exportSessionImages();
+  };
+
+  const loadLatestConflictSession = () => {
+    const conflict = operationRecovery?.conflict;
+    if (!conflict) return;
+    const latestSessionIsEmpty = !conflict.latestSession;
+    const confirmMessage = latestSessionIsEmpty
+      ? '서버의 최신 상태는 빈 작업입니다. 현재 화면의 편집 내용을 닫고 빈 상태로 시작할까요?'
+      : '최신 저장 상태를 불러올까요? 충돌 전 편집 내용은 종료되고 서버의 최신 문항과 검수 상태를 유지합니다.';
+    if (!window.confirm(confirmMessage)) return;
+    const payload = {
+      session: conflict.latestSession || null,
+      sessionRevision: conflict.sessionRevision,
+      sessionEpoch: conflict.sessionEpoch,
+    };
+    if (sessionResponseRevisionIsStale(payload)) {
+      showToast('이미 더 최신 상태를 불러왔습니다');
+      return;
+    }
+    captureSessionRevision(payload);
+    historyStackRef.current = [];
+    setHistoryStack([]);
+    if (latestSessionIsEmpty) {
+      setSession(null);
+      setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
+      setItems([]);
+      setActiveId(null);
+      setUsingMock(false);
+      setFileName('새 세션');
+      setPublished(false);
+      setRecognitionReview(null);
+      setReviewFocus(null);
+      setView('board');
+      refreshSessionHistory();
+    } else {
+      applySession(conflict.latestSession);
+    }
+    clearOperationRecovery();
+    showToast(latestSessionIsEmpty
+      ? '빈 최신 상태를 불러왔습니다 · 새 원본부터 시작하세요'
+      : '최신 저장 상태를 불러왔습니다 · 이전 충돌 상태는 되돌리기에 남기지 않았습니다');
+  };
+
+  const rebaseConflictSession = async () => {
+    const recovery = operationRecovery;
+    const conflict = recovery?.conflict;
+    if (!conflict?.latestSession) return;
+    const localDraft = conflict.localDraft || materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session;
+    const rebased = rebaseSessionBoardLayout(conflict.latestSession, localDraft, boardColumns, layoutGapMode);
+    if (!rebased) {
+      showToast('합칠 수 있는 최신 상태 또는 현재 배치가 없습니다');
+      return;
+    }
+    if (!window.confirm('최신 저장 상태의 내용은 유지하고, 같은 자료의 현재 보드 순서와 배치만 합칠까요? 새 자료와 서버의 검수 내용은 보존됩니다.')) return;
+    const payload = {
+      session: conflict.latestSession,
+      sessionRevision: conflict.sessionRevision,
+      sessionEpoch: conflict.sessionEpoch,
+    };
+    if (sessionResponseRevisionIsStale(payload)) {
+      showToast('충돌 정보보다 더 최신 상태가 이미 적용됐습니다');
+      return;
+    }
+    captureSessionRevision(payload);
+    setLoading({ label: '최신 상태에 현재 배치를 안전하게 합치는 중…', startedAt: Date.now() });
+    try {
+      const restored = await postRestore(rebased);
+      const safeUndoHistory = conflictSafeUndoHistory(conflict.latestSession);
+      historyStackRef.current = safeUndoHistory;
+      setHistoryStack(safeUndoHistory);
+      applySession(restored);
+      setOperationRecoveryState(state => operationRecoveryStateTransition(state, {
+        type: 'replace',
+        recovery: state.recovery ? {
+        ...state.recovery,
+        conflict: null,
+        error: {
+          ...state.recovery.error,
+          code: 'session_rebased_ready',
+          message: '최신 저장 상태에 현재 보드 순서와 배치를 합쳤습니다.',
+          timestamp: new Date().toISOString(),
+        },
+      } : null,
+        dismissed: false,
+      }));
+      showToast('배치를 안전하게 합쳤습니다 · 작업을 다시 시도해 주세요');
+    } catch (error) {
+      activateOperationRecovery(error, '배치 합치기 실패', {
+        operation: 'session_conflict_rebase',
+        code: error?.code || 'session_rebase_failed',
+      }, {
+        ...recovery,
+        localDraft,
+      });
     } finally {
       setLoading(null);
     }
   };
 
   return (
-    <div className="app">
+    <div className="app editor-basic-mode">
       <TopBar
         fileName={fileName}
         setFileName={setFileName}
-        progress={progress}
-        processed={processed}
         total={items.length}
         onPublish={onPublish}
-        published={published}
+        published={published && !sessionEditState.dirty}
         onReset={resetSession}
         onRefresh={refreshSession}
         refreshing={refreshing}
-        canReset={(!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading}
+        canReset={initialSessionLoaded && (!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading && !resetBusy && !publishBusy && !downloadBusy && !hasRunningBackgroundJobs && !hasPendingSessionConflict}
         view={view}
-        setView={setView}
+        setView={nextView => { setMobilePane('stage'); return requestViewChange(nextView); }}
         reviewAvailable={reviewAvailable}
+        recognitionBusy={Boolean(runningRecognitionJob)}
+        pageReviewActive={Boolean(recognitionReview)}
+        operationBusy={Boolean(loading) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
+        resetBlocked={hasRunningBackgroundJobs}
+        conflictBlocked={hasPendingSessionConflict}
+        reviewAttentionCount={reviewAttentionCount}
         onUndo={undoMutation}
         canUndo={canUndo}
         onShutdown={shutdownApp}
         onExportImages={exportSessionImages}
         exportingImages={exportingImages}
         canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
+        editingActive={view === 'review' || reviewEditorActive || sessionEditState.dirty}
+        saveStateLabel={items.length ? sessionEditState.label : ''}
+        saveStateTone={sessionEditState.tone}
+        onOpenUpdateSettings={openUpdateSettings}
+        onOpenBugReport={openBugReport}
+        updateAvailable={Boolean(updateInfo?.updateAvailable)}
+        updateBusy={updateBusy || updateInstallBusy}
+        focusMode={focusMode}
+        onChangeFocusMode={setFocusMode}
+        canChangeFocusMode={view === 'board' && items.length > 0}
       />
-      <div className="main">
+      {initialSessionError && (
+        <div className="initial-session-notice" role="alert">
+          <div>
+            <strong>저장된 작업을 불러오지 못했어요</strong>
+            <p>기존 작업을 확인한 뒤 자료 처리를 시작할 수 있습니다.</p>
+            <p>{initialSessionError}</p>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button className="btn" type="button" onClick={refreshSession} disabled={refreshing}>
+              {Icon.refresh}{refreshing ? '불러오는 중…' : '다시 불러오기'}
+            </button>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={() => {
+                setInitialSessionError(null);
+                setInitialSessionLoaded(true);
+              }}
+            >
+              새 작업으로 시작
+            </button>
+          </div>
+        </div>
+      )}
+      {viewTransitionBanner && (
+        <div className="view-transition-banner" role="status" aria-live="polite">
+          {viewTransitionBanner}
+        </div>
+      )}
+      <OperationRecoveryBanner
+        recovery={operationRecoveryDismissed ? null : operationRecovery}
+        onRetry={retryRecoveryOperation}
+        onRestore={() => void reopenLatestAfterPublishError()}
+        onExport={runRecoveryAlternative}
+        onReset={resetAfterOperationError}
+        onReport={openBugReportAfterOperationError}
+        onCopy={() => void copyLastOperationError()}
+        onDismiss={() => setOperationRecoveryState(state => operationRecoveryStateTransition(state, { type: 'dismiss' }))}
+        onLoadLatest={loadLatestConflictSession}
+        onRebase={() => void rebaseConflictSession()}
+        retryBusy={Boolean(loading) || publishBusy || hasRunningQueueRecognition}
+        restoreBusy={Boolean(restoringSessionId)}
+        exportBusy={exportingImages}
+        resetBusy={resetBusy}
+        resetBlocked={hasRunningBackgroundJobs}
+        downloadBusy={downloadBusy}
+        canRestore={Boolean(recentSessions[0]?.id)}
+        canExport={!!session && items.some(item => item?.id && !item.excluded)}
+      />
+      <BugReportDialog
+        request={bugReportRequest}
+        draft={bugReportDraft}
+        onDraftChange={setBugReportDraft}
+        onClose={() => setBugReportRequest(null)}
+        context={{
+          view,
+          settingsTab: bugReportRequest?.errorSnapshot ? 'recovery-dialog' : 'support-dialog',
+          inputIntent: normalizeInputIntent(inputIntent),
+          reviewStatus: published ? 'published' : session ? 'session' : 'empty',
+          itemCount: items.length,
+          pendingCount: pendingFiles.length,
+          hangul: {
+            status: runtimeDiagnostics?.hangul?.status || 'unknown',
+            summary: hangulRuntimeSummary(runtimeDiagnostics?.hangul || null),
+          },
+        }}
+      />
+      <div
+        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed && !reviewEditorActive ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? 'home-mode' : ''} ${view === 'review' && reviewEditorActive ? 'review-editor-focus' : ''}`}
+        style={{ '--focus-board-color': t.boardColor }}
+        data-mobile-pane={mobilePane}
+        inert={hasPendingSessionConflict ? '' : undefined}
+      >
+        {(items.length > 0 || pendingFiles.length > 0) && (
+          <nav className="mobile-workspace-nav" aria-label="작업 영역 선택">
+            {[
+              ['rail', `자료 목록 ${items.length + pendingFiles.length}`],
+              ['stage', view === 'review' ? '검수 화면' : '칠판 화면'],
+              ['panel', '편집·설정'],
+            ].map(([pane, label]) => (
+              <button
+                key={pane}
+                className={mobilePane === pane ? 'on' : ''}
+                type="button"
+                aria-pressed={mobilePane === pane}
+                aria-controls={pane === 'rail' ? 'workspace-rail' : pane === 'panel' ? 'workspace-panel' : 'workspace-stage'}
+                disabled={reviewEditorActive && pane !== 'stage'}
+                onClick={() => setMobilePane(pane)}
+              >{label}</button>
+            ))}
+          </nav>
+        )}
         <ItemsRail
+          editScope={reviewEditScope}
+          collapsed={reviewEditorActive ? false : effectiveRailCollapsed}
+          onToggleCollapsed={focusEditorActive ? () => setFocusRailExpanded(previous => !previous) : toggleLeftRailCollapsed}
+          session={session}
           items={items}
           activeId={activeId}
           setActive={selectBoardItem}
@@ -10251,15 +18660,36 @@ function App(){
           removePendingFile={removePendingFile}
           clearPendingFiles={clearPendingFiles}
           processQueuedFiles={processQueuedFiles}
-          queueBusy={!!loading || hasRunningQueueRecognition}
-          aiAvailable={!!userSettings?.hasGeminiApiKey}
+          queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
+          aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
+          splitMode={splitMode}
+          setSplitMode={setSplitMode}
           addMockSample={addMockSample}
-          canAddDummy={!session && !loading && pendingFiles.length === 0}
+          canAddDummy={initialSessionLoaded && !session && !loading && pendingFiles.length === 0 && !hasPendingSessionConflict}
           recentSessions={recentSessions}
           restoringSessionId={restoringSessionId}
+          recentSessionRestoreBlocked={!initialSessionLoaded || Boolean(loading) || refreshing || mutating || hasRunningBackgroundJobs || hasPendingSessionConflict}
           onRestoreRecentSession={restoreRecentSession}
+          onDownloadPublish={target => void handlePublishDownload(target)}
+          publishDownloadBusy={downloadBusy}
           onDownloadItemImage={downloadItemImage}
           downloadingItemId={downloadingItemId}
+          reorderBusy={mutating}
+          moveFeedback={moveFeedback}
+          selectedItemIds={selectedProblemIds}
+          setSelectedItemIds={setSelectedProblemIds}
+          onApplySelectedStep={applySelectedStep}
+          onClassifySelected={classifySelected}
+          onConfirmSelected={problemIds => onConfirm(null, { problemIds, bulk: true })}
+          onDownloadSelected={exportSelectedImages}
+          onReextractSharedPassages={reextractSharedPassagesFromSession}
+          canReextractSharedPassages={
+            !!session
+            && !usingMock
+            && reusableSessionSourcePaths.length > 0
+            && !loading
+          }
+          reextractSharedPassagesBusy={hasRunningSessionRecognition}
         />
         {view === 'review' ? (
           <ReviewStage
@@ -10269,13 +18699,26 @@ function App(){
             setActive={selectBoardItem}
             mutateSession={mutateSession}
             retryAiSession={retryAiSession}
-            mutating={mutating}
-            aiAvailable={!!userSettings?.hasGeminiApiKey}
+            mutating={mutating || hasPendingSessionConflict}
+            aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
             aiBusy={hasRunningSessionRecognition}
             onConfirm={onConfirm}
             reviewFocus={reviewFocus}
             onEnhanceImage={enhanceImageSession}
             imageEnhanceBusy={hasRunningImageEnhance}
+            onEditorModeChange={setReviewEditorActive}
+            onEditScopeChange={setReviewEditScope}
+            onOpenBoard={() => { setMobilePane('stage'); return requestViewChange('board'); }}
+            selectedIds={selectedProblemIds}
+            setSelectedIds={setSelectedProblemIds}
+            reviewUi={reviewUi}
+            setReviewUi={setReviewUi}
+            onRecognizeSession={recognizeCurrentSession}
+            canRecognizeSession={canRecognizeSession}
+            recognitionDisabledReason={recognitionDisabledReason}
+            sourcePageCount={sourcePageCount}
+            sessionEditState={sessionEditState}
+            onManualSplitFlowDone={finishManualSplitFlow}
           />
         ) : (
           <BoardStage
@@ -10284,59 +18727,126 @@ function App(){
             setActive={selectBoardItem}
             boardColor={t.boardColor}
             boardColumns={boardColumns}
+            layoutGapMode={layoutGapMode}
             fileName={fileName}
             addSample={addSample}
             setPlacement={setPlacement}
             reorder={reorder}
+            reducePlacementGap={reducePlacementGap}
+            interactionBusy={mutating || sessionEditState.busy || Boolean(loading) || hasPendingSessionConflict}
+            focusMode={focusEditorActive}
+            panelCollapsed={focusPanelCollapsed}
+            panelReopenRef={focusPanelReopenRef}
+            onOpenPanel={() => { setFocusPanelCollapsed(false); window.requestAnimationFrame(() => document.querySelector('#workspace-panel [role="tab"][aria-selected="true"]')?.focus()); }}
+            reviewAttentionCount={reviewAttentionCount}
+            onOpenPendingReview={() => requestViewChange('review', { beforeCommit: () => {
+              const pending = sessionReviewSummary(session).reviewTargets.filter(target => target.status !== 'normal');
+              setMobilePane('stage');
+              setReviewFocus({ filter: 'all', source: 'focus-pending-review',
+                scopeProblemIds: pending.filter(target => target.type === 'problem').flatMap(target => target.problemIds),
+                scopePageIds: pending.filter(target => target.type === 'page').map(target => target.pageId),
+                problemIds: pending.find(target => target.type === 'problem')?.problemIds || [],
+              });
+              setReviewUi(previous => ({ ...previous, filter: 'all', riskFilter: null, scrollTop: 0 }));
+            } })}
+            moveFeedback={moveFeedback}
+            selectedIds={selectedProblemIds}
+            setSelectedIds={setSelectedProblemIds}
+            savedScrollTop={boardScrollTop}
+            onSaveScrollTop={setBoardScrollTop}
+            recentSessions={recentSessions}
+            onRestoreRecentSession={restoreRecentSession}
+            restoringSessionId={restoringSessionId}
+            recentSessionRestoreBlocked={!initialSessionLoaded || Boolean(loading) || refreshing || mutating || hasRunningBackgroundJobs || hasPendingSessionConflict}
+            handleFiles={handleFiles}
+            triggerUpload={triggerUpload}
+            addMockSample={addMockSample}
+            canAddDummy={initialSessionLoaded && !session && !loading && pendingFiles.length === 0 && !hasPendingSessionConflict}
+            runtimeDiagnostics={runtimeDiagnostics}
+            aiEnabled={aiEnabled}
+            userSettings={userSettings}
+            onRecognizeSession={recognizeCurrentSession}
+            canRecognizeSession={canRecognizeSession}
+            recognitionDisabledReason={recognitionDisabledReason}
+            sourcePageCount={sourcePageCount}
+            sessionEditState={sessionEditState}
           />
         )}
-        <SidePanel
+            <SidePanel
+          onOpenBugReport={openBugReport}
+          onRevealPanel={revealSidePanel}
+          focusMode={focusEditorActive}
+          onToggleFocusPanel={() => { setFocusPanelCollapsed(true); window.requestAnimationFrame(() => focusPanelReopenRef.current?.focus()); }}
+          emptyHome={view === 'board' && !items.length && !pendingFiles.length}
+          homeUpdateOpen={homeUpdateOpen}
+          onCloseHomeUpdate={() => setHomeUpdateOpen(false)}
           item={active}
           items={items}
           activeIndex={activeIndex}
+          setActive={selectBoardItem}
           setStep={setStep}
           applyToAll={applyToAll}
           bulk={bulk}
           setBulk={setBulk}
           setPlacement={setPlacement}
+          setPlacements={setPlacements}
+          reducePlacementGap={reducePlacementGap}
+          undoPlacementGap={undoPlacementGap}
+          canUndoPlacementGap={placementGapUndoCount > 0}
+          savePlacement={savePlacement}
           mutateSession={mutateSession}
           mutating={mutating}
           boardColumns={boardColumns}
           setBoardColumns={v => setTweak('boardColumns', v)}
+          layoutGapMode={layoutGapMode}
+          setLayoutGapMode={updateLayoutGapMode}
+          resetPlacementGaps={resetPlacementGaps}
           boardColor={t.boardColor}
-          setBoardColor={v => setTweak('boardColor', v)}
-          accent={t.accent}
-          setAccent={v => setTweak('accent', v)}
+          setBoardColor={v => { setTweak('boardColor', v); writeStoredPreference(BOARD_COLOR_KEY, v); }}
+          darkMode={t.dark}
+          onToggleDarkMode={v => { setTweak('dark', v); writeStoredPreference(DARK_MODE_KEY, v); }}
           onConfirm={onConfirm}
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}
+          lastOperationError={lastOperationError}
           onSaveGeminiKey={onSaveGeminiKey}
-          onSaveOpenAiKey={onSaveOpenAiKey}
           onEnhanceImage={enhanceImageSession}
           imageEnhanceBusy={hasRunningImageEnhance}
           aiEnabled={aiEnabled}
-          setAiEnabled={setAiEnabled}
+          onToggleAi={onToggleAi}
+          aiToggleBusy={aiToggleBusy}
           inputIntent={inputIntent}
-          setInputIntent={setInputIntent}
-          onRecognizeSession={recognizeCurrentSession}
-          canRecognizeSession={!!session && pendingFiles.length === 0 && !!userSettings?.hasGeminiApiKey && !mutating && !hasRunningSessionRecognition}
           session={session}
+          sessionEditState={sessionEditState}
           published={published}
+          publishPlan={publishPlan}
+          publishPlanBusy={publishPlanBusy}
+          publishPlanFailed={publishPlanFailed}
           onClassinReviewComplete={markClassinReviewComplete}
+          onDownloadPublish={target => void handlePublishDownload(target)}
+          publishDownloadBusy={downloadBusy}
           onExportImages={exportSessionImages}
           exportingImages={exportingImages}
           canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
           updateInfo={updateInfo}
+          updatePanelRequest={updatePanelRequest}
           updateBusy={updateBusy}
+          updateInstallBusy={updateInstallBusy}
           onCheckUpdate={checkForUpdates}
           onOpenUpdate={openUpdatePage}
+          onInstallUpdate={installUpdateVersion}
           view={view}
           pendingFile={selectedPendingFile}
-          pendingFileKey={selectedPendingFileKey}
+          pendingFileCount={pendingFiles.length}
+          pendingImageOnly={isImageOnlyFileBatch(pendingFiles)}
           processQueuedFiles={processQueuedFiles}
-          queueBusy={!!loading || hasRunningQueueRecognition}
+          queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
           onPendingPreviewError={showPendingPreviewError}
-        />
+          splitMode={splitMode}
+          setSplitMode={setSplitMode}
+          triggerUpload={triggerUpload}
+          addSample={addSample}
+            />
       </div>
 
       <BackgroundJobsPanel
@@ -10350,16 +18860,63 @@ function App(){
         onCancel={cancelBackgroundJob}
       />
 
-      <RecognitionReviewModal
-        review={recognitionReview}
-        confirming={confirmingRecognition}
-        onConfirm={confirmRecognitionReview}
-        onCancel={cancelRecognitionReview}
-      />
-
       <TooltipLayer />
 
-      {toast && <div className="toast">{Icon.check}<span>{toast}</span></div>}
+      {toast && (() => {
+        const isError = typeof toast === 'object' && toast !== null ? toast.type === 'error' : false;
+        const message = typeof toast === 'object' && toast !== null ? (toast.message || '') : String(toast || '');
+        return (
+          <div
+            className={`toast ${isError ? 'toast-error' : ''}`}
+            role={isError ? 'alert' : 'status'}
+            aria-live={isError ? 'assertive' : 'polite'}
+            aria-atomic="true"
+          >
+            {isError ? Icon.alert : Icon.check}
+            <span>{message}</span>
+          </div>
+        );
+      })()}
+      {actionToast && (
+        <div className="undo-toast" role="status" aria-live="polite" aria-atomic="true">
+          <span className="undo-toast-copy">{actionToast.message}</span>
+          <button
+            className="undo-toast-action"
+            type="button"
+            onClick={() => {
+              if (actionToastTimerRef.current) {
+                window.clearTimeout(actionToastTimerRef.current);
+                actionToastTimerRef.current = null;
+              }
+              const action = actionToast.onAction;
+              setActionToast(null);
+              try {
+                action?.();
+              } catch (actionErr) {
+                console.error('[undo-toast] action error:', actionErr);
+                showToast('되돌리기 실행 중 오류가 발생했습니다', 'error');
+              }
+            }}
+            disabled={mutating}
+          >
+            {actionToast.actionLabel}
+          </button>
+          <button
+            className="undo-toast-close"
+            type="button"
+            aria-label="닫기"
+            onClick={() => {
+              if (actionToastTimerRef.current) {
+                window.clearTimeout(actionToastTimerRef.current);
+                actionToastTimerRef.current = null;
+              }
+              setActionToast(null);
+            }}
+          >
+            {Icon.close}
+          </button>
+        </div>
+      )}
 
       <input
         ref={fileInputRef}
@@ -10384,7 +18941,6 @@ function App(){
         <TweakColor label="강조색" value={t.accent} options={ACCENTS} onChange={v => setTweak('accent', v)} />
         <TweakSection label="칠판" />
         <TweakColor label="칠판 색" value={t.boardColor} options={BOARD_COLORS} onChange={v => setTweak('boardColor', v)} />
-        <TweakRadio label="한 줄 자료 수" value={String(t.boardColumns)} options={['1','2','3']} onChange={v => setTweak('boardColumns', parseInt(v))} />
       </TweaksPanel>
     </div>
   );
