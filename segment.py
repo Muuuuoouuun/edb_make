@@ -3457,7 +3457,7 @@ def _dark_numeric_problem_marker_component_offsets(
         # bold italic two-digit numbers ("25.") touch into one component
         and 2 <= component["width"] <= (40 if component["height"] >= 18 else 28)
         and 6 <= component["height"] <= 46
-        and 8 <= component["area"] <= 320
+        and 8 <= component["area"] <= (420 if component["width"] > 28 else 320)
     ]
     dot_like = [
         component
@@ -4034,7 +4034,7 @@ def _starts_after_white_space(ink_rows: Any, top: int, gap_px: int, ink_limit: i
     above the first question number.  Prose is packed line after line.
     """
     row = top - 3
-    for line_count in range(3):
+    for line_count in range(4):
         blank = 0
         while row > 0 and int(ink_rows[row]) <= ink_limit:
             blank += 1
@@ -4046,15 +4046,23 @@ def _starts_after_white_space(ink_rows: Any, top: int, gap_px: int, ink_limit: i
         # a box border / rule right above closes the previous block
         if rule_ink and blank >= 4 and int(ink_rows[row]) >= rule_ink:
             return True
-        if line_count == 2:
+        if line_count == 3:
             return False
         # climb over the text line above (dense rows only, so a packed
         # paragraph is not climbed through its sparse inter-line rows)
         dense = max(ink_limit + 1, line_ink)
+        sparse_steps = 0
+        while row > 0 and ink_limit < int(ink_rows[row]) <= dense and sparse_steps < 4:
+            row -= 1
+            sparse_steps += 1
         if int(ink_rows[row]) <= dense:
             return False
         while row > 0 and int(ink_rows[row]) > dense:
             row -= 1
+        sparse_steps = 0
+        while row > 0 and ink_limit < int(ink_rows[row]) <= dense and sparse_steps < 4:
+            row -= 1
+            sparse_steps += 1
     return False
 
 
