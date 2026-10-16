@@ -14,7 +14,7 @@ from typing import Any
 DEFAULT_CONFIG: dict[str, str] = {
     "appId": "ClassInEDBMVP",
     "appName": "ClassInEDBMVP",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "updateFeedUrl": "",
     "downloadUrl": "",
     "releaseNotesUrl": "",

@@ -1101,7 +1101,7 @@ def load_app_update_config() -> dict[str, Any]:
     config: dict[str, Any] = {
         "appId": "ClassInEDBMVP",
         "appName": "ClassInEDBMVP",
-        "version": "0.2.2",
+        "version": "0.2.3",
         "updateFeedUrl": "",
         "downloadUrl": "",
         "releaseNotesUrl": "",
