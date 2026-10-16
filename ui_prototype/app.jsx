@@ -4401,19 +4401,13 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                 style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
               >
                 {/* page bands — scroll with content, one per ClassIn board page */}
+                {/* Page guides sit under the tiles: the ClassIn board scrolls
+                    continuously, so a problem crossing a page line is not cut. */}
                 {pageGuides && pageBands.map(band => (
                   <div
                     key={`band-${band.page}`}
-                    className={`page-band ${band.page % 2 === 0 ? 'is-even' : ''}`}
+                    className={`page-band ${band.page % 2 === 0 ? 'is-even' : ''} ${band.page === visibleCurrentPage ? 'is-current' : ''}`}
                     style={{ top: band.top, height: pageH }}
-                    aria-hidden="true"
-                  />
-                ))}
-                {pageGuides && pageBands.map(band => (
-                  <div
-                    key={`head-${band.page}`}
-                    className={`page-head ${band.page === visibleCurrentPage ? 'is-current' : ''} ${band.page === 1 ? 'is-first' : ''}`}
-                    style={{ top: band.top }}
                     aria-hidden="true"
                   >
                     <span className="page-head-chip">
@@ -4421,6 +4415,14 @@ function BoardStage({ items, activeId, setActive, boardColor, boardColumns, file
                       <small>{band.label}</small>
                     </span>
                   </div>
+                ))}
+                {pageGuides && pageBands.slice(1).map(band => (
+                  <div
+                    key={`head-${band.page}`}
+                    className="page-head"
+                    style={{ top: band.top }}
+                    aria-hidden="true"
+                  />
                 ))}
 
                 {columnGuides.map(guide => (

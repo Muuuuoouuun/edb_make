@@ -83,6 +83,14 @@ CLASSIN_MAX_BOARD_PAGE_COUNT = 50
 CHOICE_BOTTOM_SAFE_PADDING_PX = 44.0
 PROBLEM_CROP_TOP_SAFE_PADDING_PX = 36
 PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 52
+# Detected problem regions usually run down to the next problem, so a large
+# part of each crop is blank paper. Trim the blank rows above and below the
+# inked content (the top/bottom safe padding above is added afterwards). Width
+# is kept: every problem is drawn at the same board width, so narrowing one
+# crop would enlarge its text relative to its neighbours.
+PROBLEM_CROP_CONTENT_INK_THRESHOLD = 232
+PROBLEM_CROP_CONTENT_MARGIN_Y_PX = 6
+PROBLEM_CROP_CONTENT_MIN_TRIM_RATIO = 0.04
 PASSAGE_CROP_HORIZONTAL_SAFE_PADDING_PX = 36
 PROBLEM_EDGE_INK_SCAN_PX = 18
 PROBLEM_EDGE_INK_DARK_THRESHOLD = 236
@@ -924,6 +932,37 @@ def _trim_box_bottom_page_chrome(
     return Box.from_points(box.left, box.top, box.right, trimmed_bottom)
 
 
+def _trim_problem_crop_to_content(
+    image: Image.Image,
+    *,
+    ink_threshold: int = PROBLEM_CROP_CONTENT_INK_THRESHOLD,
+    margin_y_px: int = PROBLEM_CROP_CONTENT_MARGIN_Y_PX,
+    min_trim_ratio: float = PROBLEM_CROP_CONTENT_MIN_TRIM_RATIO,
+) -> Image.Image:
+    """Drop blank rows above and below a problem without touching any ink.
+
+    Only whole rows lighter than ``ink_threshold`` are removed, so text,
+    choices and figure lines can never be clipped, and the crop width is left
+    as detected. A tinted or scanned page whose background is darker than the
+    threshold is left unchanged.
+    """
+    if image.width <= 0 or image.height <= 0:
+        return image
+    if "A" in image.getbands():
+        mask = image.getchannel("A").point(lambda px: 255 if px > 16 else 0, mode="L")
+    else:
+        mask = image.convert("L").point(lambda px: 255 if px < ink_threshold else 0, mode="L")
+    bbox = mask.getbbox()
+    if bbox is None:
+        return image
+    _left, top, _right, bottom = bbox
+    top = max(0, top - margin_y_px)
+    bottom = min(image.height, bottom + margin_y_px)
+    if image.height - (bottom - top) <= image.height * min_trim_ratio:
+        return image
+    return image.crop((0, top, image.width, bottom))
+
+
 def _pad_problem_crop_edges(
     image: Image.Image,
     *,
@@ -1389,6 +1428,7 @@ class _ProblemAssetTask:
     horizontal_safe_padding_px: int = 0
     text_priority: bool = False
     pad_edges: bool = True
+    trim_to_content: bool = False
 
 
 @dataclass(slots=True)
@@ -1584,6 +1624,8 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
                 segment,
                 preserve_horizontal_bounds=task.preserve_horizontal_bounds,
             )
+        if task.trim_to_content:
+            segment = _trim_problem_crop_to_content(segment)
         if task.pad_edges:
             segment = _pad_problem_crop_edges(
                 segment,
@@ -4021,6 +4063,11 @@ def build_problem_entries(
                             problem_title,
                         ),
                         pad_edges=not preserve_page_as_is,
+                        trim_to_content=(
+                            not preserve_page_as_is
+                            and not passage_fragment_problem
+                            and not stitched_segment_bounds
+                        ),
                     ),
                 )
             )
@@ -4381,6 +4428,7 @@ def recrop_problem(
         )
     )
     crop = _trim_source_page_chrome(crop)
+    crop = _trim_problem_crop_to_content(crop)
     crop = _pad_problem_crop_edges(crop)
     crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(crop_path)

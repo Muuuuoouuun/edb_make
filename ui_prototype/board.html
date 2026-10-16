@@ -570,7 +570,7 @@
     position: absolute;
     left: -26px; right: -26px;
     pointer-events: none;
-    z-index: 0;
+    z-index: 1;
   }
   .page-band.is-even{
     background: rgba(244,237,224,.035);
@@ -581,10 +581,7 @@
     height: 0;
     border-top: 1px solid rgba(244,237,224,.32);
     pointer-events: none;
-    z-index: 3;
-  }
-  .page-head.is-first{
-    border-top-color: transparent;
+    z-index: 1;
   }
   .page-head-chip{
     position: absolute;
@@ -609,7 +606,7 @@
     font-size: 10.5px;
     color: rgba(244,237,224,.72);
   }
-  .page-head.is-current .page-head-chip{
+  .page-band.is-current .page-head-chip{
     border-color: rgba(158,201,240,.7);
     box-shadow: 0 0 0 2px rgba(158,201,240,.16);
   }
@@ -803,9 +800,9 @@
     background: transparent;
     border: 1px solid transparent;
     border-radius: 10px;
-    padding: 12px 14px 14px;
+    padding: 8px 10px 10px;
     display: flex; flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     cursor: grab;
     transition: transform .12s, box-shadow .12s, border-color .12s;
     position: absolute;
@@ -948,9 +945,14 @@
     flex: 1;
     min-height: 0;
     border-radius: 5px;
-    display: grid; place-items: center;
+    /* The export draws the problem from the slot's top-left corner; the rest
+       of the reserved slot stays empty board, so mirror that here. */
+    display: grid; place-items: start;
     overflow: hidden;
     position: relative;
+  }
+  .stage-tile .tile-art .tile-img{
+    object-position: left top;
   }
   .stage-tile.paper .tile-art{
     background: transparent;
@@ -1558,15 +1560,31 @@
     color: var(--ink); background: var(--surface-2);
     box-shadow: inset 0 -2px 0 var(--accent);
   }
+  /* Size the preview to the image itself (capped) instead of a fixed 4:3 box,
+     so small and wide crops are not shrunk inside wide margins. */
   .item-preview .canvas-mini{
-    aspect-ratio: 4 / 3;
+    min-height: 140px;
     background: white;
     position: relative;
     overflow: hidden;
   }
   .item-preview .canvas-mini.board{ background: var(--board); }
   .item-preview .canvas-mini .inner{
-    position: absolute; inset: 8% 8%;
+    position: relative;
+    padding: 12px;
+    display: flex;
+    justify-content: center;
+  }
+  .item-preview .canvas-mini .inner .tile-img{
+    width: 100%;
+    height: auto;
+    max-height: 420px;
+    object-fit: contain;
+  }
+  .item-preview .canvas-mini .inner svg{
+    width: 100%;
+    height: auto;
+    aspect-ratio: 4 / 3;
   }
   .item-preview .ptools{
     display: flex; gap: 4px;
@@ -4911,6 +4929,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-scaled-reflow-20260702"></script>
-<script src="app.bundle.js?v=frontend-bundle-b884587c5aa4920a8fc8ac1a7575dc2219a2395a654a1e5b213f4d14ba8718ec"></script>
+<script src="app.bundle.js?v=frontend-bundle-2027ef37262a40e68ba337dafbc0c54877be76fcf072917d5b3137b7172d631a"></script>
 </body>
 </html>
