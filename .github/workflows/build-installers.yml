@@ -7,6 +7,14 @@ on:
         description: "Release version, for example 0.1.1"
         required: true
         default: "0.2.3"
+      macos_arch:
+        description: "Native macOS package architecture"
+        required: true
+        type: choice
+        options:
+          - arm64
+          - x64
+        default: arm64
       production_release:
         description: "Require private-corpus quality, signing, and notarization gates"
         required: true
@@ -257,7 +265,7 @@ jobs:
 
   macos:
     name: macOS DMG
-    runs-on: macos-14
+    runs-on: ${{ inputs.macos_arch == 'x64' && 'macos-15-intel' || 'macos-15' }}
     needs: [quality-gate, private-quality-gate]
     if: ${{ always() && needs.quality-gate.result == 'success' && (!inputs.production_release || needs.private-quality-gate.result == 'success') }}
     timeout-minutes: 60

@@ -11,6 +11,11 @@ from image_reconstruction_backend import ImageReconstructionResult
 
 
 class TestLegacySessionWriteRoot(unittest.TestCase):
+    def setUp(self):
+        # Exercise Windows recovery rules on every CI host. Individual tests
+        # can still override this context to verify Linux/macOS behavior.
+        self.enterContext(patch.object(app_server.sys, "platform", "win32"))
+
     @staticmethod
     def _editable_session(root: Path, output_dir: Path) -> dict:
         source_path = root / "page.png"
@@ -38,7 +43,7 @@ class TestLegacySessionWriteRoot(unittest.TestCase):
     def test_managed_long_root_uses_stable_recovery_without_moving_source(self):
         with TemporaryDirectory() as raw_tmp:
             runtime_dir = Path(raw_tmp) / ".app_runtime"
-            legacy_root = runtime_dir / "outputs" / ("legacy_" + "가" * 180)
+            legacy_root = runtime_dir / "outputs" / ("legacy_" + "가" * 20 + "x" * 180)
             session = {
                 "output_dir": str(legacy_root),
                 "generated_at": "2026-08-24T12:00:00+09:00",
@@ -105,7 +110,7 @@ class TestLegacySessionWriteRoot(unittest.TestCase):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
             runtime_dir = root / ".app_runtime"
-            legacy_root = runtime_dir / "outputs" / ("legacy_" + "가" * 180)
+            legacy_root = runtime_dir / "outputs" / ("legacy_" + "가" * 20 + "x" * 180)
             session = self._editable_session(root, legacy_root)
             original_source = session["pages"][0]["sourceImagePath"]
 
@@ -143,7 +148,7 @@ class TestLegacySessionWriteRoot(unittest.TestCase):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
             runtime_dir = root / ".app_runtime"
-            legacy_root = runtime_dir / "outputs" / ("legacy_" + "다" * 180)
+            legacy_root = runtime_dir / "outputs" / ("legacy_" + "다" * 20 + "x" * 180)
             session = self._editable_session(root, legacy_root)
             original_source = session["pages"][0]["sourceImagePath"]
 
@@ -166,7 +171,7 @@ class TestLegacySessionWriteRoot(unittest.TestCase):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
             runtime_dir = root / ".app_runtime"
-            legacy_root = runtime_dir / "outputs" / ("legacy_" + "라" * 180)
+            legacy_root = runtime_dir / "outputs" / ("legacy_" + "라" * 20 + "x" * 180)
             session = self._editable_session(root, legacy_root)
             second = dict(session["problems"][0])
             second.update({
@@ -192,7 +197,7 @@ class TestLegacySessionWriteRoot(unittest.TestCase):
         with TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
             runtime_dir = root / ".app_runtime"
-            legacy_root = runtime_dir / "outputs" / ("legacy_" + "나" * 180)
+            legacy_root = runtime_dir / "outputs" / ("legacy_" + "나" * 20 + "x" * 180)
             session = self._editable_session(root, legacy_root)
             original_source = session["problems"][0]["imagePath"]
 

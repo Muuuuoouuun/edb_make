@@ -209,7 +209,28 @@ class _ProcessTreeGuard:
             return True
         except PermissionError:
             return False
-        return False
+        # An orphaned zombie can retain its process group until the host's
+        # init process reaps it, especially inside containers. It has exited
+        # and holds no files, so only live group members should block cleanup.
+        try:
+            result = subprocess.run(
+                ["ps", "-axo", "pgid=,stat="],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        if result.returncode != 0:
+            return False
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) != 2:
+                return False
+            if fields[0] == str(self.process.pid) and not fields[1].startswith("Z"):
+                return False
+        return True
 
     def wait_for_empty(self, timeout: float) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)

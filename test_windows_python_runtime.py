@@ -131,7 +131,7 @@ def test_preprocess_expands_quoted_windows_executable_env_path() -> None:
         executable = root / "rhwp.exe"
         executable.parent.mkdir(parents=True)
         executable.write_bytes(b"exe")
-        configured = '"%EDB_TEST_TOOL_ROOT%\\rhwp.exe"'
+        configured = f'"%EDB_TEST_TOOL_ROOT%{os.sep}rhwp.exe"'
 
         with (
             patch.dict(

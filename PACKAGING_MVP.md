@@ -68,6 +68,18 @@ If the local server is already running, it only opens the browser instead of sta
 ## PyInstaller Packaging
 Windows packages must be built on Windows. macOS `.app` bundles must be built on macOS.
 
+The **Build Installers** GitHub Actions workflow builds both platforms from the
+selected Git ref. `macos_arch=arm64` uses the macOS 15 Apple Silicon runner;
+`macos_arch=x64` uses the macOS 15 Intel runner. Each package contains native
+dependencies for that architecture. The artifact metadata records the actual
+architecture and commit, so choose the matching Mac download.
+
+For an internal build of a development branch, set `production_release=false`
+and leave download URLs empty. This retains the test and package validation
+gates and uploads the Windows installer and Mac DMG/ZIP as workflow artifacts.
+Public releases still require the existing corpus, licensing, signing and
+notarization gates. Internal build artifacts are not a published update feed.
+
 ### Windows `.exe`
 Build the installable Windows setup file on Windows:
 ```powershell
