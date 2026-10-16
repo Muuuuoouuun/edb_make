@@ -16,9 +16,9 @@ jobs:
         env:
           UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
           QUALITY_KEY: ${{ secrets.EDB_QUALITY_GEMINI_API_KEY }}
-          CORPUS_MANIFEST: ${{ vars.EDB_QUALITY_CORPUS_MANIFEST }}
-          CORPUS_ROOT: ${{ vars.EDB_QUALITY_CORPUS_ROOT }}
-          CORPUS_BASELINE: ${{ vars.EDB_QUALITY_CORPUS_BASELINE }}
+          CORPUS_MANIFEST: ${{ vars.EDB_QUALITY_CORPUS_MANIFEST != '' && 'configured' || '' }}
+          CORPUS_ROOT: ${{ vars.EDB_QUALITY_CORPUS_ROOT != '' && 'configured' || '' }}
+          CORPUS_BASELINE: ${{ vars.EDB_QUALITY_CORPUS_BASELINE != '' && 'configured' || '' }}
         run: |
           python3 - <<'PY'
           import os
