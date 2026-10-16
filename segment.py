@@ -4844,6 +4844,44 @@ def _segment_scan_passage_columns(
     return blocks, {"segmenter": "scan-passage-columns", "scan_passage_column_count": len(blocks)}
 
 
+def _scan_page_header_rule_bottom(image: Image.Image) -> float | None:
+    """Bottom of the page-wide rule under a scanned exam's running header."""
+    if np is None:
+        return None
+    ink = np.array(image.convert("L")) < UNCOVERED_REGION_DARK_THRESHOLD
+    height, width = ink.shape
+    limit = int(height * 0.08)
+    rows = np.where(ink[:limit].sum(axis=1) >= width * 0.6)[0]
+    if rows.size == 0:
+        return None
+    return float(rows[-1] + 1)
+
+
+def _drop_scan_page_header_blocks(image: Image.Image, blocks: list[ContentBlock]) -> list[ContentBlock]:
+    """Scans: the running header (과목명, 쪽번호, 고1 box) is page chrome.
+
+    Born-digital PDFs leave it out; on scans it became a leading region of
+    each column, one extra unit per page.  Drop blocks above the header rule
+    and start the others below it.
+    """
+    rule_bottom = _scan_page_header_rule_bottom(image)
+    if rule_bottom is None:
+        return blocks
+    kept: list[ContentBlock] = []
+    for block in blocks:
+        box = block.bbox
+        if box.bottom <= rule_bottom + 4:
+            continue
+        if box.top < rule_bottom and not block.metadata.get("visual_problem_marker"):
+            if box.bottom - rule_bottom < 40:
+                continue
+            block.bbox = Box.from_points(box.left, rule_bottom + 2, box.right, box.bottom)
+        kept.append(block)
+    for order, block in enumerate(kept):
+        block.reading_order = order
+    return kept or blocks
+
+
 def _recover_uncovered_document_regions(
     image: Image.Image,
     page_id: str,
@@ -4885,6 +4923,8 @@ def _recover_uncovered_document_regions(
     columns = _detect_pdf_visual_column_boxes(image) or [Box.from_points(0.0, 0.0, float(width), float(height))]
     regions: list[tuple[int, Box]] = []
     min_height = max(16.0, float(height) * 0.007)
+    # scans: the running header above the page-wide rule is page chrome
+    header_rule_bottom = None if column_top_continuations_only else _scan_page_header_rule_bottom(image)
     for column_index, column in enumerate(columns):
         x0 = max(0, int(column.left))
         x1 = min(width, int(column.right) + 1)
@@ -4925,6 +4965,8 @@ def _recover_uncovered_document_regions(
             ):
                 continue
             if int(np.count_nonzero(band)) < 60:
+                continue
+            if header_rule_bottom is not None and box.bottom <= header_rule_bottom + 4:
                 continue
             regions.append((column_index, box))
     if not regions:
@@ -5173,6 +5215,8 @@ def segment_page(
                 # (English/Korean passages, numbered lists): keep the previous
                 # row-band behaviour rather than over-splitting the page.
                 marker_result = None
+        if marker_result is not None and str(marker_result[1].get("segmenter") or "") == "visual-problem-markers" and str(source_metadata.get("source_type") or "").lower() == "pdf":
+            marker_result = (_drop_scan_page_header_blocks(image, marker_result[0]), marker_result[1])
         if marker_result is not None:
             blocks, metadata = marker_result
             blocks, clipped_count = _clip_problem_blocks_at_passage_starts(blocks)
