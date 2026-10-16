@@ -2949,9 +2949,15 @@
   }
   .item .meta .name{
     font-size: 13px; font-weight: 500;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; overflow: hidden;
     color: var(--ink);
     display: flex; align-items: center; gap: 5px;
+  }
+  .item .meta .name .name-text{
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .item .meta .sub{
     min-width: 0;
@@ -2961,7 +2967,7 @@
     flex-wrap: nowrap;
     overflow: hidden;
   }
-  .item .meta .sub .tag{
+  .item .meta .tag{
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2984,17 +2990,17 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .item .meta .sub .tag.s1{ background: #fff3e0; border-color: #f4d3a3; color: #aa6516; }
-  .item .meta .sub .tag.s2{ background: #e7f4ec; border-color: #b5dec5; color: #1f7a4a; }
-  .item .meta .sub .tag.s3{ background: #e6fbf7; border-color: #9de8d8; color: #0f766e; }
-  .item .meta .sub .tag.page-chrome-tag{
+  .item .meta .tag.s1{ background: #fff3e0; border-color: #f4d3a3; color: #aa6516; }
+  .item .meta .tag.s2{ background: #e7f4ec; border-color: #b5dec5; color: #1f7a4a; }
+  .item .meta .tag.s3{ background: #e6fbf7; border-color: #9de8d8; color: #0f766e; }
+  .item .meta .tag.page-chrome-tag{
     background: rgba(213,72,72,.1);
     border-color: rgba(213,72,72,.28);
     color: var(--danger);
     font-family: 'Pretendard Variable', sans-serif;
     font-weight: 800;
   }
-  .item .meta .sub .tag.status-tag{
+  .item .meta .tag.status-tag{
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3047,9 +3053,9 @@
     border-color: rgba(31,122,74,.18);
     color: #1f7a4a;
   }
-  body.dark .item .meta .sub .tag.s1{ background: #3a2a14; border-color: #5a3f1c; color: #f0b97a; }
-  body.dark .item .meta .sub .tag.s2{ background: #163525; border-color: #245a3e; color: #5fc28d; }
-  body.dark .item .meta .sub .tag.s3{ background: #0f332f; border-color: #1f6f66; color: #61d7c7; }
+  body.dark .item .meta .tag.s1{ background: #3a2a14; border-color: #5a3f1c; color: #f0b97a; }
+  body.dark .item .meta .tag.s2{ background: #163525; border-color: #245a3e; color: #5fc28d; }
+  body.dark .item .meta .tag.s3{ background: #0f332f; border-color: #1f6f66; color: #61d7c7; }
   .item .actions{
     position: absolute;
     top: 50%;
@@ -4929,6 +4935,6 @@
 <script src="review_filters.js?v=passage-filter-20260614"></script>
 <script src="publish_summary.js?v=layout-diagnostics-edb-split-20260702"></script>
 <script src="publish_guard.js?v=preflight-scaled-reflow-20260702"></script>
-<script src="app.bundle.js?v=frontend-bundle-2027ef37262a40e68ba337dafbc0c54877be76fcf072917d5b3137b7172d631a"></script>
+<script src="app.bundle.js?v=frontend-bundle-30c04743f401265d422ae81674f54a0604836e487b2b584ecf2f33c900f32e24"></script>
 </body>
 </html>

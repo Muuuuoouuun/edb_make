@@ -314,7 +314,8 @@ def _default_processing_step_for_problem(problem: ProblemUnit) -> str:
         return _normalize_processing_step(raw_step)
     if _is_page_as_is_problem(problem):
         return PROCESSING_STEP_RECONSTRUCT
-    return PROCESSING_STEP_RAW
+    # 2단계(원문 보존) is the default processing for detected problems.
+    return PROCESSING_STEP_CHALK
 
 
 def _is_page_as_is_problem(problem: ProblemUnit) -> bool:

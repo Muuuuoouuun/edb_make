@@ -3883,14 +3883,14 @@ function ItemsRail({
                   className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
                   title={it.statusReason || it.statusLabel}
                 />
-                {problemDisplayName(it, i)}
-              </div>
-              <div className="sub">
+                <span className="name-text">{problemDisplayName(it, i)}</span>
                 {it.step === 's1' && <span className="tag s1">1단계</span>}
                 {it.step === 's2' && <span className="tag s2">보존</span>}
                 {it.step === 's3' && <span className="tag s3">고화질</span>}
                 {it.step === 'raw' && <span className="tag">대기</span>}
                 {hasPageChrome && <span className="tag page-chrome-tag">페이지 장식</span>}
+              </div>
+              <div className="sub">
                 <span className="source-label" title={problemSourceLabel(it)}>{problemSourceLabel(it)}</span>
               </div>
             </div>

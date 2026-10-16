@@ -4771,6 +4771,21 @@ class TestEdbPublishFlow(unittest.TestCase):
             self.assertLess(left_band_dark, 20)
             self.assertLess(bottom_blue, 10)
 
+    def test_detected_problems_default_to_step2_and_page_as_is_to_step3(self):
+        from structured_schema import ProblemUnit, Subject
+
+        detected = ProblemUnit(unit_id="p-1", subject=Subject.MATH, title="1.")
+        page_as_is = ProblemUnit(
+            unit_id="p-2", subject=Subject.MATH, title="page", metadata={"input_intent": "page-as-is"}
+        )
+        explicit_raw = ProblemUnit(
+            unit_id="p-3", subject=Subject.MATH, title="3.", metadata={"processing_step": "raw"}
+        )
+
+        self.assertEqual(problem_board.PROCESSING_STEP_CHALK, problem_board._default_processing_step_for_problem(detected))
+        self.assertEqual(problem_board.PROCESSING_STEP_RECONSTRUCT, problem_board._default_processing_step_for_problem(page_as_is))
+        self.assertEqual(problem_board.PROCESSING_STEP_RAW, problem_board._default_processing_step_for_problem(explicit_raw))
+
     def test_problem_crop_trim_removes_blank_rows_but_keeps_width_and_ink(self):
         image = Image.new("RGB", (600, 500), "white")
         draw = ImageDraw.Draw(image)
