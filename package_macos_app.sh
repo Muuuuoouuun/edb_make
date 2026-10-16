@@ -423,7 +423,7 @@ import sys
 from pathlib import Path
 
 config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(str(config.get("version") or "0.2.3"))
+print(str(config.get("version") or "0.2.4"))
 PY
 )"
 

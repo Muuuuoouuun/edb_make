@@ -8,7 +8,7 @@
   #define AppPublisher "ClassIn EDB"
 #endif
 #ifndef AppVersion
-  #define AppVersion "0.2.3"
+  #define AppVersion "0.2.4"
 #endif
 #ifndef SourceDir
   #define SourceDir "..\..\dist\ClassInEDBMVP"

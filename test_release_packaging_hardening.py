@@ -29,12 +29,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class TestReleaseVersionConsistency(unittest.TestCase):
-    def test_release_version_defaults_match_0_2_3(self) -> None:
+    def test_release_version_defaults_match_0_2_4(self) -> None:
         version = json.loads(
             (PROJECT_ROOT / "app_update_config.json").read_text(encoding="utf-8")
         )["version"]
 
-        self.assertEqual("0.2.3", version)
+        self.assertEqual("0.2.4", version)
         expected_literal = f'"version": "{version}"'
         self.assertIn(expected_literal, (PROJECT_ROOT / "app_server.py").read_text(encoding="utf-8"))
         self.assertIn(
