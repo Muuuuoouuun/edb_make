@@ -3574,8 +3574,6 @@ def _dark_numeric_problem_marker_component_offsets(
             leftmost = previous_digit
         if leftmost["x"] > 50:
             continue
-        if __import__("os").environ.get("EDB_MARKER_DEBUG"):
-            print("MARKER", top, digit, leftmost, dot)
         candidates.append((leftmost["x"], min(leftmost["y"], dot["y"])))
 
     if not candidates:
@@ -3586,7 +3584,8 @@ def _dark_numeric_problem_marker_component_offsets(
     # annotations indented further are not problem numbers.
     # the running page number / header in the top strip is not a margin
     header_limit = image.height * 0.01 - top
-    body_candidates = [item for item in candidates if item[1] >= header_limit] or candidates
+    footer_limit = image.height * 0.96 - top
+    body_candidates = [item for item in candidates if header_limit <= item[1] <= footer_limit] or candidates
     margin_x = min(x for x, _ in body_candidates)
     offsets = [offset for x, offset in candidates if x <= margin_x + max_digit_left]
 
@@ -4007,7 +4006,16 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
         text_projection = [0 if value >= rule_height else value for value in projection]
         peak = max(text_projection) or max(projection)
         threshold = max(2, int(peak * 0.05))
-        first_x = next((x for x, value in enumerate(text_projection) if value >= threshold), None)
+        # A centre divider within the first 30px marks the column edge; ink
+        # left of it belongs to the neighbouring column.
+        search_from = 0
+        for x in range(min(30, crop.width)):
+            if projection[x] >= rule_height:
+                search_from = x + 1
+        first_x = next(
+            (x for x in range(search_from, crop.width) if text_projection[x] >= threshold),
+            None,
+        )
         # Skip a vertical divider rule at the column edge: a run of at most
         # 6px whose ink covers 85% of the column height (box borders are shorter), followed by a gap.
         # Only a column right of the split can start with the centre divider;
