@@ -244,6 +244,47 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertNotIn("breakGroupOnOverflow", side_panel)
         self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr))", html)
 
+    def test_side_panel_tabs_support_keyboard_and_collapsible_settings(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        side_panel = source.split("function SidePanel", 1)[1]
+        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+
+        self.assertIn("SIDE_PANEL_TAB_KEY", side_panel)
+        self.assertIn("event.key === 'ArrowRight'", side_panel)
+        self.assertIn("'aria-controls': `side-tabpanel-${value}`", side_panel)
+        self.assertIn('role="tabpanel"', side_panel)
+        self.assertIn("function SettingsSection", source)
+        self.assertEqual(side_panel.count("<SettingsSection"), 6)
+        self.assertIn("항상 켜짐", side_panel)
+        self.assertIn("aria-label={BOARD_COLOR_LABELS[c] || c}", side_panel)
+        self.assertIn("onClick={() => goToItem(1)}", side_panel)
+        self.assertIn("setActive={selectBoardItem}", source.split("<SidePanel", 1)[1])
+        self.assertIn('className="queue-row-actions"', rail)
+        self.assertIn(".settings-section-hd", html)
+        self.assertIn(".queue-row-actions", html)
+
+    def test_left_rail_collapses_to_thumbnails_and_board_shows_page_bands(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        html = (PROJECT_ROOT / "ui_prototype" / "board.html").read_text(encoding="utf-8")
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+        board_stage = source.split("function BoardStage", 1)[1].split("function downloadPublishSummary", 1)[0]
+
+        self.assertIn("LEFT_RAIL_COLLAPSED_KEY", source)
+        self.assertIn("className={`main ${leftRailCollapsed ? 'left-collapsed' : ''}`}", source)
+        self.assertIn("if (collapsed) {", rail)
+        self.assertIn("rail-mini-item", rail)
+        self.assertIn("<TileImage item={it} forceMode=\"raw\" />", rail.split("if (collapsed) {", 1)[1])
+        self.assertIn("자료 목록 접기", rail)
+        self.assertIn("pageBands", board_stage)
+        self.assertIn("className={`page-head", board_stage)
+        self.assertIn("goToPage(visibleCurrentPage + 1)", board_stage)
+        self.assertIn("페이지 구분", board_stage)
+        self.assertNotIn("page-divider", board_stage)
+        self.assertIn(".main.left-collapsed", html)
+        self.assertIn(".page-head-chip", html)
+
     def test_main_controls_are_compact_by_default(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = board_document()

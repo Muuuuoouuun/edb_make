@@ -125,6 +125,7 @@ function initialTweakValues(){
     boardColor: readStoredPreference(BOARD_COLOR_KEY, TWEAK_DEFAULTS.boardColor, value => BOARD_COLORS.includes(value)),
   };
 }
+const ACCENT_LABELS = { '#2f6fed': '파랑', '#6d3df0': '보라', '#1f7a4a': '초록', '#d97757': '주황' };
 
 const SAMPLE_NAMES = [
   '원과 접선의 성질', '근의 공식 유도', '삼각비 특수각 표', '이차함수 그래프', '닮음 도형 예제',
@@ -385,6 +386,15 @@ function useStoredPreference(key, fallback, isValid){
   useEffect(() => { writeStoredPreference(key, value); }, [key, value]);
   return [value, setValue];
 }
+const SIDE_PANEL_TAB_KEY = 'edb.sidePanelTab';
+const LEFT_RAIL_COLLAPSED_KEY = 'edb.leftRailCollapsed';
+const BOARD_PAGE_GUIDES_KEY = 'edb.boardPageGuides';
+// .stage-scroll has 26px top padding; keep ~8px of the previous page visible.
+const BOARD_PAGE_SCROLL_OFFSET_PX = 18;
+const BOARD_PAGE_PROBE_PX = 48;
+const SIDE_PANEL_TABS = ['item', 'placement', 'board'];
+const SETTINGS_SECTIONS_OPEN_KEY = 'edb.settingsSectionsOpen';
+const SETTINGS_SECTIONS_DEFAULT_OPEN = { layout: true, color: true, batch: true, upload: false, keys: false, update: false };
 const EMPTY_MANUAL_CROP = Object.freeze({
   leftRatio: 0,
   rightRatio: 0,
@@ -5527,6 +5537,7 @@ function ItemsRail({
   onApplySelectedStep, onClassifySelected, onConfirmSelected, onDownloadSelected,
   onReextractSharedPassages, canReextractSharedPassages, reextractSharedPassagesBusy,
   inputIntent, setInputIntent,
+  collapsed, onToggleCollapsed,
 }){
   const dragId = useRef(null);
   const [draggingIds, setDraggingIds] = useState(() => new Set());
@@ -6160,9 +6171,72 @@ function ItemsRail({
     }
   }, [activeId]);
 
+  if (collapsed) {
+    return (
+      <div className="col left is-collapsed" id="workspace-rail" role="region" aria-label="자료 목록">
+        <div className="col-hd rail-mini-hd">
+          <button
+            className="icon-btn"
+            type="button"
+            title="자료 목록 펼치기"
+            data-tooltip="자료 목록 펼치기"
+            aria-label="자료 목록 펼치기"
+            aria-expanded="false"
+            onClick={onToggleCollapsed}
+          >{Icon.arrowRight}</button>
+        </div>
+        <div className="rail-mini-tools">
+          <button className="icon-btn" type="button" title="파일 추가" data-tooltip="PDF, 이미지, 한글 파일 추가" aria-label="파일 추가" onClick={addSample}>{Icon.upload}</button>
+          {!!pendingFiles?.length && (
+            <button
+              className="rail-mini-queue"
+              type="button"
+              title={`업로드 대기열 ${pendingFiles.length}개 · 펼쳐서 처리`}
+              data-tooltip={`업로드 대기열 ${pendingFiles.length}개 · 펼쳐서 처리`}
+              onClick={onToggleCollapsed}
+            >대기 {pendingFiles.length}</button>
+          )}
+          <span className="rail-mini-count" title={`자료 ${items.length}개`}>{items.length}</span>
+        </div>
+        <div className="items rail-mini-list" ref={railRef}>
+          {items.map((it, i) => (
+            <button
+              key={it.id}
+              type="button"
+              ref={el => {
+                if (el) itemRefs.current[it.id] = el;
+                else delete itemRefs.current[it.id];
+              }}
+              className={`rail-mini-item ${activeId === it.id ? 'active' : ''} ${hasPageChromeArtifactFlag(it) ? 'page-chrome-artifact' : ''}`}
+              aria-current={activeId === it.id ? 'true' : undefined}
+              aria-label={`${String(i + 1).padStart(2, '0')} ${problemDisplayName(it, i)}`}
+              data-tooltip={`${String(i + 1).padStart(2, '0')} · ${problemDisplayName(it, i)}`}
+              onClick={() => setActive(it.id)}
+            >
+              <span className="thumb"><TileImage item={it} forceMode="raw" /></span>
+              <span className="idx">
+                <span className={`status-dot ${reviewStatusClass(it.reviewStatus)}`} />
+                {String(i + 1).padStart(2, '0')}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="col left" id="workspace-rail" role="region" aria-label="자료 목록">
       <div className="col-hd">
+        <button
+          className="icon-btn rail-collapse-btn"
+          type="button"
+          title="자료 목록 접기"
+          data-tooltip="자료 목록 접기 · 썸네일만 표시"
+          aria-label="자료 목록 접기"
+          aria-expanded="true"
+          onClick={onToggleCollapsed}
+        >{Icon.arrowLeft}</button>
         <h2>자료 목록</h2>
         <span className="count">{filterActive ? `${visibleItemRows.length}/${items.length}` : items.length}</span>
         <div className="spacer" />
@@ -6466,53 +6540,50 @@ function ItemsRail({
                 >
                   <span className="idx">{String(index + 1).padStart(2, '0')}</span>
                   <div className="file">
-                    <div className="name">{file.name || '이름 없는 파일'}</div>
+                    <div className="name" title={file.name || '이름 없는 파일'}>{file.name || '이름 없는 파일'}</div>
                     <div className="meta">{sourceFileKindLabel(file)} · {formatBytes(file.size)}</div>
                   </div>
                   <button
-                    className="icon-btn queue-row-action"
-                    title={registerAsSingleProblem ? '이 파일의 각 페이지를 한 문제로 등록' : '이 파일을 문제 파싱 없이 페이지 PNG로 등록'}
-                    aria-label={registerAsSingleProblem ? '이 파일 한 페이지 한 문제 등록' : '이 파일 페이지 PNG 등록'}
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.pagePng}
-                  </button>
-                  <button
-                    className="icon-btn queue-row-action"
-                    title="이 파일을 인식 없이 열고 직접 문제 영역을 그리기"
-                    aria-label="이 파일 수동 쪼개기"
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.pen}
-                  </button>
-                  <button
-                    className="icon-btn queue-row-action"
-                    title={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                    aria-label={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.aiBatch}
-                  </button>
-                  <button
-                    className="icon-btn queue-row-action"
-                    title="이 파일에서 여러 문항이 함께 쓰는 공통 지문만 추출"
-                    aria-label="이 파일 공통 지문만 추출"
-                    onClick={e => { e.stopPropagation(); processQueuedFiles('passage-only', key); }}
-                    disabled={queueBusy}
-                  >
-                    {Icon.fileText}
-                  </button>
-                  <button
-                    className="icon-btn"
+                    className="icon-btn queue-row-remove"
                     title="대기열에서 제거"
+                    aria-label="대기열에서 제거"
                     onClick={e => { e.stopPropagation(); removePendingFile(key); }}
                     disabled={queueBusy}
                   >
                     {Icon.trash}
                   </button>
+                  <div className="queue-row-actions">
+                    <button
+                      className="queue-row-action"
+                      type="button"
+                      title="이 파일을 문제 파싱 없이 페이지 PNG로 등록"
+                      aria-label="이 파일 페이지 PNG 등록"
+                      onClick={e => { e.stopPropagation(); processQueuedFiles('register', key); }}
+                      disabled={queueBusy}
+                    >
+                      {Icon.pagePng}<span>PNG</span>
+                    </button>
+                    <button
+                      className="queue-row-action"
+                      type="button"
+                      title="이 파일을 인식 없이 열고 직접 문제 영역을 그리기"
+                      aria-label="이 파일 수동 쪼개기"
+                      onClick={e => { e.stopPropagation(); processQueuedFiles('manual-split', key); }}
+                      disabled={queueBusy}
+                    >
+                      {Icon.pen}<span>수동</span>
+                    </button>
+                    <button
+                      className="queue-row-action"
+                      type="button"
+                      title={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
+                      aria-label={fastImage ? '이 이미지 빠른 문항 분할' : '이 파일 문항 AI 인식'}
+                      onClick={e => { e.stopPropagation(); processQueuedFiles('recognize', key); }}
+                      disabled={queueBusy}
+                    >
+                      {Icon.aiBatch}<span>{fastImage ? '분할' : 'AI'}</span>
+                    </button>
+                  </div>
                 </div>
               );})}
             </div>
@@ -7090,6 +7161,49 @@ function BoardStage({
   useEffect(() => () => {
     onSaveScrollTop?.(boardScrollTopRef.current);
   }, [onSaveScrollTop]);
+  const [pageGuides, setPageGuides] = useState(() => {
+    try {
+      return window.localStorage?.getItem(BOARD_PAGE_GUIDES_KEY) !== '0';
+    } catch (_err) {
+      return true;
+    }
+  });
+  const togglePageGuides = () => {
+    setPageGuides(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem(BOARD_PAGE_GUIDES_KEY, next ? '1' : '0'); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  };
+  // One band per board page, labelled with the problems that start on it.
+  const pageBands = useMemo(() => {
+    const pageCount = Math.min(Math.max(1, previewEstimate.classinPageCount), 200);
+    const starts = Array.from({ length: pageCount }, () => []);
+    const covered = new Array(pageCount).fill(false);
+    layout.positions.forEach((placement, index) => {
+      if (!placement) return;
+      const startPage = Math.floor(placement.startPages / DEFAULT_SLOT_HEIGHT_PAGES + 0.001);
+      const endPage = Math.ceil((placement.startPages + placement.renderedHeightPages) / DEFAULT_SLOT_HEIGHT_PAGES - 0.001) - 1;
+      if (startPage < pageCount) starts[startPage].push(String(index + 1).padStart(2, '0'));
+      for (let page = startPage; page <= Math.min(endPage, pageCount - 1); page += 1) covered[page] = true;
+    });
+    return starts.map((numbers, index) => ({
+      page: index + 1,
+      top: index * DEFAULT_SLOT_HEIGHT_PAGES * pageH,
+      offsetPages: index * DEFAULT_SLOT_HEIGHT_PAGES,
+      label: numbers.length
+        ? `${numbers.slice(0, 3).join('·')}${numbers.length > 3 ? ` +${numbers.length - 3}` : ''}번`
+        : covered[index] ? '앞 문항 이어짐' : '판서 공간',
+    }));
+  }, [layout, pageH, previewEstimate.classinPageCount]);
+  const goToPage = (pageNumber) => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const nextPage = Math.max(1, Math.min(Math.max(1, previewEstimate.classinPageCount), pageNumber));
+    setCurrentPage(nextPage);
+    // Land just above the page line so its header chip stays in view.
+    smoothScrollTo(container, Math.max(0, (nextPage - 1) * DEFAULT_SLOT_HEIGHT_PAGES * pageH + BOARD_PAGE_SCROLL_OFFSET_PX));
+  };
 
   useLayoutEffect(() => {
     const orderChanged = Boolean(previousBoardOrder.current && previousBoardOrder.current !== boardOrderSignature);
@@ -7699,19 +7813,6 @@ function BoardStage({
     ? normalizePlacementXRatio(activePlacement.xRatio)
       * Math.max(0, contentW - activeGuideWidth)
     : 0;
-
-  // True ClassIn boundaries: one output page is exactly 1.2 internal height units.
-  const dividers = [];
-  for (let i = 1; i < Math.min(previewEstimate.classinPageCount, 200); i++){
-    const offsetPages = i * DEFAULT_SLOT_HEIGHT_PAGES;
-    dividers.push({
-      top: offsetPages * pageH,
-      classinPage: i + 1,
-      offsetPages,
-      major: (i + 1) % 5 === 0,
-    });
-  }
-
   return (
     <div className="col center workspace-stage-surface" id="workspace-stage" role="region" aria-label="칠판 미리보기">
       <div className="stage">
@@ -7753,6 +7854,13 @@ function BoardStage({
               onClick={fitActiveTileInView}
             >선택 문항 맞춤</button>
           </div>}
+          <button
+            className={`btn ghost stage-page-guide-btn ${pageGuides ? 'on' : ''}`}
+            type="button"
+            aria-pressed={pageGuides}
+            data-tooltip={pageGuides ? '페이지 구분 숨기기 · 실제 칠판처럼 보기' : '페이지 구분 보이기'}
+            onClick={togglePageGuides}
+          >{Icon.rows3} 페이지 구분</button>
         </div>
 
         <SessionRecognitionAction
@@ -7860,17 +7968,25 @@ function BoardStage({
                 ref={contentRef}
                 style={{ height: layout.totalH, '--left-zone-width': leftZonePercent }}
               >
-                {/* page boundary dividers — scroll with content */}
-                {dividers.map(divider => (
+                {/* page bands — scroll with content, one per ClassIn board page */}
+                {pageGuides && pageBands.map(band => (
                   <div
-                    key={divider.classinPage}
-                    className={`page-divider is-classin-grid ${divider.major ? 'is-major' : ''}`}
-                    style={{ top: divider.top }}
+                    key={`band-${band.page}`}
+                    className={`page-band ${band.page % 2 === 0 ? 'is-even' : ''}`}
+                    style={{ top: band.top, height: DEFAULT_SLOT_HEIGHT_PAGES * pageH }}
+                    aria-hidden="true"
+                  />
+                ))}
+                {pageGuides && pageBands.map(band => (
+                  <div
+                    key={`head-${band.page}`}
+                    className={`page-head ${band.page === visibleCurrentPage ? 'is-current' : ''} ${band.page === 1 ? 'is-first' : ''}`}
+                    style={{ top: band.top }}
                     aria-hidden="true"
                   >
-                    <span className="label" title={`이 점선부터 ClassIn ${divider.classinPage}쪽 · 누적 높이 ${divider.offsetPages.toFixed(1)}페이지 (ClassIn 1쪽 = 1.2페이지)`}>
-                      <span className="classin-page">ClassIn {divider.classinPage}쪽</span>
-                      <span className="page-offset"> · {divider.offsetPages.toFixed(1)}p</span>
+                    <span className="page-head-chip">
+                      <strong>ClassIn {band.page}쪽 · {band.offsetPages.toFixed(1)}p</strong>
+                      <small>{band.label}</small>
                     </span>
                   </div>
                 ))}
@@ -8032,11 +8148,29 @@ function BoardStage({
               </div>
             </div>
 
-            <div className="board-pageind">
-              <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
-              <span className="sep">/</span>
-              <span className="total">{String(Math.max(1, previewEstimate.classinPageCount)).padStart(2,'0')}</span>
-              <span style={{marginLeft:6, opacity:.72}}>ClassIn</span>
+            <div className="board-pageind" role="group" aria-label="칠판 페이지 이동">
+              <button
+                type="button"
+                className="pageind-btn"
+                aria-label="이전 페이지"
+                title="이전 페이지"
+                disabled={visibleCurrentPage <= 1}
+                onClick={() => goToPage(visibleCurrentPage - 1)}
+              >{Icon.arrowUp}</button>
+              <span className="pageind-count">
+                <span>{String(visibleCurrentPage).padStart(2,'0')}</span>
+                <span className="sep">/</span>
+                <span className="total">{String(Math.max(1, previewEstimate.classinPageCount)).padStart(2,'0')}</span>
+                <span style={{marginLeft:6, opacity:.6}}>ClassIn</span>
+              </span>
+              <button
+                type="button"
+                className="pageind-btn"
+                aria-label="다음 페이지"
+                title="다음 페이지"
+                disabled={visibleCurrentPage >= Math.max(1, previewEstimate.classinPageCount)}
+                onClick={() => goToPage(visibleCurrentPage + 1)}
+              >{Icon.arrowDown}</button>
             </div>
 
             <div className="vignette" />
@@ -8400,6 +8534,36 @@ function openClassinHandoff(target){
   window.open(url, '_blank', 'noopener');
 }
 
+function readSettingsSectionsOpen(){
+  try {
+    const stored = JSON.parse(window.localStorage?.getItem(SETTINGS_SECTIONS_OPEN_KEY) || 'null');
+    if (stored && typeof stored === 'object') return { ...SETTINGS_SECTIONS_DEFAULT_OPEN, ...stored };
+  } catch (_err) {
+    // Storage can be unavailable or hold stale JSON; fall back to defaults.
+  }
+  return { ...SETTINGS_SECTIONS_DEFAULT_OPEN };
+}
+
+function SettingsSection({ id, title, summary, tone, open, onToggle, children }){
+  const bodyId = `settings-section-${id}`;
+  return (
+    <section className={`settings-section ${open ? 'open' : ''}`}>
+      <button
+        type="button"
+        className="settings-section-hd"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => onToggle(id)}
+      >
+        <span className="settings-section-title">{title}</span>
+        {summary && <span className={`settings-section-summary ${tone || ''}`}>{summary}</span>}
+        <span className="settings-section-chevron" aria-hidden="true">{open ? Icon.arrowUp : Icon.arrowDown}</span>
+      </button>
+      {open && <div className="settings-section-body" id={bodyId}>{children}</div>}
+    </section>
+  );
+}
+
 function PublishPlanSummary({ plan, busy, failed }){
   if (!busy && !failed && !plan?.projectedPartCount) return null;
   return <div className="panel-session-state publish-plan-summary" role="status" aria-live="polite" aria-atomic="true">
@@ -8745,7 +8909,7 @@ function placementVerticalRoomHint(item, scaleRatio){
 }
 
 function SidePanel({
-  item, items, activeIndex,
+  item, items, activeIndex, setActive,
   setStep, applyToAll, bulk, setBulk,
   setPlacement, setPlacements, savePlacement, mutateSession, mutating,
   reducePlacementGap, undoPlacementGap, canUndoPlacementGap = false,
@@ -8768,6 +8932,14 @@ function SidePanel({
   triggerUpload, addSample, onRevealPanel,
 }){
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
+  const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
+  const toggleSettingsSection = (id) => {
+    setSettingsOpen(prev => {
+      const next = { ...prev, [id]: !prev[id] };
+      try { window.localStorage?.setItem(SETTINGS_SECTIONS_OPEN_KEY, JSON.stringify(next)); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  };
   const [previewMode, setPreviewMode] = useState('raw'); // raw | chalk | compare
   const [previewExpanded, setPreviewExpanded] = useState(true);
   const [compareX, setCompareX] = useState(50);
@@ -9098,6 +9270,12 @@ function SidePanel({
       target.placementGapAfterPages ?? target.placement_gap_after_pages
     ) !== null
   )).length;
+  const hasPrevItem = !!item && activeIndex > 0;
+  const hasNextItem = !!item && activeIndex >= 0 && activeIndex < items.length - 1;
+  const goToItem = (delta) => {
+    const target = items[activeIndex + delta];
+    if (target?.id) setActive?.(target.id);
+  };
   useEffect(() => {
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
@@ -9267,7 +9445,7 @@ function SidePanel({
           aria-controls="side-panel-item"
           tabIndex={tab === 'item' ? 0 : -1}
         >
-          자료 편집 <span className="badge">{itemPosLabel}</span>
+          {Icon.fileText} 자료 편집 <span className="badge">{itemPosLabel}</span>
         </button>
         <button
           type="button"
@@ -9284,7 +9462,7 @@ function SidePanel({
           aria-controls="side-panel-placement"
           tabIndex={tab === 'placement' ? 0 : -1}
         >
-          칠판 배치
+          {Icon.align} 칠판 배치
         </button>
         <button
           type="button"
@@ -9301,7 +9479,7 @@ function SidePanel({
           aria-controls="side-panel-board"
           tabIndex={tab === 'board' ? 0 : -1}
         >
-          앱 설정
+          {Icon.rows3} 앱 설정
         </button>
       </div>
 
@@ -9340,7 +9518,25 @@ function SidePanel({
                       {problemSourceLabel(item)} · {item.type.toUpperCase()}
                     </div>
                   </div>
-                  <div className="pos-tag">{itemPosLabel}</div>
+                  <div className="item-nav" role="group" aria-label="자료 이동">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="이전 자료"
+                      aria-label="이전 자료"
+                      disabled={!hasPrevItem}
+                      onClick={() => goToItem(-1)}
+                    >{Icon.arrowLeft}</button>
+                    <div className="pos-tag">{itemPosLabel}</div>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      title="다음 자료"
+                      aria-label="다음 자료"
+                      disabled={!hasNextItem}
+                      onClick={() => goToItem(1)}
+                    >{Icon.arrowRight}</button>
+                  </div>
                 </div>
 
                 <OriginalProblemNumberEditor key={item.id} item={item} disabled={panelBusy || !session} onSave={mutateSession} />
@@ -9513,6 +9709,7 @@ function SidePanel({
                       </div>
 
                       <div className="ptools detail-tools">
+
                         <button
                           className={`icon-btn ${savedCropActive ? 'on' : ''}`}
                           type="button"
@@ -9694,6 +9891,13 @@ function SidePanel({
               수업 전체 {items.length}개
             </label>
             <div className="spacer" />
+            <button
+              className="btn"
+              type="button"
+              disabled={!hasNextItem}
+              data-tooltip="확인하지 않고 다음 자료로 이동"
+              onClick={() => goToItem(1)}
+            >건너뛰기</button>
             <button
               className="btn primary"
               disabled={!item || item.step === 'raw' || panelBusy}
@@ -9980,8 +10184,8 @@ function SidePanel({
       <section className="side-tab-panel" id="side-panel-board" role="tabpanel" aria-labelledby="side-tab-board" hidden={tab !== 'board'} tabIndex={0}>
       {tab === 'board' && (
         <>
-          <div className="tab-body">
-            <div className="panel-section-hd settings-group-label">AI 사용·연결 <span className="line" /></div>
+          <div className="tab-body settings-tab-body">
+            <SettingsSection id="keys" title="AI 사용·연결" summary={aiConnectionLabel} open={settingsOpen.keys} onToggle={toggleSettingsSection}>
 
             <div className="row-control">
               <div className="lbl">
@@ -10071,7 +10275,8 @@ function SidePanel({
               </div>
             )}
 
-            <div className="panel-section-hd settings-group-label">미리보기 <span className="line" /></div>
+            </SettingsSection>
+            <SettingsSection id="color" title="미리보기" summary={BOARD_COLOR_LABELS[boardColor]} open={settingsOpen.color} onToggle={toggleSettingsSection}>
             <div className="row-control">
               <div className="lbl">화면 테마<small>이 브라우저에 자동 저장</small></div>
               <label className="check">
@@ -10098,6 +10303,7 @@ function SidePanel({
               </div>
             </div>
 
+            </SettingsSection>
             <div className="panel-section-hd settings-group-label">도움말 <span className="line" /></div>
             <SidebarDisclosure
               title="도움말 및 문제 신고"
@@ -15311,6 +15517,20 @@ function App(){
   const [moveFeedback, setMoveFeedback] = useState(null);
   const [fileName, setFileName] = useState('새 세션');
   const [bulk, setBulk] = useState(false);
+  const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
+    try {
+      return window.localStorage?.getItem(LEFT_RAIL_COLLAPSED_KEY) === '1';
+    } catch (_err) {
+      return false;
+    }
+  });
+  const toggleLeftRailCollapsed = useCallback(() => {
+    setLeftRailCollapsed(prev => {
+      const next = !prev;
+      try { window.localStorage?.setItem(LEFT_RAIL_COLLAPSED_KEY, next ? '1' : '0'); } catch (_err) { /* storage optional */ }
+      return next;
+    });
+  }, []);
   const [toast, setToast] = useState(null);
   const [published, setPublished] = useState(false);
   const [session, setSession] = useState(null);
@@ -18305,7 +18525,7 @@ function App(){
         }}
       />
       <div
-        className={`main ${!items.length && !pendingFiles.length && !recognitionReview ? 'home-mode' : ''} ${recognitionReview ? 'recognition-page-review-mode' : (view === 'review' && reviewEditorActive ? 'review-editor-focus' : '')}`}
+        className={`main ${leftRailCollapsed ? 'left-collapsed' : ''} ${!items.length && !pendingFiles.length && !recognitionReview ? 'home-mode' : ''} ${recognitionReview ? 'recognition-page-review-mode' : (view === 'review' && reviewEditorActive ? 'review-editor-focus' : '')}`}
         data-mobile-pane={mobilePane}
         inert={hasPendingSessionConflict ? '' : undefined}
       >
@@ -18338,6 +18558,8 @@ function App(){
         ) : (
           <>
         <ItemsRail
+          collapsed={leftRailCollapsed}
+          onToggleCollapsed={toggleLeftRailCollapsed}
           session={session}
           items={items}
           activeId={activeId}
@@ -18451,6 +18673,7 @@ function App(){
           item={active}
           items={items}
           activeIndex={activeIndex}
+          setActive={selectBoardItem}
           setStep={setStep}
           applyToAll={applyToAll}
           bulk={bulk}
