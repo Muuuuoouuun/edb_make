@@ -296,7 +296,8 @@ jobs:
 
 
       - name: Cache image-only OpenCV wheel
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: opencv-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/edb-opencv-wheel-cache
           key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
@@ -306,7 +307,18 @@ jobs:
           .venv/bin/python scripts/verify_minimal_opencv.py --reference-out "$RUNNER_TEMP/opencv-reference.json"
           .venv/bin/python scripts/build_minimal_opencv.py --work-dir "$RUNNER_TEMP/edb-opencv-build" --cache-dir "$RUNNER_TEMP/edb-opencv-wheel-cache" --install
           .venv/bin/python scripts/verify_minimal_opencv.py --require-profile --compare "$RUNNER_TEMP/opencv-reference.json"
-          .venv/bin/python -m unittest -q test_document_grid_segmentation test_pdf_text_marker_segmentation test_image_preprocess_cache test_pdf_preprocess_cache test_recognition_speed_quality test_segment test_edb_publish_flow
+
+      - name: Save verified image-only OpenCV wheel
+        if: steps.opencv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/edb-opencv-wheel-cache
+          key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
+
+      - name: Run image-pipeline regression in isolated test tools
+        run: |
+          .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --no-deps --target "$RUNNER_TEMP/edb-image-test-tools" -r requirements-ci.lock
+          PYTHONPATH="$RUNNER_TEMP/edb-image-test-tools" .venv/bin/python -m pytest -q test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
 
       - name: Import macOS signing certificate
         env:
@@ -489,7 +501,8 @@ jobs:
 
 
       - name: Cache image-only OpenCV wheel
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: opencv-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ runner.temp }}/edb-opencv-wheel-cache
           key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
@@ -504,8 +517,27 @@ jobs:
           Assert-OpenCVCommand "Image-only OpenCV build"
           .\.venv\Scripts\python.exe scripts\verify_minimal_opencv.py --require-profile --compare "$env:RUNNER_TEMP/opencv-reference.json"
           Assert-OpenCVCommand "Image-only page equivalence"
-          .\.venv\Scripts\python.exe -m unittest -q test_document_grid_segmentation test_pdf_text_marker_segmentation test_image_preprocess_cache test_pdf_preprocess_cache test_recognition_speed_quality test_segment test_edb_publish_flow
-          Assert-OpenCVCommand "Image pipeline regression"
+
+      - name: Save verified image-only OpenCV wheel
+        if: steps.opencv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/edb-opencv-wheel-cache
+          key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
+
+      - name: Run image-pipeline regression in isolated test tools
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --require-hashes --no-deps --target "$env:RUNNER_TEMP/edb-image-test-tools" -r requirements-ci.lock
+          if ($LASTEXITCODE -ne 0) { throw "Image test tools installation failed." }
+          $previousPythonPath = $env:PYTHONPATH
+          try {
+            $env:PYTHONPATH = "$env:RUNNER_TEMP/edb-image-test-tools"
+            .\.venv\Scripts\python.exe -m pytest -q test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
+            if ($LASTEXITCODE -ne 0) { throw "Image pipeline regression failed." }
+          } finally {
+            $env:PYTHONPATH = $previousPythonPath
+          }
 
       - name: Install Inno Setup
         shell: pwsh
