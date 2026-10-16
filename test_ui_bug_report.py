@@ -20,17 +20,21 @@ class BugReportUiTests(unittest.TestCase):
             + BOARD_STYLESHEET.read_text(encoding="utf-8")
         )
 
-    def test_settings_panel_has_accessible_bug_report_form(self):
+    def test_settings_and_toolbar_open_one_accessible_report_dialog(self):
         settings = self.app.split("{tab === 'board' && (", 1)[1].split(
             "function LoadingOverlay", 1
         )[0]
         self.assertIn('aria-label="버그 리포트"', settings)
         self.assertIn('title="도움말 및 문제 신고"', settings)
         self.assertIn('className="settings-support-disclosure"', settings)
-        self.assertIn('htmlFor="bug-report-description"', settings)
-        self.assertIn('id="bug-report-description"', settings)
-        self.assertIn('htmlFor="bug-report-contact"', settings)
-        self.assertIn('id="bug-report-contact"', settings)
+        self.assertIn('onClick={onOpenBugReport} aria-haspopup="dialog"', settings)
+        self.assertNotIn('id="bug-report-description"', settings)
+        self.assertIn('htmlFor="global-bug-report-description"', settings)
+        self.assertIn('id="global-bug-report-description"', settings)
+        self.assertIn('htmlFor="global-bug-report-contact"', settings)
+        self.assertIn('id="global-bug-report-contact"', settings)
+        self.assertIn("label: '문제 신고'", self.app)
+        self.assertEqual(1, self.app.count('<form className="bug-report-form"'))
         self.assertIn("이 문제에 관한 회신에 동의", settings)
         self.assertIn("진단 정보 포함", settings)
         self.assertIn("리포트 보내기", settings)
@@ -40,9 +44,10 @@ class BugReportUiTests(unittest.TestCase):
         helper = self.app.split("async function submitBugReport", 1)[1].split(
             "async function fetchAppUpdateStatus", 1
         )[0]
-        handler = self.app.split("const handleBugReportSubmit", 1)[1].split(
-            "const savedCrop", 1
+        handler = self.app.split("function BugReportDialog", 1)[1].split(
+            "function OperationRecoveryBanner", 1
         )[0]
+        context = self.app.split('<BugReportDialog', 1)[1].split('      <div', 1)[0]
         self.assertIn("fetch('/api/bug-report'", helper)
         self.assertIn("method: 'POST'", helper)
         self.assertIn("'Content-Type': 'application/json'", helper)
@@ -57,8 +62,8 @@ class BugReportUiTests(unittest.TestCase):
             "runtimeErrors",
             "lastOperationError",
         ):
-            self.assertIn(field, handler)
-        self.assertIn("contact: bugReportContact.trim()", handler)
+            self.assertIn(field, handler + context)
+        self.assertIn("contact: contact.trim()", handler)
         self.assertIn("consentToContact", handler)
         self.assertNotIn("session,", handler)
         self.assertNotIn("pendingFile,", handler)
@@ -173,9 +178,13 @@ class BugReportUiTests(unittest.TestCase):
         self.assertIn("자동 첨부 오류 리포트", dialog)
         self.assertIn("!result?.reportId", dialog)
         self.assertIn("disabled={Boolean(result?.reportId)}", dialog)
-        self.assertIn("접수 완료", dialog)
+        self.assertIn("신고가 접수됐습니다", dialog)
         self.assertIn("const submitInFlightRef = useRef(false);", dialog)
-        self.assertIn("!canSubmit || submitInFlightRef.current", dialog)
+        self.assertIn("busy || result?.reportId || submitInFlightRef.current", dialog)
+        self.assertIn("setInvalidField(field)", dialog)
+        self.assertIn("dialog?.showModal()", dialog)
+        self.assertIn("dialog?.close()", dialog)
+        self.assertIn("receiptRef.current?.focus()", dialog)
         self.assertIn("submitInFlightRef.current = true;", dialog)
         self.assertIn("submitInFlightRef.current = false;", dialog)
         self.assertLess(

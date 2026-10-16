@@ -2542,7 +2542,7 @@ function TopBar({
   recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
   canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
   editingActive = false, saveStateLabel = '', saveStateTone = '',
-  onOpenUpdateSettings, updateAvailable = false, updateBusy = false,
+  onOpenUpdateSettings, onOpenBugReport, updateAvailable = false, updateBusy = false,
   focusMode = false, onChangeFocusMode, canChangeFocusMode = false,
 }){
   const resetReason = pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요'
@@ -2608,6 +2608,7 @@ function TopBar({
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
             { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
             { id: 'reset', icon: Icon.reset, label: '초기화', description: resetReason, danger: true, disabled: pageReviewActive || operationBusy || resetBlocked || !canReset, onSelect: onReset },
+            { id: 'support', icon: Icon.fileText, label: '문제 신고', description: '오류나 불편한 점을 알려 주세요', onSelect: onOpenBugReport },
             { id: 'shutdown', icon: Icon.power, label: '종료', onSelect: onShutdown },
           ]}
         />
@@ -8949,7 +8950,7 @@ function SidePanel({
   updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, updatePanelRequest = 0,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
-  triggerUpload, addSample, onRevealPanel,
+  triggerUpload, addSample, onRevealPanel, onOpenBugReport,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
   focusMode = false, onToggleFocusPanel, homeSettingsOpen = false, onCloseHomeSettings,
 }){
@@ -8983,17 +8984,9 @@ function SidePanel({
   const [cropDraft, setCropDraft] = useState({ ...EMPTY_MANUAL_CROP });
   const [placementScope, setPlacementScope] = useState('item');
   const [placementPreset, setPlacementPreset] = useState('auto');
-  const [bugReportDescription, setBugReportDescription] = useState('');
-  const [bugReportContact, setBugReportContact] = useState('');
-  const [bugReportConsentToContact, setBugReportConsentToContact] = useState(false);
-  const [bugReportIncludeDiagnostics, setBugReportIncludeDiagnostics] = useState(true);
-  const [bugReportBusy, setBugReportBusy] = useState(false);
-  const [bugReportResult, setBugReportResult] = useState(null);
-  const [bugReportError, setBugReportError] = useState('');
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
-  const bugReportDisclosureRef = useRef(null);
   const updateDisclosureRef = useRef(null);
   useEffect(() => {
     if (!updatePanelRequest || consumedUpdateRequestRef.current === updatePanelRequest) return;
@@ -9272,47 +9265,6 @@ function SidePanel({
     Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
       if (installed) setUpdatePinDraft('');
     });
-  };
-  const hasBugReportContact = bugReportContact.trim().length > 0;
-  const canSubmitBugReport = bugReportDescription.trim().length >= 5
-    && !bugReportBusy
-    && (!hasBugReportContact || bugReportConsentToContact);
-  const handleBugReportSubmit = async event => {
-    event?.preventDefault?.();
-    if (!canSubmitBugReport) return;
-    setBugReportBusy(true);
-    setBugReportError('');
-    setBugReportResult(null);
-    try {
-      const receipt = await submitBugReport({
-        description: bugReportDescription.trim(),
-        contact: bugReportContact.trim(),
-        consentToContact: hasBugReportContact && bugReportConsentToContact,
-        includeDiagnostics: bugReportIncludeDiagnostics,
-        context: {
-          view,
-          settingsTab: tab,
-          inputIntent: normalizeInputIntent(inputIntent),
-          reviewStatus: published ? 'published' : session ? 'session' : 'empty',
-          itemCount: items.length,
-          pendingCount: pendingFile ? 1 : 0,
-          hangul: {
-            status: hangulDiagnostics?.status || 'unknown',
-            summary: hangulRuntimeSummary(hangulDiagnostics),
-          },
-          runtimeErrors: runtimeErrorsForBugReport(),
-          lastOperationError,
-        },
-      });
-      setBugReportDescription('');
-      setBugReportContact('');
-      setBugReportConsentToContact(false);
-      setBugReportResult(receipt);
-    } catch (error) {
-      setBugReportError(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
-    } finally {
-      setBugReportBusy(false);
-    }
   };
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
@@ -10391,102 +10343,13 @@ function SidePanel({
             <div className="panel-section-hd settings-group-label">도움말 <span className="line" /></div>
             <SidebarDisclosure
               title="도움말 및 문제 신고"
-              summary="문제가 생기면 알려주세요"
-              badge={bugReportError ? '전송 실패' : bugReportResult?.reportId ? '접수 완료' : ''}
-              tone={bugReportError ? 'danger' : 'ok'}
+              summary="오류나 불편한 점을 알려 주세요"
               className="settings-support-disclosure"
-              disclosureRef={bugReportDisclosureRef}
             >
               <section className="bug-report-card open" aria-label="버그 리포트">
-                <p className="placement-control-note">설명과 선택한 진단 정보를 보냅니다. 연락처는 회신에 동의한 경우에만 사용합니다.</p>
-                <form className="bug-report-form" onSubmit={handleBugReportSubmit}>
-                  <label htmlFor="bug-report-description">무슨 일이 있었나요?</label>
-                  <textarea
-                    id="bug-report-description"
-                    value={bugReportDescription}
-                    maxLength={4000}
-                    rows={5}
-                    placeholder="문제가 생기기 직전에 한 작업과 화면에 보인 현상을 적어 주세요."
-                    onChange={event => {
-                      setBugReportDescription(event.target.value);
-                      setBugReportError('');
-                      setBugReportResult(null);
-                    }}
-                  />
-                  <div className="bug-report-counter">{bugReportDescription.length.toLocaleString()} / 4,000</div>
-
-                  <label htmlFor="bug-report-contact">회신 받을 연락처 <small>(선택)</small></label>
-                  <input
-                    id="bug-report-contact"
-                    className="bug-report-contact"
-                    type="text"
-                    value={bugReportContact}
-                    maxLength={240}
-                    autoComplete="email"
-                    placeholder="이메일 또는 고객을 확인할 수 있는 ID"
-                    onChange={event => {
-                      setBugReportContact(event.target.value);
-                      setBugReportError('');
-                      setBugReportResult(null);
-                    }}
-                  />
-
-                  <label className="bug-report-diagnostics">
-                    <input
-                      type="checkbox"
-                      checked={bugReportConsentToContact}
-                      disabled={!hasBugReportContact}
-                      onChange={event => setBugReportConsentToContact(event.target.checked)}
-                    />
-                    <span>
-                      <strong>이 문제에 관한 회신에 동의</strong>
-                      <small>입력한 연락처는 이 신고의 확인과 해결 안내에만 사용합니다.</small>
-                    </span>
-                  </label>
-
-                  <label className="bug-report-diagnostics">
-                    <input
-                      type="checkbox"
-                      checked={bugReportIncludeDiagnostics}
-                      onChange={event => setBugReportIncludeDiagnostics(event.target.checked)}
-                    />
-                    <span>
-                      <strong>진단 정보 포함</strong>
-                      <small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small>
-                    </span>
-                  </label>
-
-                  <p className="bug-report-privacy">
-                    원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다. 연락처는 동의한 경우에만 보냅니다.
-                  </p>
-
-                  {bugReportError && (
-                    <div className="bug-report-status error" role="alert">{bugReportError}</div>
-                  )}
-                  {bugReportResult?.reportId && (
-                    <div className="bug-report-status success" role="status" aria-live="polite">
-                      접수됐습니다. 번호 <strong>{bugReportResult.reportId}</strong>
-                      {bugReportResult.contactAccepted ? ' · 입력한 연락처로 회신할 수 있습니다.' : ''}
-                    </div>
-                  )}
-
-                  <div className="bug-report-actions">
-                    <button
-                      className="btn"
-                      type="button"
-                      disabled={bugReportBusy}
-                      onClick={() => {
-                        if (bugReportDisclosureRef.current) bugReportDisclosureRef.current.open = false;
-                        setBugReportError('');
-                      }}
-                    >
-                      취소
-                    </button>
-                    <button className="btn primary" type="submit" disabled={!canSubmitBugReport}>
-                      {bugReportBusy ? '보내는 중...' : '리포트 보내기'}
-                    </button>
-                  </div>
-                </form>
+                <p className="placement-control-note">문제가 생긴 작업과 화면을 알려 주세요. 넓은 신고 창에서 내용을 작성할 수 있습니다.</p>
+                <button className="btn primary" type="button" onClick={onOpenBugReport} aria-haspopup="dialog">문제 신고 작성</button>
+                <p className="bug-report-privacy">원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.</p>
               </section>
             </SidebarDisclosure>
             <div className="panel-section-hd settings-group-label">앱 관리 <span className="line" /></div>
@@ -10637,8 +10500,12 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState('');
+  const [invalidField, setInvalidField] = useState('');
+  const [copyStatus, setCopyStatus] = useState('');
   const dialogRef = useRef(null);
   const descriptionRef = useRef(null);
+  const consentRef = useRef(null);
+  const receiptRef = useRef(null);
   const submitInFlightRef = useRef(false);
   const errorSnapshot = request?.errorSnapshot || null;
   const draftText = String(draft || '').trim();
@@ -10652,22 +10519,33 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
     if (!request) return undefined;
     setResult(null);
     setErrorMessage('');
-    const previousFocus = document.activeElement;
+    setInvalidField('');
+    setCopyStatus('');
+    const previousFocus = request.returnFocus || document.activeElement;
+    const dialog = dialogRef.current;
     const previousBodyOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    dialog?.showModal();
     const frame = window.requestAnimationFrame(() => descriptionRef.current?.focus());
     return () => {
       window.cancelAnimationFrame(frame);
+      dialog?.close();
       document.body.style.overflow = previousBodyOverflow;
-      previousFocus?.focus?.();
+      const focusTarget = previousFocus?.isConnected ? previousFocus : document.querySelector('[aria-controls="topbar-more-menu"]');
+      focusTarget?.focus?.({ preventScroll: true });
     };
   }, [request?.id]);
+
+  useEffect(() => {
+    if (result?.reportId) receiptRef.current?.focus();
+  }, [result?.reportId]);
 
   if (!request) return null;
 
   const handleKeyDown = event => {
     if (event.key === 'Escape' && !busy) {
       event.preventDefault();
+      event.stopPropagation();
       onClose?.();
       return;
     }
@@ -10689,10 +10567,18 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
 
   const handleSubmit = async event => {
     event.preventDefault();
-    if (!canSubmit || submitInFlightRef.current) return;
+    if (busy || result?.reportId || submitInFlightRef.current) return;
+    if (!canSubmit) {
+      const field = draftText.length < 5 && !errorSnapshot ? 'description' : 'consent';
+      setInvalidField(field);
+      setErrorMessage(field === 'description' ? '문제가 생긴 상황을 5자 이상 적어 주세요.' : '연락처를 남기려면 회신에 동의해 주세요. 회신이 필요 없으면 연락처를 지워도 됩니다.');
+      (field === 'description' ? descriptionRef : consentRef).current?.focus();
+      return;
+    }
     submitInFlightRef.current = true;
     setBusy(true);
     setErrorMessage('');
+    setInvalidField('');
     setResult(null);
     try {
       const receipt = await submitBugReport({
@@ -10722,7 +10608,7 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
     <div className="bug-report-dialog-backdrop" onMouseDown={event => {
       if (event.target === event.currentTarget && !busy) onClose?.();
     }}>
-      <section
+      <dialog
         ref={dialogRef}
         className="bug-report-dialog"
         role="dialog"
@@ -10730,25 +10616,33 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
         aria-labelledby="bug-report-dialog-title"
         aria-describedby="bug-report-dialog-help"
         onKeyDown={handleKeyDown}
+        onCancel={event => { event.preventDefault(); if (!busy) onClose?.(); }}
+        onMouseDown={event => {
+          if (event.target !== event.currentTarget || busy) return;
+          const rect = event.currentTarget.getBoundingClientRect();
+          if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose?.();
+        }}
       >
         <header>
           <div>
-            <strong id="bug-report-dialog-title">버그 리포트 보내기</strong>
-            <small id="bug-report-dialog-help">설정 → 도움말 및 문제 신고에서 언제든 다시 열 수 있습니다.</small>
+            <strong id="bug-report-dialog-title">문제 신고</strong>
+            <small id="bug-report-dialog-help">{result?.reportId ? '접수 번호를 보관해 주세요. 문의할 때 이 번호로 신고를 확인할 수 있습니다.' : '어떤 작업에서 불편했는지 알려 주세요. 닫아도 작성 중인 설명은 유지됩니다.'}</small>
           </div>
           <button className="icon-btn" type="button" aria-label="버그 리포트 닫기" disabled={busy} onClick={onClose}>
             {Icon.close}
           </button>
         </header>
-        {errorSnapshot && (
+        {errorSnapshot && !result?.reportId && (
           <div className="bug-report-error-snapshot" role="status">
             <span>자동 첨부 오류</span>
             <strong>{operationRecoverySummary(errorSnapshot)}</strong>
             <code>{errorSnapshot.code || 'unknown'}</code>
           </div>
         )}
-        <form className="bug-report-form" onSubmit={handleSubmit}>
-          <label htmlFor="global-bug-report-description">추가로 알려주실 내용</label>
+        <form className="bug-report-form" noValidate aria-busy={busy} onSubmit={handleSubmit}>
+          {!result?.reportId && <>
+          <label htmlFor="global-bug-report-description">{errorSnapshot ? '추가 설명 (선택)' : '어떤 문제가 있었나요?'}</label>
+          <p className="bug-report-field-help" id="global-bug-report-description-help">{errorSnapshot ? '오류 정보가 첨부돼 있어 설명 없이도 보낼 수 있습니다.' : '문제 직전의 작업과 화면에 보인 현상을 5자 이상 적어 주세요.'}</p>
           <textarea
             ref={descriptionRef}
             id="global-bug-report-description"
@@ -10756,14 +10650,18 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
             maxLength={4000}
             rows={6}
             disabled={Boolean(result?.reportId)}
-            placeholder="문제가 생기기 직전에 한 작업과 화면에 보인 현상을 적어 주세요. 자동 첨부 오류와 별도로 보관됩니다."
+            readOnly={busy}
+            aria-invalid={invalidField === 'description'}
+            aria-describedby={`global-bug-report-description-help global-bug-report-count${invalidField === 'description' ? ' global-bug-report-error' : ''}`}
+            placeholder="예: PDF를 올린 뒤 ‘분할하기’를 누르면 화면이 멈춥니다."
             onChange={event => {
               onDraftChange?.(event.target.value);
               setErrorMessage('');
+              setInvalidField('');
               setResult(null);
             }}
           />
-          <div className="bug-report-counter">{String(draft || '').length.toLocaleString()} / 4,000</div>
+          <div className="bug-report-counter" id="global-bug-report-count">{String(draft || '').length.toLocaleString()} / 4,000자</div>
           <label htmlFor="global-bug-report-contact">회신 받을 연락처 <small>(선택)</small></label>
           <input
             id="global-bug-report-contact"
@@ -10773,32 +10671,42 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
             maxLength={240}
             autoComplete="email"
             disabled={Boolean(result?.reportId)}
+            readOnly={busy}
+            aria-describedby="global-bug-report-consent-help"
             placeholder="이메일 또는 고객을 확인할 수 있는 ID"
-            onChange={event => setContact(event.target.value)}
+            onChange={event => { setContact(event.target.value); setInvalidField(''); setErrorMessage(''); }}
           />
           <label className="bug-report-diagnostics">
-            <input type="checkbox" checked={consentToContact} disabled={!hasContact || Boolean(result?.reportId)} onChange={event => setConsentToContact(event.target.checked)} />
-            <span><strong>이 문제에 관한 회신에 동의</strong><small>입력한 연락처는 이 신고의 확인과 해결 안내에만 사용합니다.</small></span>
+            <input ref={consentRef} type="checkbox" checked={consentToContact} disabled={busy || !hasContact || Boolean(result?.reportId)} aria-invalid={invalidField === 'consent'} aria-describedby={invalidField === 'consent' ? 'global-bug-report-error' : 'global-bug-report-consent-help'} onChange={event => { setConsentToContact(event.target.checked); setInvalidField(''); setErrorMessage(''); }} />
+            <span><strong>이 문제에 관한 회신에 동의</strong><small id="global-bug-report-consent-help">연락처를 남길 때만 동의가 필요합니다. 신고 확인과 해결 안내에만 사용합니다.</small></span>
           </label>
           <label className="bug-report-diagnostics">
-            <input type="checkbox" checked={includeDiagnostics} disabled={Boolean(result?.reportId)} onChange={event => setIncludeDiagnostics(event.target.checked)} />
+            <input type="checkbox" checked={includeDiagnostics} disabled={busy || Boolean(result?.reportId)} onChange={event => setIncludeDiagnostics(event.target.checked)} />
             <span><strong>진단 정보 포함</strong><small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small></span>
           </label>
           <p className="bug-report-privacy">원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.</p>
-          {errorMessage && <div className="bug-report-status error" role="alert">{errorMessage}</div>}
+          {errorMessage && <div id="global-bug-report-error" className="bug-report-status error" role="alert">{errorMessage}</div>}
+          {busy && <p className="bug-report-field-help" role="status">신고를 보내고 있습니다. 잠시만 기다려 주세요.</p>}
+          </>}
           {result?.reportId && (
-            <div className="bug-report-status success" role="status" aria-live="polite">
-              접수됐습니다. 번호 <strong>{result.reportId}</strong>
+            <div ref={receiptRef} className="bug-report-status success" role="status" aria-live="polite" tabIndex={-1}>
+              <strong>신고가 접수됐습니다.</strong>
+              <span>접수 번호 <code>{result.reportId}</code></span>
+              <button className="btn" type="button" onClick={async () => {
+                try { await navigator.clipboard.writeText(result.reportId); setCopyStatus('접수 번호를 복사했습니다.'); }
+                catch (_error) { setCopyStatus('접수 번호를 선택해 직접 복사해 주세요.'); }
+              }}>접수 번호 복사</button>
+              {copyStatus && <small role="status">{copyStatus}</small>}
             </div>
           )}
           <div className="bug-report-actions">
-            <button className="btn" type="button" disabled={busy} onClick={onClose}>닫기</button>
-            <button className="btn primary" type="submit" disabled={!canSubmit}>
-              {result?.reportId ? '접수 완료' : busy ? '보내는 중...' : '리포트 보내기'}
-            </button>
+            <button className={`btn ${result?.reportId ? 'primary' : ''}`} type="button" disabled={busy} onClick={onClose}>닫기</button>
+            {!result?.reportId && <button className="btn primary" type="submit" disabled={busy}>
+              {busy ? '보내는 중...' : '리포트 보내기'}
+            </button>}
           </div>
         </form>
-      </section>
+      </dialog>
     </div>
   );
 }
@@ -18120,6 +18028,14 @@ function App(){
     setBugReportRequest({ id: bugReportSequenceRef.current, errorSnapshot: snapshot });
   };
 
+  const openBugReport = () => {
+    bugReportSequenceRef.current += 1;
+    const activeElement = document.activeElement;
+    const returnFocus = activeElement?.closest?.('[role="menu"]') || activeElement === document.body
+      ? document.querySelector('[aria-controls="topbar-more-menu"]') : activeElement;
+    setBugReportRequest({ id: bugReportSequenceRef.current, errorSnapshot: null, returnFocus });
+  };
+
   const retryRecoveryOperation = () => {
     const recovery = operationRecovery;
     if (!recovery) return;
@@ -18331,6 +18247,7 @@ function App(){
         saveStateLabel={items.length ? sessionEditState.label : ''}
         saveStateTone={sessionEditState.tone}
         onOpenUpdateSettings={openUpdateSettings}
+        onOpenBugReport={openBugReport}
         updateAvailable={Boolean(updateInfo?.updateAvailable)}
         updateBusy={updateBusy || updateInstallBusy}
         focusMode={focusMode}
@@ -18393,7 +18310,7 @@ function App(){
         onClose={() => setBugReportRequest(null)}
         context={{
           view,
-          settingsTab: 'recovery-dialog',
+          settingsTab: bugReportRequest?.errorSnapshot ? 'recovery-dialog' : 'support-dialog',
           inputIntent: normalizeInputIntent(inputIntent),
           reviewStatus: published ? 'published' : session ? 'session' : 'empty',
           itemCount: items.length,
@@ -18559,6 +18476,7 @@ function App(){
           />
         )}
             <SidePanel
+          onOpenBugReport={openBugReport}
           onRevealPanel={revealSidePanel}
           focusMode={focusEditorActive}
           onToggleFocusPanel={() => { setFocusPanelCollapsed(true); window.requestAnimationFrame(() => focusPanelReopenRef.current?.focus()); }}

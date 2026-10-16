@@ -248,6 +248,10 @@ xcrun notarytool store-credentials "classin-edb-notary" \
 The unsigned/ad-hoc DMG is fine for internal development, but a downloaded public macOS app needs Developer ID signing, notarization, and stapling to open cleanly on other Macs.
 
 ## In-App Updates
+GitHub Releases setup, exact feed/download URL examples, and the first manual
+upgrade for installations with an empty feed are documented in
+[GITHUB_RELEASE_CHECKLIST.md](GITHUB_RELEASE_CHECKLIST.md).
+
 The app supports both PIN-gated automatic replacement and a manual download fallback:
 1. The installed app keeps user settings and API keys under the user's app runtime folder.
 2. `칠판 설정` shows the current app version and an `업데이트 확인` button.
