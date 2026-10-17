@@ -9195,3 +9195,5 @@
 .manual-stamp-card .manual-stamp-nudge .btn { flex: 1; min-height: 30px; padding: 0 4px; }
 .manual-stamp-hint { color: var(--muted); font-size: var(--text-xs); }
 .manual-split-panel-actions .btn { white-space: normal; }
+
+.manual-split-canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
