@@ -85,6 +85,48 @@ class TestManualSplitInteractions(unittest.TestCase):
         input = render(320); input.props.onFocus(); input.props.onChange({ target: { value: '99999' } });
         input = render(320); assert.equal(input.props.value, '99999'); input.props.onBlur();
         assert.equal(changes.at(-1), 2000, 'finished out-of-range input must still respect source dimensions');
+        input = render(2000); assert.equal(input.props.step, '1');
+        input.props.onKeyDown({key:'ArrowDown',shiftKey:true,preventDefault(){},stopPropagation(){}});
+        assert.equal(changes.at(-1),1990);
+        input = sandbox.ManualSplitStampDimensionInput({value:32,minValue:32,maxValue:1000,onChange:v=>changes.push(v)});
+        input.props.onFocus(); input.props.onChange({target:{value:'24'}});
+        input = sandbox.ManualSplitStampDimensionInput({value:32,minValue:32,maxValue:1000,onChange:v=>changes.push(v)});
+        input.props.onBlur();assert.equal(changes.at(-1),32);
+        """)
+
+class TestStampSizingAndScope(unittest.TestCase):
+    def test_locked_dimensions_keep_ratio_at_page_edges_and_minimum(self):
+        run_node(NODE_SETUP + r"""
+        const sandbox = { finiteNumber: (v, fallback) => Number.isFinite(Number(v)) ? Number(v) : fallback };
+        vm.createContext(sandbox);
+        vm.runInContext(section('function clampManualSplitStampDimension(', 'function clampReviewZoom('), sandbox);
+        const resize = sandbox.resizeManualSplitStamp;
+        const original = {width: 320, height: 240};
+        const page = {width: 1000, height: 800};
+        const ratio = 4/3;
+        for (const axis of ['width', 'height']) {
+          for (const value of [-100, 0, 24, 321, 600, 10000]) {
+            const box = resize(original, axis, value, page, ratio);
+            assert.ok(box.width <= page.width && box.height <= page.height);
+            assert.ok(box.width >= 24 && box.height >= 24);
+            assert.ok(Math.abs(box.width - box.height * ratio) <= 1);
+          }
+        }
+        assert.equal(resize(original, 'width', 321, page).height, 240);
+        assert.equal(resize(original, 'height', 241, page).width, 320);
+        const edge = resize(original, 'height', 10000, page, ratio);
+        assert.equal(edge.width,1000); assert.equal(edge.height,750);
+        assert.deepEqual(original, {width:320,height:240});
+        """)
+
+    def test_apply_labels_distinguish_replace_page_and_add_without_extra_confirmation(self):
+        run_node(NODE_SETUP + r"""
+        const sandbox = {};
+        vm.createContext(sandbox);
+        vm.runInContext(section('function manualSplitApplyLabel(', 'function clampReviewZoom('), sandbox);
+        assert.equal(sandbox.manualSplitApplyLabel('selection', {label:'선택 2개만 교체'},3),'선택 2개만 교체');
+        assert.equal(sandbox.manualSplitApplyLabel('page', {},3),'페이지 전체 교체');
+        assert.equal(sandbox.manualSplitApplyLabel('append', {},3),'3개 추가');
         """)
 
 
