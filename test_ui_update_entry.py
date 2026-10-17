@@ -82,81 +82,6 @@ const passageButton = tree => nodes(tree).find(node => node.type === 'button' &&
 
 
 class TestUiUpdateEntry(unittest.TestCase):
-    def test_update_request_selects_settings_during_render_and_preserves_later_tab_choices(self) -> None:
-        run_node(NODE_SETUP + r"""
-        const selection = section('  const consumedUpdateRequestRef = useRef(0);', '  const [settingsOpen, setSettingsOpen]');
-        const selected = (request, consumed, stored) => {
-          const sandbox = {
-            updatePanelRequest: request,
-            useRef: () => ({ current: consumed }),
-            useStoredPreference: () => [stored, () => {}],
-            RIGHT_PANEL_TAB_KEY: 'tab', RIGHT_PANEL_TABS: ['item', 'placement', 'board'],
-          };
-          return vm.runInNewContext(selection + '\ntab;', sandbox);
-        };
-        assert.equal(selected(0, 0, 'item'), 'item');
-        assert.equal(selected(1, 0, 'placement'), 'board', 'the opening render must already show update settings');
-        assert.equal(selected(1, 1, 'placement'), 'placement', 'completed requests must not override a manual tab selection');
-        assert.equal(selected(2, 1, 'item'), 'board', 'a new update request must select settings again');
-        """)
-
-    def test_update_panel_retries_layout_when_render_cancels_pending_scroll(self) -> None:
-        run_node(NODE_SETUP + r"""
-        let effect;
-        let nextFrame = 0;
-        let scrolled = 0;
-        let onResize;
-        let disconnected = 0;
-        const frames = new Map();
-        const disclosure = {
-          open: false,
-          scrollIntoView: options => { assert.equal(options.block, 'start'); scrolled += 1; },
-          querySelector: () => ({ focus: options => assert.equal(options.preventScroll, true) }),
-        };
-        const sandbox = {
-          useEffect: callback => { effect = callback; },
-          emptyHome: false, updatePanelRequest: 1, tab: 'board', setTab: () => {},
-          updateDisclosureRef: { current: disclosure },
-          consumedUpdateRequestRef: { current: 0 },
-          requestAnimationFrame: callback => { frames.set(++nextFrame, callback); return nextFrame; },
-          cancelAnimationFrame: id => frames.delete(id),
-          ResizeObserver: class {
-            constructor(callback) { onResize = callback; }
-            observe(element) { assert.equal(element, disclosure); }
-            disconnect() { disconnected += 1; }
-          },
-        };
-        vm.createContext(sandbox);
-        vm.runInContext(section('  useEffect(() => {\n    if (emptyHome)', '  const panelTabRefs'), sandbox);
-        const cancelled = effect();
-        assert.equal(disclosure.open, true);
-        cancelled();
-        assert.equal(frames.size, 0);
-        assert.equal(disconnected, 1, 'cancelled effects must release their resize observer');
-        assert.equal(sandbox.consumedUpdateRequestRef.current, 0, 'cancelled layout must not consume the request');
-        effect();
-        while (frames.size) {
-          const [id, callback] = frames.entries().next().value;
-          frames.delete(id);
-          callback();
-        }
-        assert.equal(scrolled, 1);
-        onResize();
-        assert.equal(scrolled, 2, 'late update content must reveal the section again');
-        disclosure.open = false;
-        onResize();
-        assert.equal(scrolled, 2, 'a collapsed section must not scroll');
-        assert.equal(sandbox.consumedUpdateRequestRef.current, 1);
-        effect();
-        assert.equal(frames.size, 0, 'completed requests must not scroll again on ordinary renders');
-        sandbox.emptyHome = true;
-        sandbox.updatePanelRequest = 2;
-        effect();
-        assert.equal(sandbox.consumedUpdateRequestRef.current, 2,
-          'a home modal request cannot later force the editing panel open');
-        assert.equal(frames.size, 0, 'home updates never scroll or reveal the side panel');
-        """)
-
     def test_update_check_deduplicates_in_flight_and_reports_unconfigured_truthfully(self) -> None:
         run_node(UPDATE_SETUP + r"""
         (async () => {
@@ -223,7 +148,7 @@ class TestUiUpdateEntry(unittest.TestCase):
           sandbox.openUpdateSettings();
           assert.equal(sandbox.homeUpdateOpen, true);
           assert.equal(revealed, 0, 'file-free home must never reveal the editing side panel');
-          assert.equal(panelRequest, 2);
+          assert.equal(panelRequest, 0);
           assert.equal(pendingRequests.length, 1, 'modal entry shares the existing update request guard');
           pendingRequests[0].resolve({ channelStatus: 'not_configured' });
           await flush();
@@ -231,13 +156,14 @@ class TestUiUpdateEntry(unittest.TestCase):
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
-    def test_loaded_update_entry_only_reveals_settings_and_checks_silently(self) -> None:
+    def test_loaded_update_entry_uses_the_same_modal_without_changing_editor_tabs(self) -> None:
         run_node(UPDATE_SETUP + r"""
         (async () => {
           sandbox.openUpdateSettings();
           sandbox.openUpdateSettings();
-          assert.equal(revealed, 2);
-          assert.equal(panelRequest, 2, 'functional request increments must not lose rapid clicks');
+          assert.equal(revealed, 0);
+          assert.equal(sandbox.homeUpdateOpen, true);
+          assert.equal(panelRequest, 0, 'update entry must preserve the current editor tab');
           assert.equal(pendingRequests.length, 1);
           pendingRequests[0].resolve({
             channelStatus: 'update_available', updateAvailable: true,
@@ -282,6 +208,39 @@ class TestUiUpdateEntry(unittest.TestCase):
         assert.doesNotThrow(() => missing.props.onClick());
         assert.equal(processed.length, 0);
         assert.equal(render({ file: null }), null);
+        """)
+
+class TestUnifiedUpdateDialog(unittest.TestCase):
+    def test_modal_restores_focus_traps_tab_and_does_not_send_edit_shortcuts_to_canvas(self):
+        run_node(NODE_SETUP + r"""
+        const Babel = require('./scripts/vendor/babel.min.js');
+        let effect, opened=0, closed=0, restored=0, dismissed=0, stopped=0;
+        const first = { focus() { sandbox.document.activeElement=first; } };
+        const last = { focus() { sandbox.document.activeElement=last; } };
+        const trigger = {isConnected:true, focus(){restored++}};
+        const dialog = {showModal(){opened++},close(){closed++},querySelectorAll(){return [first,last]}};
+        const sandbox = {
+          React:{createElement:(type,props,...children)=>({type,props:{...props,children}})},
+          useRef:()=>({current:dialog}),useLayoutEffect:fn=>{effect=fn},
+          document:{activeElement:trigger}, Icon:{close:'close'},
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(Babel.transform(section('function HomeUpdateDialog(', 'function BugReportDialog('),{presets:['react']}).code,sandbox);
+        const render = busy => sandbox.HomeUpdateDialog({open:true,busy,onClose:()=>dismissed++});
+        let tree=render(false), cleanup=effect();
+        assert.equal(opened,1);
+        let prevented=0;
+        for (const key of ['Delete','s','Enter','Escape']) tree.props.onKeyDown({key,stopPropagation(){stopped++}});
+        assert.equal(stopped,4);
+        sandbox.document.activeElement=last;
+        tree.props.onKeyDown({key:'Tab',stopPropagation(){},preventDefault(){prevented++}});
+        assert.equal(sandbox.document.activeElement,first);
+        tree.props.onKeyDown({key:'Tab',shiftKey:true,stopPropagation(){},preventDefault(){prevented++}});
+        assert.equal(sandbox.document.activeElement,last);
+        assert.equal(prevented,2);
+        tree.props.onCancel({preventDefault(){}}); assert.equal(dismissed,1);
+        tree=render(true);tree.props.onCancel({preventDefault(){}});assert.equal(dismissed,1);
+        cleanup();assert.equal(closed,1);assert.equal(restored,1);
         """)
 
 

@@ -1514,6 +1514,24 @@ function clampManualSplitStampBox(box, page){
   };
 }
 
+function resizeManualSplitStamp(box, axis, value, page, ratio = null){
+  const current = clampManualSplitStampBox(box, page);
+  if (!(Number.isFinite(ratio) && ratio > 0)) {
+    return clampManualSplitStampBox({ ...current, [axis]: value }, page);
+  }
+  const maxWidth = Math.min(page.width, page.height * ratio);
+  const minWidth = Math.min(maxWidth, Math.max(Math.min(24, page.width), Math.min(24, page.height) * ratio));
+  const requested = axis === 'height' ? Number(value) * ratio : Number(value);
+  const width = Math.max(minWidth, Math.min(maxWidth, Number.isFinite(requested) ? requested : current.width));
+  return clampManualSplitStampBox({ width, height: width / ratio }, page);
+}
+
+function manualSplitApplyLabel(scope, summary, count){
+  if (scope === 'append') return `${count}개 추가`;
+  if (scope === 'page') return '페이지 전체 교체';
+  return summary?.label || '선택한 문제 교체';
+}
+
 function clampReviewZoom(value){
   const next = Number.isFinite(value) ? value : 1;
   return Math.max(REVIEW_ZOOM_MIN, Math.min(REVIEW_ZOOM_MAX, next));
@@ -1909,7 +1927,9 @@ function BoxEditPanel({
   );
 }
 
-function ManualSplitStampDimensionInput({ value, maxValue, disabled, onChange }){
+function ManualSplitStampDimensionInput({ value, maxValue, minValue = 24, disabled, onChange }){
+  const minimum = Math.min(minValue, maxValue);
+  const normalize = next => Math.max(minimum, clampManualSplitStampDimension(next, maxValue));
   const [draft, setDraft] = useState(String(value));
   const focusedRef = useRef(false);
   useEffect(() => {
@@ -1917,16 +1937,16 @@ function ManualSplitStampDimensionInput({ value, maxValue, disabled, onChange })
   }, [value]);
   const commit = () => {
     focusedRef.current = false;
-    const next = clampManualSplitStampDimension(draft, maxValue);
+    const next = normalize(draft);
     setDraft(String(next));
     onChange?.(next);
   };
   return (
     <input
       type="number"
-      min={Math.min(24, maxValue)}
+      min={minimum}
       max={maxValue}
-      step="10"
+      step="1"
       value={draft}
       disabled={disabled}
       onFocus={evt => { focusedRef.current = true; evt?.currentTarget?.select(); }}
@@ -1936,10 +1956,17 @@ function ManualSplitStampDimensionInput({ value, maxValue, disabled, onChange })
         const next = Number(text);
         // Keep partial input such as "3" while typing "320". Valid sizes
         // still update the preview immediately; clamp only when editing ends.
-        if (text && Number.isFinite(next) && next >= Math.min(24, maxValue) && next <= maxValue) onChange?.(Math.round(next));
+        if (text && Number.isFinite(next) && next >= minimum && next <= maxValue) onChange?.(Math.round(next));
       }}
       onBlur={commit}
       onKeyDown={event => {
+        if (event.shiftKey && ['ArrowUp', 'ArrowDown'].includes(event.key)) {
+          event.preventDefault();
+          event.stopPropagation();
+          const next = normalize(Number(draft) + (event.key === 'ArrowUp' ? 10 : -10));
+          setDraft(String(next)); onChange?.(next);
+          return;
+        }
         if (event.key !== 'Enter') return;
         event.preventDefault();
         event.stopPropagation();
@@ -2081,6 +2108,8 @@ function ManualSplitEditor({
       if (frame != null) cancelAnimationFrame(frame);
     };
   }, []);
+  const [stampRatio, setStampRatio] = useState(null);
+  useEffect(() => setStampRatio(null), [page?.id]);
   const dragRegionIdRef = useRef(null);
   const [listDragState, setListDragState] = useState(null);
   const selectedCount = selectedRegionIds?.size || 0;
@@ -2093,6 +2122,9 @@ function ManualSplitEditor({
   const stampHeight = clampManualSplitStampDimension(stampBox?.height, page?.height);
   const pageWidth = Math.round(Math.max(1, finiteNumber(page?.width, 1)));
   const pageHeight = Math.round(Math.max(1, finiteNumber(page?.height, 1)));
+  const changeStampDimension = (axis, value) => onStampSizeChange?.(
+    resizeManualSplitStamp({ width: stampWidth, height: stampHeight }, axis, value, page, stampRatio));
+  const applyLabel = manualSplitApplyLabel(scope, scopeSummary, regionList.length);
   const handleDrop = (evt, targetId) => {
     evt.preventDefault();
     const sourceId = evt.dataTransfer?.getData('text/plain') || dragRegionIdRef.current;
@@ -2144,7 +2176,7 @@ function ManualSplitEditor({
                           key={mode}
                           type="button"
                           className={`crop-frame-handle ${mode}`}
-                          aria-label={`수동 분할 영역 ${mode}`}
+                          aria-label={`수동 자르기 영역 ${mode}`}
                           onMouseDown={(evt) => onHandleMouseDown?.(region.id, mode, evt)}
                           onClick={(evt) => evt.stopPropagation()}
                         />
@@ -2168,7 +2200,7 @@ function ManualSplitEditor({
           </div>
         </ReviewCanvasZoomShell>
       </div>
-      <aside ref={panelRef} className="manual-split-panel" aria-label="수동 분할 영역 목록">
+      <aside ref={panelRef} className="manual-split-panel" aria-label="수동 자르기 영역 목록">
         <div className="manual-split-scope">
           <label>적용 범위
             <select aria-label="자르기 적용 범위" value={scope} disabled={mutating} onChange={evt => onScopeChange?.(evt.target.value)}>
@@ -2205,7 +2237,8 @@ function ManualSplitEditor({
           <button
             type="button"
             className={`manual-split-tool ${activeMode === 'draw' ? 'on' : ''}`}
-            title="드래그해서 자유 영역 만들기"
+            title="드래그해서 자유 영역 만들기 (G)"
+            aria-keyshortcuts="G"
             aria-pressed={activeMode === 'draw'}
             disabled={mutating}
             onClick={() => onModeChange?.('draw')}
@@ -2219,7 +2252,7 @@ function ManualSplitEditor({
             title="같은 크기 틀을 클릭으로 찍기 · Esc로 스탬프 종료"
             aria-pressed={activeMode === 'stamp'}
             disabled={mutating}
-            aria-keyshortcuts="Escape"
+            aria-keyshortcuts="S"
             onClick={() => onModeChange?.('stamp')}
           >
             {Icon.stamp}
@@ -2244,7 +2277,7 @@ function ManualSplitEditor({
                   className="icon-btn"
                   title="스탬프 10% 축소"
                   disabled={mutating}
-                  onClick={() => onStampSizeChange?.({
+                  onClick={() => stampRatio !== null ? changeStampDimension('width', stampWidth * 0.9) : onStampSizeChange?.({
                     width: Math.round(stampWidth * 0.9),
                     height: Math.round(stampHeight * 0.9),
                   })}
@@ -2256,7 +2289,7 @@ function ManualSplitEditor({
                   className="icon-btn"
                   title="스탬프 10% 확대"
                   disabled={mutating}
-                  onClick={() => onStampSizeChange?.({
+                  onClick={() => stampRatio !== null ? changeStampDimension('width', stampWidth * 1.1) : onStampSizeChange?.({
                     width: Math.round(stampWidth * 1.1),
                     height: Math.round(stampHeight * 1.1),
                   })}
@@ -2265,26 +2298,36 @@ function ManualSplitEditor({
                 </button>
               </span>
             </div>
+            <label className="manual-stamp-ratio">
+              <input type="checkbox" checked={stampRatio !== null} disabled={mutating}
+                onChange={event => setStampRatio(event.target.checked ? stampWidth / stampHeight : null)} />
+              가로·세로 비율 유지
+            </label>
             <div className="manual-stamp-fields" aria-label="스탬프 크기 조절">
-              <label className="manual-stamp-field">
-                <span>가로</span>
-                <ManualSplitStampDimensionInput
-                  value={stampWidth}
-                  maxValue={pageWidth}
-                  disabled={mutating}
-                  onChange={width => onStampSizeChange?.({ width })}
-                />
-              </label>
-              <label className="manual-stamp-field">
-                <span>세로</span>
-                <ManualSplitStampDimensionInput
-                  value={stampHeight}
-                  maxValue={pageHeight}
-                  disabled={mutating}
-                  onChange={height => onStampSizeChange?.({ height })}
-                />
-              </label>
+              {[['width', '가로', stampWidth, pageWidth], ['height', '세로', stampHeight, pageHeight]].map(([axis, label, value, maxValue]) => (
+                <div key={axis} className="manual-stamp-dimension">
+                  <label className="manual-stamp-field">
+                    <span>{label} (px)</span>
+                    <ManualSplitStampDimensionInput value={value}
+                      minValue={stampRatio === null ? 24 : Math.ceil(Math.max(Math.min(24, maxValue), axis === 'width' ? Math.min(24, pageHeight) * stampRatio : Math.min(24, pageWidth) / stampRatio))}
+                      maxValue={stampRatio === null ? maxValue : Math.floor(Math.min(maxValue, axis === 'width' ? pageHeight * stampRatio : pageWidth / stampRatio))}
+                      disabled={mutating}
+                      onChange={next => changeStampDimension(axis, next)} />
+                  </label>
+                  <div className="manual-stamp-nudge">
+                    {[-1, 1].map(delta => (
+                      <button key={delta} type="button" className="btn" disabled={mutating}
+                        aria-label={`${label} ${delta > 0 ? '늘리기' : '줄이기'}`}
+                        title="1px씩 조절 · Shift를 누르면 10px"
+                        onClick={event => changeStampDimension(axis, value + delta * (event.shiftKey ? 10 : 1))}>
+                        {delta > 0 ? '+' : '−'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
+            <small className="manual-stamp-hint">원본 픽셀 기준 · ± 1px · Shift와 함께 10px</small>
           </div>
         ) : canSaveStamp ? (
           <button
@@ -2292,14 +2335,14 @@ function ManualSplitEditor({
             className="manual-stamp-quick"
             title="선택 영역 크기로 같은 크기 자르기를 계속합니다"
             disabled={mutating}
-            onClick={() => onSaveStampFromSelection?.(selectedRegion?.id)}
+            onClick={() => { setStampRatio(null); onSaveStampFromSelection?.(selectedRegion?.id); }}
           >
             {Icon.stamp}
             <span>선택 크기로 반복</span>
             <strong>{manualSplitBoxSizeLabel(selectedRegion?.bbox)}</strong>
           </button>
         ) : null}
-        <div className="manual-split-shortcuts" aria-label="수동 분할 단축키">
+        <div className="manual-split-shortcuts" aria-label="수동 자르기 단축키">
           <span>V 선택</span>
           <span>G 드래그</span>
           <span>S 스탬프</span>
@@ -2317,7 +2360,7 @@ function ManualSplitEditor({
             <span><kbd>방향키</kbd> 1px 이동</span>
             <span><kbd>Shift 방향키</kbd> 빠른 이동</span>
             <span><kbd>Delete</kbd> 선택 삭제</span>
-            <span><kbd>Enter</kbd> 분할 적용</span>
+            <span><kbd>Enter</kbd> 자르기 적용</span>
             <span><kbd>Esc</kbd> 진행 중 조작 취소 · 영역 유지</span>
           </div>
         )}
@@ -2440,19 +2483,19 @@ function ManualSplitEditor({
         <div className="manual-split-panel-actions">
           <span className="manual-split-apply-summary" aria-live="polite">
             {regionList.length
-              ? `${regionList.length}개 영역을 새 문제로 만들어요`
+              ? `${scopeSummary?.label || '선택 범위 적용'} → 새 문제 ${regionList.length}개`
               : '영역을 하나 이상 만들어 주세요'}
           </span>
           <button
             type="button"
             className="btn primary"
-            title="Enter로 분할 적용"
+            title={`${applyLabel} · Enter로 적용`}
             aria-keyshortcuts="Enter"
             disabled={mutating || regionList.length === 0}
             onClick={() => onApply?.()}
           >
             {Icon.check}
-            {mutating ? '분할 적용 중…' : `분할 적용 ${regionList.length}`}
+            {mutating ? '자르기 적용 중…' : applyLabel}
           </button>
         </div>
       </aside>
@@ -4863,7 +4906,7 @@ function ReviewStage({
     </div>
   ) : manualSplit ? (
     <div className="review-actionbar manual-split-actionbar">
-      <span className="count-chip">수동 분할</span>
+      <span className="count-chip">수동 자르기</span>
       <span className="manual-split-toolbar-status" aria-live="polite">
         영역 {(manualSplit.regions || []).length}개
         {(manualSplit.replaceProblemIds || []).length
@@ -4874,7 +4917,7 @@ function ReviewStage({
         <span className="review-summary-chip warn">겹침 있음</span>
       )}
       <div className="spacer" />
-      <div className="manual-split-toolbar-actions" role="toolbar" aria-label="수동 분할 빠른 작업">
+      <div className="manual-split-toolbar-actions" role="toolbar" aria-label="수동 자르기 빠른 작업">
         <button
           className="btn"
           type="button"
@@ -5081,7 +5124,7 @@ function ReviewStage({
                 type="button"
                 onClick={beginManualSplitForSelection}
                 disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 수동 분할할 수 있습니다'}
+                title={selectedCanManualSplit ? '선택한 항목들을 직접 다시 자르기' : '같은 원본 페이지의 항목만 수동 자르기할 수 있습니다'}
               >
                 {Icon.pen} 선택 항목 재분할
               </button>
@@ -8574,7 +8617,7 @@ function HomeDashboard({
           </span>
         </button>
         <p id="home-upload-help" className="home-upload-help">
-          파일은 먼저 대기열에 담깁니다. 올린 뒤 페이지 전체 넣기, 문항별 분할, 수동 쪼개기 중에서 선택하세요.
+          파일은 먼저 대기열에 담깁니다. 올린 뒤 페이지 전체 넣기, 문항별 분할, 수동 자르기 중에서 선택하세요.
         </p>
 
         <div className="home-methods" aria-labelledby="home-methods-title">
@@ -8597,7 +8640,7 @@ function HomeDashboard({
                   <circle cx="6" cy="18" r="3" /><path d="M14.8 14.8 20 20" />
                 </svg>
               </span>
-              <strong>수동 쪼개기</strong>
+              <strong>수동 자르기</strong>
               <span>필요한 영역만 직접</span>
             </li>
           </ul>
@@ -9164,18 +9207,14 @@ function SidePanel({
   onClassinReviewComplete,
   onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, updatePanelRequest = 0,
+  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
   focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
-  const consumedUpdateRequestRef = useRef(0);
-  const [storedTab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
-  // An explicit update request renders its tab in the same commit as opening
-  // the panel, instead of painting another tab and switching in an effect.
-  const tab = updatePanelRequest !== consumedUpdateRequestRef.current ? 'board' : storedTab;
+  const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
   const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
   const toggleSettingsSection = (id) => {
     setSettingsOpen(prev => {
@@ -9204,38 +9243,6 @@ function SidePanel({
   const dragging = useRef(false);
   const wrapRef = useRef(null);
   const cropControlRef = useRef(null);
-  const updateDisclosureRef = useRef(null);
-  useEffect(() => {
-    if (emptyHome) {
-      consumedUpdateRequestRef.current = updatePanelRequest;
-      return;
-    }
-    if (!updatePanelRequest || consumedUpdateRequestRef.current === updatePanelRequest) return;
-    setTab('board');
-    const disclosure = updateDisclosureRef.current;
-    if (!disclosure) return;
-    disclosure.open = true;
-    const revealUpdate = () => {
-      if (disclosure.open) disclosure.scrollIntoView({ block: 'start' });
-    };
-    // Feed results and runtime diagnostics can resize the panel after opening.
-    // Keep the requested update section visible through those async changes.
-    const resizeObserver = new ResizeObserver(revealUpdate);
-    resizeObserver.observe(disclosure);
-    // Wait for the newly opened panel and disclosure to finish layout before
-    // scrolling; the home screen can otherwise leave the actions offscreen.
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => {
-        consumedUpdateRequestRef.current = updatePanelRequest;
-        revealUpdate();
-        disclosure.querySelector('summary')?.focus({ preventScroll: true });
-      });
-    });
-    return () => {
-      cancelAnimationFrame(frame);
-      resizeObserver.disconnect();
-    };
-  }, [updatePanelRequest, tab, setTab, emptyHome]);
   const panelTabRefs = useRef({});
   const panelBusy = Boolean(mutating || sessionEditState?.busy);
   const handlePanelTabKeyDown = (event) => {
@@ -9750,7 +9757,7 @@ function SidePanel({
     </>
   );
 
-  if (emptyHome) return (
+  const updateDialog = (
     <HomeUpdateDialog
       open={homeUpdateOpen}
       onClose={onCloseHomeUpdate}
@@ -9759,8 +9766,11 @@ function SidePanel({
       statusLabel={updateStatusLabel}
     >{updateControls}</HomeUpdateDialog>
   );
+  if (emptyHome) return updateDialog;
 
   return (
+    <>
+    {updateDialog}
     <div className={`col right ${view === 'review' ? 'review-context' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정">
       {focusMode && (
         <div className="focus-panel-heading">
@@ -10718,16 +10728,15 @@ function SidePanel({
               badge={updateStatusLabel}
               tone={updateStatusTone}
               className="settings-update-disclosure"
-              disclosureRef={updateDisclosureRef}
             >
-            {updateControls}
-
+            <button className="btn" type="button" aria-haspopup="dialog" onClick={onOpenUpdateSettings}>업데이트 창 열기</button>
             </SidebarDisclosure>
           </div>
         </>
       )}
       </section>
     </div>
+    </>
   );
 }
 
@@ -10754,6 +10763,7 @@ function HomeUpdateDialog({ open, onClose, busy, versionLine, statusLabel, child
       aria-describedby="home-update-version"
       onCancel={event => { event.preventDefault(); if (!busy) onClose?.(); }}
       onKeyDown={event => {
+        event.stopPropagation();
         if (event.key !== 'Tab') return;
         const controls = Array.from(dialogRef.current?.querySelectorAll('button:not(:disabled), input:not(:disabled)') || []);
         const first = controls[0], last = controls[controls.length - 1];
@@ -11104,7 +11114,7 @@ function OperationRecoveryBanner({
             ? '연결이 돌아왔습니다. 이 화면을 새로고침하지 말고 아래 버튼으로 중단된 작업을 다시 시작하세요.'
             : 'Finder 또는 다운로드한 폴더에서 ClassIn EDB 앱을 다시 실행하세요. 이 화면은 닫지 않아도 되며, 연결이 돌아오면 자동으로 알려드립니다.')
         : isQueue
-          ? '같은 파일로 다시 시도하세요. 인식이 계속 실패하면 페이지 PNG 등록 또는 수동 쪼개기를 이용할 수 있습니다.'
+          ? '같은 파일로 다시 시도하세요. 인식이 계속 실패하면 페이지 PNG 등록 또는 수동 자르기를 이용할 수 있습니다.'
           : isReset
             ? (error.code === 'artifact_cleanup_busy'
               ? '진행 중인 제작·다운로드가 끝나거나 취소된 뒤 초기화를 다시 시도하세요.'
@@ -15625,7 +15635,6 @@ function App(){
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const updateCheckInFlightRef = useRef(false);
-  const [updatePanelRequest, setUpdatePanelRequest] = useState(0);
   const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
@@ -15661,9 +15670,6 @@ function App(){
   const [recentSessions, setRecentSessions] = useState([]);
   const [restoringSessionId, setRestoringSessionId] = useState(null);
   const [pendingFiles, setPendingFiles] = useState([]);
-  useEffect(() => {
-    if (items.length || pendingFiles.length) setHomeUpdateOpen(false);
-  }, [items.length, pendingFiles.length]);
   const [selectedPendingFileKey, setSelectedPendingFileKey] = useState(null);
   const initialViewRef = useRef(requestedInitialView());
   const initialViewConsumedRef = useRef(false);
@@ -16114,11 +16120,9 @@ function App(){
   }, [showSimpleErrorToast, showToast]);
 
   const openUpdateSettings = useCallback(() => {
-    if (!items.length && !pendingFiles.length) setHomeUpdateOpen(true);
-    else revealSidePanel();
-    setUpdatePanelRequest(previous => previous + 1);
+    setHomeUpdateOpen(true);
     void checkForUpdates({ silent: true });
-  }, [items.length, pendingFiles.length, revealSidePanel, checkForUpdates]);
+  }, [checkForUpdates]);
 
   const openUpdatePage = useCallback(async () => {
     if (updateBusy) {
@@ -16432,7 +16436,7 @@ function App(){
         : action === 'merge' ? '문제를 합치는 중…'
         : action === 'crop' ? '이미지를 자르는 중…'
         : action === 'stitch-crop' ? '지문 영역을 이어붙이는 중…'
-        : action === 'bulk-crop' ? '수동 분할을 적용하는 중…'
+        : action === 'bulk-crop' ? '수동 자르기를 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
         : action === 'confirm' ? '확인 상태를 저장하는 중…'
         : action === 'confirm-page' ? '페이지 확인 상태를 저장하는 중…'
@@ -16456,7 +16460,7 @@ function App(){
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
         : action === 'stitch-crop' ? '선택 영역을 한 지문으로 합쳤어요'
-        : action === 'bulk-crop' ? '수동 분할을 적용했어요'
+        : action === 'bulk-crop' ? '수동 자르기를 적용했어요'
         : action === 'confirm' ? '확인 상태를 저장했어요'
         : action === 'confirm-page' ? '지문 없음으로 확인했어요'
         : action === 'classify' ? '자료 분류를 변경했어요'
@@ -17377,16 +17381,16 @@ function App(){
       showToast(`${intentLabel} 완료 · ${formatProblemCount(sessionProblemCounts(sessionToApply))}`);
     } catch (e) {
       const failure = await classifyNetworkRequestError(e, 'registration_connection_failed');
-      activateOperationRecovery(failure, isManualSplit ? '수동 쪼개기 실패' : '등록 실패', {
+      activateOperationRecovery(failure, isManualSplit ? '수동 자르기 실패' : '등록 실패', {
         operation: isManualSplit ? 'queue_manual_split' : 'queue_registration',
         code: failure?.code || 'registration_failed',
       }, {
         kind: 'registration',
         retryMode: mode,
         retryTargetKey: targetKey,
-        retryLabel: isManualSplit ? '수동 쪼개기 다시 열기' : '페이지 PNG 등록 다시 시도',
+        retryLabel: isManualSplit ? '수동 자르기 다시 열기' : '페이지 PNG 등록 다시 시도',
         alternativeMode: isManualSplit ? 'register' : 'manual-split',
-        alternativeLabel: isManualSplit ? '페이지 PNG로 등록' : '수동 쪼개기로 열기',
+        alternativeLabel: isManualSplit ? '페이지 PNG로 등록' : '수동 자르기로 열기',
         localDraft: materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session,
       });
     } finally {
@@ -18829,7 +18833,7 @@ function App(){
           exportingImages={exportingImages}
           canExportImages={!!session && items.some(item => item?.id && !item.excluded)}
           updateInfo={updateInfo}
-          updatePanelRequest={updatePanelRequest}
+          onOpenUpdateSettings={openUpdateSettings}
           updateBusy={updateBusy}
           updateInstallBusy={updateInstallBusy}
           onCheckUpdate={checkForUpdates}
