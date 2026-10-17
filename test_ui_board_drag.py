@@ -28,7 +28,7 @@ Object.assign(sandbox, {
   contentRef: { current: { style: { height: '1200px' }, clientWidth: 800, getBoundingClientRect: () => ({ width: 800 }) } },
   scrollRef: { current: { scrollTop: 0, clientHeight: 600, getBoundingClientRect: () => ({ left: 0, right: 800, top: 0, bottom: 600 }) } },
   positionDragRef: { current: null }, positionDragFrameRef: { current: null }, syncLock: { current: 0 },
-  syncLockOriginIdRef: { current: null },
+  syncLockOriginIdRef: { current: null }, boardSelectionIntentRef: { current: null },
   suppressClickRef: { current: null }, boardDropTargetRef: { current: null },
   pageH: 200, contentW: 800, columnCount: 1,
   items: [{ id: 'p1', heightFrac: 0.8, startYPages: 0 }, { id: 'p2', heightFrac: 0.8, startYPages: 1.2 }], boardOrderSignature: 'p1|p2',
@@ -64,7 +64,7 @@ const container = { scrollTop: 0 };
 Object.assign(sandbox, {
   activeId: 'p1', previewFitActive: false, pageH: 400, columnCount: 1,
   boardOrderSignature: 'p1|p2|p3', syncLock: { current: 0 },
-  syncLockOriginIdRef: { current: null }, restoredScrollRef: { current: false },
+  syncLockOriginIdRef: { current: null }, boardSelectionIntentRef: { current: null }, restoredScrollRef: { current: false },
   scrollRef: { current: container }, boardScrollTopRef: { current: 0 },
   positionDragRef: { current: null }, suppressClickRef: { current: null },
   selectionAnchorRef: { current: null }, selectedIds: new Set(),
@@ -87,13 +87,23 @@ vm.runInContext(
     + section('    if (restoredScrollRef.current || !scrollRef.current) return;', '  }, [previewEstimate.classinPageCount, pageH]);')
     + '\n};\n'
     + section('  // when activeId changes externally, scroll the board to it', '  const onScroll =')
-    + section('  const onTileClick =', '  const focusActiveTileAtPreviewZoom =')
+    + section('  const onTileClick =', '  useLayoutEffect(() => {\n    boardTileHandlersRef.current =')
     + '\nglobalThis.syncScroll = syncBoardScrollState; globalThis.tileClick = onTileClick;', sandbox);
 const followActiveSelection = selectionEffects[0];
 """
 
 
 class TestUiBoardDrag(unittest.TestCase):
+    def test_pending_scroll_event_cannot_replace_a_tile_click_selection(self) -> None:
+        run_node(SCROLL_SELECTION_SETUP + r"""
+        sandbox.tileClick('p2');sandbox.activeId='p2';sandbox.nearestIndex=0;
+        sandbox.syncScroll();
+        assert.deepEqual(selectionCalls,['p2'],'pending scroll cannot undo the explicit click');
+        sandbox.boardSelectionIntentRef.current=null;
+        sandbox.syncScroll();
+        assert.deepEqual(selectionCalls,['p2','p1'],'direct manual scrolling resumes selection sync');
+        """)
+
     def test_external_rail_selection_navigates_during_initial_scroll_restore_lock(self) -> None:
         run_node(SCROLL_SELECTION_SETUP + r"""
         sandbox.restoreScroll();

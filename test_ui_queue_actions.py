@@ -707,8 +707,8 @@ class TestUiQueueActions(unittest.TestCase):
     def test_items_rail_keeps_step_and_source_on_one_line_without_status_text_chip(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         html = board_document()
-        rail_item = source.split("{displayedItemRows.map(({ item: it, displayIndex: i }) => {", 1)[1]
-        rail_item = rail_item.split("</React.Fragment>\n        );})}", 1)[0]
+        rail_item = source.split("function RailRow({", 1)[1].split("// ─── CENTER:", 1)[0]
+        rail_item += source.split("function RailItemDetails({", 1)[1].split("function BoardTile({", 1)[0]
 
         self.assertIn('className="source-label"', rail_item)
         self.assertIn('className="icon-btn item-download-action"', rail_item)

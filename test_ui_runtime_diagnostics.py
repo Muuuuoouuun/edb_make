@@ -704,7 +704,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn(".problem-order-status.is-selection", board)
         self.assertIn("updatePointerDragVisual(event.clientX, event.clientY)", items_rail)
         self.assertIn("resetPointerDragVisual()", items_rail)
-        self.assertIn("pressedItemId === itemId ? 'is-pressed' : ''", items_rail)
+        self.assertIn("isPressed ? 'is-pressed' : ''", items_rail)
+        self.assertIn("isPressed={pressedItemId === itemId}", items_rail)
         self.assertIn(".item.is-pressed:not(.dragging)", board)
         self.assertIn("ReactDOM.createPortal(", items_rail)
         self.assertIn("className=\"rail-drag-overlay editor-basic-mode\"", items_rail)
@@ -845,7 +846,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("onPointerDown={e => beginPositionDrag(e, it, p)}", board_stage)
         tile = board_stage.split('className={`stage-tile ', 1)[1].split('<div', 1)[0]
         self.assertIn("onPointerDown={e => beginPositionDrag(e, it, p)}", tile)
-        self.assertIn("aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}", board_stage)
+        self.assertIn("aria-pressed={isSelected ? 'true' : 'false'}", board_stage)
+        self.assertIn("isSelected={Boolean(selectedIds?.has(String(it.id)))}", board_stage)
 
     def test_reorder_has_keyboard_accessibility_and_failed_save_rollback(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
