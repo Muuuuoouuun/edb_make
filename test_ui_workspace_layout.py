@@ -40,9 +40,12 @@ class TestWorkspaceLayout(unittest.TestCase):
         run_node(RENDER_SETUP + r"""
         const sandbox = renderSandbox();
         Object.assign(sandbox, { mobilePane: 'stage', items: [{ id: 'p1' }], pendingFiles: [],
-          view: 'board', reviewEditorActive: false,
+          view: 'board', reviewEditorActive: false, focusPanelCollapsed: true,
+          useCallback: callback => callback,
+          setFocusPanelCollapsed: value => { sandbox.focusPanelCollapsed = value; },
           setMobilePane: pane => { sandbox.mobilePane = pane; } });
-        compile(sandbox, 'globalThis.navigation = () => ('
+        compile(sandbox, section('  const revealSidePanel = useCallback(', '  const [mutating, setMutating]')
+          + 'globalThis.navigation = () => ('
           + section('          <nav className="mobile-workspace-nav"', '        <ItemsRail')
             .split('</nav>')[0] + '</nav>);');
         for (const pane of ['rail', 'stage', 'panel']) {
@@ -56,6 +59,7 @@ class TestWorkspaceLayout(unittest.TestCase):
           button.props.onClick();
           assert.equal(sandbox.mobilePane, pane);
         }
+        assert.equal(sandbox.focusPanelCollapsed, false, 'panel navigation must reopen a collapsed inspector');
         sandbox.reviewEditorActive = true;
         const buttons = walk(sandbox.navigation()).filter(node => node.type === 'button');
         assert.equal(buttons.find(button => button.props['aria-controls'] === 'workspace-stage').props.disabled, false);

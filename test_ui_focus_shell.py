@@ -52,7 +52,18 @@ class FocusShellStyleTests(unittest.TestCase):
         self.assertIn("outline: 2px solid var(--accent-ink)", self.css)
         self.assertIn("@media (prefers-reduced-motion: reduce)", self.css)
 
-    def test_controls_use_existing_tokens_and_a_desktop_only_breakpoint(self):
+    def test_narrow_panes_release_the_inspector_gutter_and_absolute_position(self):
+        narrow = self.css.split('@media (max-width: 900px)', 1)[1]
+        self.assertIn('--focus-panel-gutter: 0px', narrow)
+        panel = narrow.split('.main.editor-focus-mode > .col.right', 1)[1].split('}', 1)[0]
+        self.assertIn('position: static', panel)
+        self.assertIn('inset: auto', panel)
+        self.assertIn('width: auto', panel)
+        active = narrow.split('focus-panel-collapsed[data-mobile-pane="panel"]', 1)[1].split('}', 1)[0]
+        self.assertIn('visibility: visible', active)
+        self.assertIn('pointer-events: auto', active)
+
+    def test_controls_use_existing_tokens_and_laptop_breakpoints(self):
         sizes = re.findall(r"font-size:\s*([^;]+)", self.css)
         self.assertTrue(sizes)
         self.assertTrue(all(value.startswith("var(--text-") for value in sizes))

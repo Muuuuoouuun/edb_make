@@ -210,7 +210,7 @@ body.dark .main.editor-focus-mode .stage-wrap {
   opacity: .5;
 }
 
-/* Small laptops retain the same desktop model; there is no mobile redesign. */
+/* Small laptops retain the same desktop model. */
 @media (max-width: 1200px) {
   .app > .main.editor-basic-mode.editor-focus-mode:not(.home-mode) {
     --focus-rail-width: 80px;
@@ -231,6 +231,27 @@ body.dark .main.editor-focus-mode .stage-wrap {
     padding-inline: 8px;
   }
 
+}
+
+/* The shared pane navigation owns visibility in narrow windows. A hidden
+   inspector must neither reserve board width nor float over another pane. */
+@media (max-width: 900px) {
+  .app > .main.editor-basic-mode.editor-focus-mode:not(.home-mode) {
+    --focus-panel-gutter: 0px;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .main.editor-focus-mode > .col.right {
+    position: static;
+    inset: auto;
+    width: auto;
+  }
+
+  .main.editor-focus-mode.focus-panel-collapsed[data-mobile-pane="panel"] > .col.right {
+    visibility: visible;
+    pointer-events: auto;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

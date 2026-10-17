@@ -2100,9 +2100,13 @@ function ManualSplitEditor({
     const panel = panelRef.current;
     const wrap = panel?.closest('.review-wrap');
     if (!panel || !wrap) return undefined;
+    const actionBar = wrap.querySelector('.manual-split-actionbar');
     let frame = null;
     const measure = () => {
       frame = null;
+      const stickyTop = actionBar && getComputedStyle(actionBar).position === 'sticky'
+        ? actionBar.getBoundingClientRect().height + 12 : 12;
+      panel.style.setProperty('--manual-panel-sticky-top', `${stickyTop}px`);
       const available = Math.min(window.innerHeight, wrap.getBoundingClientRect().bottom)
         - panel.getBoundingClientRect().top - 12;
       panel.style.setProperty('--manual-panel-available', `${Math.max(180, available)}px`);
@@ -2112,6 +2116,7 @@ function ManualSplitEditor({
     };
     const observer = new ResizeObserver(schedule);
     observer.observe(wrap);
+    if (actionBar) observer.observe(actionBar);
     wrap.addEventListener('scroll', schedule, { passive: true });
     window.addEventListener('resize', schedule);
     measure();
@@ -8422,14 +8427,13 @@ function BoardStage({
                       className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${dropPosition === 'gap' ? 'drop-gap' : ''}`}
                       onClick={event => onTileClick(it.id, event)}
                       onPointerDown={e => beginPositionDrag(e, it, p)}
-                      title={problemDisplayName(it, i)}
                       aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. ${smartMove ? '문제 위로 드래그하면 순서 변경, 옆에 놓으면 뒤 여백 당기기' : `드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}`}
                       aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}
                       style={tileStyle}
                     >
                       <div
                         className="tile-hd"
-                        title={smartMove ? '문제 위: 순서 변경 · 옆: 뒤 여백 당기기 · Esc: 취소' : `드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}
+                        title={`${problemDisplayName(it, i)} · ${smartMove ? '문제 위: 순서 변경 · 옆: 뒤 여백 당기기 · Esc: 취소' : `드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}`}
                       >
                         <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
                         <span className="n">{String(i+1).padStart(2,'0')}</span>
@@ -18669,7 +18673,7 @@ function App(){
                 aria-pressed={mobilePane === pane}
                 aria-controls={pane === 'rail' ? 'workspace-rail' : pane === 'panel' ? 'workspace-panel' : 'workspace-stage'}
                 disabled={reviewEditorActive && pane !== 'stage'}
-                onClick={() => setMobilePane(pane)}
+                onClick={() => pane === 'panel' ? revealSidePanel() : setMobilePane(pane)}
               >{label}</button>
             ))}
           </nav>
@@ -18770,7 +18774,7 @@ function App(){
             focusMode={focusEditorActive}
             panelCollapsed={focusPanelCollapsed}
             panelReopenRef={focusPanelReopenRef}
-            onOpenPanel={() => { setFocusPanelCollapsed(false); window.requestAnimationFrame(() => document.querySelector('#workspace-panel [role="tab"][aria-selected="true"]')?.focus()); }}
+            onOpenPanel={() => { revealSidePanel(); window.requestAnimationFrame(() => document.querySelector('#workspace-panel [role="tab"][aria-selected="true"]')?.focus()); }}
             reviewAttentionCount={reviewAttentionCount}
             onOpenPendingReview={() => requestViewChange('review', { beforeCommit: () => {
               const pending = sessionReviewSummary(session).reviewTargets.filter(target => target.status !== 'normal');
@@ -18809,7 +18813,7 @@ function App(){
           onOpenBugReport={openBugReport}
           onRevealPanel={revealSidePanel}
           focusMode={focusEditorActive}
-          onToggleFocusPanel={() => { setFocusPanelCollapsed(true); window.requestAnimationFrame(() => focusPanelReopenRef.current?.focus()); }}
+          onToggleFocusPanel={() => { setFocusPanelCollapsed(true); setMobilePane('stage'); window.requestAnimationFrame(() => focusPanelReopenRef.current?.focus()); }}
           emptyHome={view === 'board' && !items.length && !pendingFiles.length}
           homeUpdateOpen={homeUpdateOpen}
           onCloseHomeUpdate={() => setHomeUpdateOpen(false)}
