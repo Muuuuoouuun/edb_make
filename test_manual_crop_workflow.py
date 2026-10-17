@@ -90,6 +90,7 @@ class TestManualCropWorkflow(TestCase):
             cancelManualSplitGesture:()=>cancellations++, setManualSplitMode:value=>{selectedMode=value},
           };
           vm.createContext(sandbox);
+          vm.runInContext(section('function manualSplitShortcutKey(', 'function translateManualSplitBoxes('),sandbox);
           vm.runInContext(section('  useEffect(() => {\n    if (!manualSplit) return undefined;', '\n  if (!pages.length)'),sandbox);
           handler({key:'Escape',preventDefault(){},target:{blur(){blur++}}});
           assert.equal(selectedMode,'select');assert.equal(cancellations,1);assert.equal(blur,1);
