@@ -98,14 +98,15 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다", side_panel)
         self.assertEqual(2, side_panel.count("<SplitModePicker") + side_panel.count("<PendingFilePreview"))
 
-    def test_image_only_recognition_uses_fast_non_ai_path(self) -> None:
+    def test_image_only_recognition_allows_configured_ai_and_keeps_offline_fast_path(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
         queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
 
         self.assertIn("function isImageOnlyFileBatch(files)", source)
         self.assertIn(
-            "const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files);",
+            "const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files)\n"
+            "      && !(aiEnabled && userSettings?.hasGeminiApiKey);",
             queue_source,
         )
         self.assertIn("!fastImageRecognition", queue_source)

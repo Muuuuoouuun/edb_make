@@ -11515,7 +11515,7 @@ function SplitModePicker({ splitMode, setSplitMode, disabled, compact = false, i
     <div className={`intent-control split-mode-control ${compact ? 'compact' : ''}`} role="radiogroup" aria-label="분할 방식">
       {SPLIT_MODE_OPTIONS.map(option => {
         const description = option.value === 'recognize' && imageOnly
-          ? '이미지는 AI 보정 없이 빠르게 문항을 나눕니다'
+          ? '문제 번호·도형·선택지를 함께 나눕니다. AI 설정 시 불확실한 경계를 보정합니다'
           : option.description;
         return (
           <button
@@ -17308,7 +17308,8 @@ function App(){
     const isRecognition = mode === 'recognize' || isPassageOnly;
     const isManualSplit = mode === 'manual-split';
     const resolvedInputIntent = isRecognition ? 'multi-problem' : 'page-as-is';
-    const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files);
+    const fastImageRecognition = isRecognition && !isPassageOnly && isImageOnlyFileBatch(files)
+      && !(aiEnabled && userSettings?.hasGeminiApiKey);
     const aiFallback = isRecognition && !isPassageOnly && aiEnabled && userSettings?.hasGeminiApiKey && !fastImageRecognition
       ? AI_FALLBACK_ON
       : AI_FALLBACK_OFF;

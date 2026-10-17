@@ -3349,6 +3349,9 @@ def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_bo
             and 1 <= dot["x"] - digit["right"] <= 18
             and dot["y"] >= digit["y"] + max(2, int(digit["height"] * 0.45))
             and dot["y"] <= digit["bottom"] + 8
+            # Parentheses and fragments of circled answer choices are not
+            # the small baseline punctuation in a question label such as 7.
+            and max(dot["width"], dot["height"]) <= max(3, digit["height"] * 0.4)
         ]
         if not candidate_digits:
             continue
@@ -3722,7 +3725,12 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
 
 
 def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[float]:
-    offsets = _visual_problem_marker_offsets(image, column_box, column_box)
+    colored = _colored_problem_marker_offsets(image, column_box, column_box)
+    # Repeated colored question labels are stronger evidence than black
+    # components in the answer-choice rows. Do not combine both into starts.
+    offsets = colored if len(colored) >= 2 else sorted([
+        *colored, *_dark_numeric_problem_marker_component_offsets(image, column_box, column_box),
+    ])
     tops: list[float] = []
     for offset in offsets:
         top = column_box.top + float(offset)
@@ -3777,9 +3785,25 @@ def _segment_visual_problem_markers(
     options: SegmentOptions,
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
     marker_mask, content_box, columns = _visual_marker_column_boxes(image, options)
-    marker_tops_by_column = [_visual_problem_marker_tops(image, column_box) for column_box in columns]
+    # Component thresholds describe a workbook at roughly 800 px wide. Resize
+    # once for marker analysis only; all masks and output crops stay full-size.
+    scale = min(1.0, 800.0 / image.width)
+    analysis_image = image if scale == 1.0 else image.resize(
+        (800, max(1, round(image.height * scale))), Image.Resampling.LANCZOS,
+    )
+    marker_tops_by_column = []
+    for column in columns:
+        analysis_column = Box.from_points(
+            column.left * scale, column.top * scale,
+            column.right * scale, column.bottom * scale,
+        )
+        marker_tops_by_column.append([
+            top / scale for top in _visual_problem_marker_tops(analysis_image, analysis_column)
+        ])
     marker_count = sum(len(tops) for tops in marker_tops_by_column)
-    if marker_count < 2:
+    # A partially recognized page must fall back as a whole. Otherwise an
+    # unmarked column disappears while the remaining blocks look successful.
+    if marker_count < 2 or any(not tops for tops in marker_tops_by_column):
         return None
 
     blocks: list[ContentBlock] = []
@@ -3808,7 +3832,7 @@ def _segment_visual_problem_markers(
             ) is not None:
                 valid_tops.append(marker_top)
         if not valid_tops:
-            continue
+            return None
 
         for marker_index, marker_top in enumerate(valid_tops, start=1):
             next_marker_top = valid_tops[marker_index] if marker_index < len(valid_tops) else None
@@ -4322,6 +4346,11 @@ def segment_page(
             blocks, metadata = marker_result
         else:
             blocks, metadata = _segment_document_page(image, page_id, resolved_options)
+            if _is_image_upload_document_source(image_path, source_metadata):
+                # A projection-only split has not verified question starts.
+                # Surface this to automatic AI routing (or review when off).
+                for block in blocks:
+                    block.metadata.setdefault("fallback_reason", "image_marker_boundaries_unverified")
         source_path = getattr(image_path, "normalized_path", None) or getattr(image_path, "source_path", None)
         if source_path is None and not isinstance(image_path, Image.Image):
             source_path = str(image_path)
