@@ -350,7 +350,7 @@ process.stdout.write(JSON.stringify({ history, latest }));
         self.assertIn("kind: 'recognition'", queue)
         self.assertIn("kind: 'registration'", queue)
         self.assertIn("페이지 PNG로 등록", queue)
-        self.assertIn("수동 쪼개기로 열기", queue)
+        self.assertIn("수동 자르기로 열기", queue)
 
         retry = self.app.split("const retryRecoveryOperation", 1)[1].split(
             "const runRecoveryAlternative", 1

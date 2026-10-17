@@ -151,10 +151,10 @@ class TestUiPerformance(unittest.TestCase):
         self.assertNotIn("function RecognitionPageReviewStage", self.source)
         stage = self.source.split("function ReviewStage", 1)[1].split("// ─── LEFT:", 1)[0]
 
-        self.assertIn("loading={pageIndex < 2 ? 'eager' : 'lazy'}", stage)
+        self.assertIn("loading={pageIndex < 2 || selectedSourcePage?.id === page.id ? 'eager' : 'lazy'}", stage)
         self.assertIn("filePreviewUrl(page.sourceImageUri)", stage)
         self.assertIn('decoding="async"', stage)
-        self.assertIn("fetchPriority={pageIndex < 2 ? 'high' : 'auto'}", stage)
+        self.assertIn("fetchPriority={pageIndex < 2 || selectedSourcePage?.id === page.id ? 'high' : 'auto'}", stage)
 
     def test_center_panels_request_display_sized_images_only(self) -> None:
         self.assertIn("const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024", self.source)
@@ -205,7 +205,7 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("cancelSmoothScroll(reviewWrapRef.current)", review_stage)
         self.assertIn("width={Math.max(1, Number(page.width) || 1)}", review_stage)
         self.assertIn("height={Math.max(1, Number(page.height) || 1)}", review_stage)
-        self.assertIn("loading={pageIndex < 2 ? 'eager' : 'lazy'}", review_stage)
+        self.assertIn("loading={pageIndex < 2 || selectedSourcePage?.id === page.id ? 'eager' : 'lazy'}", review_stage)
         self.assertIn('decoding="async"', review_stage)
         self.assertIn("scrollbar-gutter: stable", board)
 
