@@ -1,0 +1,43 @@
+name: Deployment Readiness
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  configuration:
+    name: Check protected deployment configuration
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report presence and PIN format without revealing values
+        env:
+          UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
+          QUALITY_KEY: ${{ secrets.EDB_QUALITY_GEMINI_API_KEY }}
+          CORPUS_MANIFEST: ${{ vars.EDB_QUALITY_CORPUS_MANIFEST != '' && 'configured' || '' }}
+          CORPUS_ROOT: ${{ vars.EDB_QUALITY_CORPUS_ROOT != '' && 'configured' || '' }}
+          CORPUS_BASELINE: ${{ vars.EDB_QUALITY_CORPUS_BASELINE != '' && 'configured' || '' }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          pin = os.environ.get('UPDATE_PIN', '').strip()
+          checks = {
+              'EDB_UPDATE_PIN': ('valid' if pin.isascii() and pin.isdigit() and 4 <= len(pin) <= 12 else 'invalid') if pin else 'missing',
+              'EDB_QUALITY_GEMINI_API_KEY': 'configured' if os.environ.get('QUALITY_KEY', '').strip() else 'missing',
+          }
+          for name in ('CORPUS_MANIFEST', 'CORPUS_ROOT', 'CORPUS_BASELINE'):
+              checks['EDB_QUALITY_' + name] = 'configured' if os.environ.get(name, '').strip() else 'not configured as repository variable; runner configuration not verified'
+          lines = ['# Deployment configuration readiness', '', '| Setting | Status |', '| --- | --- |']
+          lines.extend(f'| {name} | {status} |' for name, status in checks.items())
+          lines.extend(['', 'This checks configuration presence only. API key validity, protected runner availability, document access, and approved baseline validity require a private-corpus run. No secret values or private paths are included.'])
+          report = '\n'.join(lines) + '\n'
+          print(report)
+          with Path(os.environ['GITHUB_STEP_SUMMARY']).open('a') as stream:
+              stream.write(report)
+          if checks['EDB_UPDATE_PIN'] != 'valid' or checks['EDB_QUALITY_GEMINI_API_KEY'] != 'configured':
+              raise SystemExit(1)
+          PY

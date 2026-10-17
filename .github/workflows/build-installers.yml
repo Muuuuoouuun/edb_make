@@ -6,7 +6,7 @@ on:
       version:
         description: "Release version, for example 0.1.1"
         required: true
-        default: "0.2.3"
+        default: "0.2.4"
       macos_arch:
         description: "Native macOS package architecture"
         required: true
@@ -839,7 +839,9 @@ jobs:
   update-feed:
     name: Update Feed
     runs-on: ubuntu-latest
-    if: inputs.macos_download_url != '' && inputs.windows_download_url != ''
+    # Internal builds intentionally skip the transitive private-quality gate.
+    # Override implicit success() while still requiring both verified installers.
+    if: ${{ !cancelled() && needs.macos.result == 'success' && needs.windows.result == 'success' && inputs.macos_download_url != '' && inputs.windows_download_url != '' }}
     needs:
       - macos
       - windows

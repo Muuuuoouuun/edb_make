@@ -29,12 +29,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 class TestReleaseVersionConsistency(unittest.TestCase):
-    def test_release_version_defaults_match_0_2_3(self) -> None:
+    def test_release_version_defaults_match_0_2_4(self) -> None:
         version = json.loads(
             (PROJECT_ROOT / "app_update_config.json").read_text(encoding="utf-8")
         )["version"]
 
-        self.assertEqual("0.2.3", version)
+        self.assertEqual("0.2.4", version)
         expected_literal = f'"version": "{version}"'
         self.assertIn(expected_literal, (PROJECT_ROOT / "app_server.py").read_text(encoding="utf-8"))
         self.assertIn(
@@ -425,7 +425,12 @@ class TestPackagingSourceHardening(unittest.TestCase):
 
     def test_workflow_skips_feed_without_complete_urls_and_records_real_arch(self) -> None:
         source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
-        self.assertIn("if: inputs.macos_download_url != '' && inputs.windows_download_url != ''", source)
+        feed_job = source.split("  update-feed:\n", 1)[1]
+        feed_condition = next(line.strip() for line in feed_job.splitlines() if line.strip().startswith("if:"))
+        self.assertIn("!cancelled()", feed_condition)
+        self.assertIn("needs.macos.result == 'success'", feed_condition)
+        self.assertIn("needs.windows.result == 'success'", feed_condition)
+        self.assertIn("inputs.macos_download_url != '' && inputs.windows_download_url != ''", feed_condition)
         self.assertIn('arch=$(uname -m)', source)
         self.assertIn("MACOS_ARTIFACT_ARCH: ${{ needs.macos.outputs.artifact_arch }}", source)
         self.assertIn("WINDOWS_ARTIFACT_ARCH: ${{ needs.windows.outputs.artifact_arch }}", source)
