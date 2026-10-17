@@ -693,13 +693,27 @@ function manualSplitBoxesOverlap(a, b){
 }
 
 function manualSplitHasOverlaps(regions){
-  const list = regions || [];
-  for (let i = 0; i < list.length; i += 1) {
-    for (let j = i + 1; j < list.length; j += 1) {
-      if (manualSplitBoxesOverlap(list[i], list[j])) return true;
+  // Convert coordinates once, then stop scanning when rows no longer overlap.
+  const boxes = (regions || []).map(region => {
+    const box = region?.bbox || {};
+    const left = finiteNumber(box.left, 0), top = finiteNumber(box.top, 0);
+    return { left, top, right: left + Math.max(0, finiteNumber(box.width, 0)),
+      bottom: top + Math.max(0, finiteNumber(box.height, 0)) };
+  }).sort((a, b) => a.top - b.top);
+  for (let i = 0; i < boxes.length; i += 1) {
+    const a = boxes[i];
+    for (let j = i + 1; j < boxes.length && boxes[j].top < a.bottom; j += 1) {
+      const b = boxes[j];
+      if (a.top < b.bottom && a.left < b.right && a.right > b.left) return true;
     }
   }
   return false;
+}
+
+function manualSplitShortcutKey(event){
+  const key = String(event.key || '').toLowerCase();
+  // Korean keyboard layouts still expose the physical Latin shortcut code.
+  return /^[a-z]$/.test(key) ? key : /^Key[A-Z]$/.test(event.code || '') ? event.code.slice(3).toLowerCase() : key;
 }
 
 function translateManualSplitBoxes(boxes, page, dx, dy){
@@ -2142,10 +2156,14 @@ function ManualSplitEditor({
           <div
             ref={canvasRef}
             className={`review-page-canvas manual-split-canvas ${activeMode}-mode`}
+            tabIndex={0}
+            role="group"
+            aria-label="수동 자르기 캔버스"
+            onMouseDownCapture={event => { if (event.button === 0) event.currentTarget.focus({ preventScroll: true }); }}
             onMouseDown={(evt) => onCanvasMouseDown?.(evt, page)}
           >
             {page.sourceImageUri ? (
-              <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} width={pageWidth} height={pageHeight} draggable={false} />
+              <img src={filePreviewUrl(page.sourceImageUri)} alt={page.id} width={pageWidth} height={pageHeight} decoding="async" fetchPriority="high" draggable={false} />
             ) : (
               <div style={{ padding: 40, textAlign: 'center', color: 'var(--muted)' }}>
                 페이지 이미지를 불러올 수 없어요.
@@ -2347,7 +2365,7 @@ function ManualSplitEditor({
           <span>G 드래그</span>
           <span>S 스탬프</span>
           <span>P 패널 이동</span>
-          <span>Enter 적용</span>
+          <span>Enter 적용 · ? 도움말</span>
         </div>
         {shortcutHelpOpen && (
           <div className="manual-split-shortcut-guide" id="manual-split-shortcuts" aria-label="수동 자르기 단축키 전체 목록">
@@ -2360,7 +2378,7 @@ function ManualSplitEditor({
             <span><kbd>방향키</kbd> 1px 이동</span>
             <span><kbd>Shift 방향키</kbd> 빠른 이동</span>
             <span><kbd>Delete</kbd> 선택 삭제</span>
-            <span><kbd>Enter</kbd> 자르기 적용</span>
+            <span><kbd>Enter</kbd> 캔버스에서 적용 · <kbd>{PRIMARY_MODIFIER_LABEL}+Enter</kbd> 버튼에서도 적용</span>
             <span><kbd>Esc</kbd> 진행 중 조작 취소 · 영역 유지</span>
           </div>
         )}
@@ -2963,6 +2981,7 @@ function ReviewStage({
   onManualSplitFlowDone, onEditScopeChange,
 }){
   const pages = Array.isArray(session?.pages) ? session.pages : [];
+  const reviewPageLookup = useMemo(() => new Map(pages.map((page, index) => [page.id, { page, index }])), [pages]);
   const sourcePageHeading = (page, pageIndex) => {
     const metadata = page?.metadata || {};
     const inputFiles = Array.isArray(session?.input_files) ? session.input_files : [];
@@ -3281,7 +3300,7 @@ function ReviewStage({
   const selectedProblems = selectedList.map(id => problemsById.get(id)).filter(Boolean);
   const selectedSingleProblem = selectedProblems.length === 1 ? selectedProblems[0] : null;
   const selectedSinglePage = selectedSingleProblem
-    ? pages.find(page => page.id === selectedSingleProblem.sourcePageId)
+    ? reviewPageLookup.get(selectedSingleProblem.sourcePageId)?.page
     : null;
   const sameSourcePage = selectedProblems.length >= 2
     && selectedProblems.every(p => p.sourcePageId === selectedProblems[0].sourcePageId);
@@ -3442,7 +3461,7 @@ function ReviewStage({
     && selectedSinglePage?.sourceImageUri
   );
   const selectedSourcePage = selectedSinglePage || (sameSourcePage
-    ? pages.find(page => page.id === selectedProblems[0]?.sourcePageId)
+    ? reviewPageLookup.get(selectedProblems[0]?.sourcePageId)?.page
     : null);
   const selectedPageChromeProblemIds = listUnique(
     selectedProblems
@@ -3458,12 +3477,11 @@ function ReviewStage({
     && selectedSourcePage?.sourceImageUri
     && selectedProblems.every(problem => problem.sourcePageId === selectedSourcePage.id)
   );
-  const manualSplitPage = manualSplit
-    ? pages.find(page => page.id === manualSplit.pageId)
-    : null;
+  const manualSplitPage = manualSplit ? reviewPageLookup.get(manualSplit.pageId)?.page : null;
+  const renderedReviewPages = useMemo(() => manualSplit ? (manualSplitPage ? [manualSplitPage] : []) : pages, [manualSplit?.pageId, manualSplitPage, pages]);
   const manualSplitScope = useMemo(() => manualSplitPage ? {
     ...manualSplitScopeSummary(manualSplitPage, items, manualSplit.replaceProblemIds, manualSplit.scope),
-    pageLabel: sourcePageHeading(manualSplitPage, pages.indexOf(manualSplitPage)),
+    pageLabel: sourcePageHeading(manualSplitPage, reviewPageLookup.get(manualSplitPage.id)?.index || 0),
   } : null, [manualSplitPage, pages, items, manualSplit?.replaceProblemIds, manualSplit?.scope]);
   useLayoutEffect(() => { onEditScopeChange?.(manualSplitScope); }, [onEditScopeChange, manualSplitScope]);
   useEffect(() => () => onEditScopeChange?.(null), [onEditScopeChange]);
@@ -4752,9 +4770,15 @@ function ReviewStage({
   useEffect(() => {
     if (!manualSplit) return undefined;
     const onKeyDown = (evt) => {
+      if (evt.defaultPrevented || evt.isComposing || evt.keyCode === 229) return;
+      if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
       const isFormControl = isEditableKeyboardTarget(evt.target);
-      const key = String(evt.key || '').toLowerCase();
+      const key = manualSplitShortcutKey(evt);
       const primaryModifier = evt.ctrlKey || evt.metaKey;
+      if (!isFormControl && evt.repeat && ['a', 'd', 'v', 'g', 's', 'p', '?', 'enter', 'escape'].includes(key)) {
+        evt.preventDefault();
+        return;
+      }
       if (manualSplitShortcutHelpOpen && evt.key === 'Escape') {
         evt.preventDefault();
         evt.stopPropagation();
@@ -4770,12 +4794,12 @@ function ReviewStage({
         return;
       }
       if (isFormControl) return;
-      if (primaryModifier && !evt.altKey && key === 'a') {
+      if (primaryModifier && !evt.altKey && !evt.shiftKey && key === 'a') {
         evt.preventDefault();
         selectAllManualSplitRegions();
         return;
       }
-      if (primaryModifier && !evt.altKey && key === 'd') {
+      if (primaryModifier && !evt.altKey && !evt.shiftKey && key === 'd') {
         evt.preventDefault();
         duplicateManualSplitSelected();
         return;
@@ -4805,7 +4829,9 @@ function ReviewStage({
         toggleManualSplitPanelSide();
         return;
       }
+      if (evt.altKey) return;
       if (evt.key === 'Delete' || evt.key === 'Backspace') {
+        if (primaryModifier || evt.shiftKey) return;
         if ((manualSplit.selectedRegionIds || []).length) {
           evt.preventDefault();
           deleteManualSplitSelected();
@@ -4813,12 +4839,15 @@ function ReviewStage({
         return;
       }
       if (evt.key === 'Enter') {
+        // Enter activates focused buttons; Ctrl/Command+Enter explicitly applies.
+        if (!primaryModifier && evt.target?.closest?.('button, a, summary, [role="button"]')) return;
         evt.preventDefault();
         if ((manualSplit.regions || []).length && !mutating) {
           applyManualPageSplit();
         }
         return;
       }
+      if (primaryModifier) return;
       const arrowDelta = {
         ArrowLeft: [-1, 0],
         ArrowRight: [1, 0],
@@ -5461,7 +5490,8 @@ function ReviewStage({
             </div>
             )}
           </div>}
-          {pages.map((page, pageIndex) => {
+          {renderedReviewPages.map(page => {
+            const pageIndex = reviewPageLookup.get(page.id)?.index || 0;
             const allPageProblems = (page.problemIds || [])
               .map(pid => problemsById.get(pid))
               .filter(Boolean)
@@ -5469,7 +5499,6 @@ function ReviewStage({
             const pageId = String(page?.id || '').trim();
             const pageInScope = boxEdit?.multi || !reviewScopeActive || reviewScopePageIdSet.has(pageId) || allPageProblems.length > 0;
             if (!pageInScope) return null;
-            if (manualSplit && page.id !== manualSplit.pageId) return null;
             const pageMatchesRiskFilter = reviewRiskFilter && !riskFilterHasProblemMatches
               ? hasRiskFlag(page, reviewRiskFilter)
               : false;
@@ -5610,9 +5639,9 @@ function ReviewStage({
                         alt={pageHeading}
                         width={Math.max(1, Number(page.width) || 1)}
                         height={Math.max(1, Number(page.height) || 1)}
-                        loading={pageIndex < 2 ? 'eager' : 'lazy'}
+                        loading={pageIndex < 2 || selectedSourcePage?.id === page.id ? 'eager' : 'lazy'}
                         decoding="async"
-                        fetchPriority={pageIndex < 2 ? 'high' : 'auto'}
+                        fetchPriority={pageIndex < 2 || selectedSourcePage?.id === page.id ? 'high' : 'auto'}
                         draggable={false}
                       />
                     ) : (
