@@ -437,7 +437,9 @@ def _find_document_content_box(mask: Image.Image, width: int, height: int) -> Bo
     )
 
 
-def _detect_document_columns(mask: Image.Image, content_box: Box, options: SegmentOptions) -> list[Box]:
+def _detect_document_columns(
+    mask: Image.Image, content_box: Box, options: SegmentOptions, *, image_columns: bool = False,
+) -> list[Box]:
     crop = mask.crop((int(content_box.left), int(content_box.top), int(content_box.right), int(content_box.bottom)))
     if crop.width <= 1 or crop.height <= 1:
         return [content_box]
@@ -452,7 +454,7 @@ def _detect_document_columns(mask: Image.Image, content_box: Box, options: Segme
 
     separator_split = _detect_document_separator_split_x(column_projection, crop.width, crop.height)
     if separator_split is not None:
-        return _build_document_split_columns(mask, content_box, separator_split)
+        return _build_document_split_columns(mask, content_box, separator_split, image_columns=image_columns)
 
     search_start = int(crop.width * 0.3)
     search_end = max(search_start + 1, int(crop.width * 0.7))
@@ -460,30 +462,34 @@ def _detect_document_columns(mask: Image.Image, content_box: Box, options: Segme
     if not center_slice:
         return [content_box]
 
-    split_offset = _widest_projection_valley_offset(center_slice)
-    split_x = search_start + split_offset
-    # If the chosen gutter is bounded by a printed vertical rule (just
-    # outside the 35-65% separator search window), split on the rule itself
-    # so neither column box absorbs the empty gutter.
-    rule_min = max(40, int(crop.height * 0.42))
-    for direction in (1, -1):
-        x = split_x
-        while 0 <= x < len(column_projection) and (
-            column_projection[x] == 0 or column_projection[x] >= rule_min
-        ):
-            if column_projection[x] >= rule_min:
-                split_x = x
-                break
-            x += direction
-        else:
-            continue
-        break
+    if image_columns:
+        split_offset = min(range(len(center_slice)), key=lambda idx: center_slice[idx])
+        split_x = search_start + split_offset
+    else:
+        split_offset = _widest_projection_valley_offset(center_slice)
+        split_x = search_start + split_offset
+        # If the chosen gutter is bounded by a printed vertical rule (just
+        # outside the 35-65% separator search window), split on the rule itself
+        # so neither column box absorbs the empty gutter.
+        rule_min = max(40, int(crop.height * 0.42))
+        for direction in (1, -1):
+            x = split_x
+            while 0 <= x < len(column_projection) and (
+                column_projection[x] == 0 or column_projection[x] >= rule_min
+            ):
+                if column_projection[x] >= rule_min:
+                    split_x = x
+                    break
+                x += direction
+            else:
+                continue
+            break
     valley_score = smoothed[split_x]
     peak_score = max(smoothed)
     if peak_score <= 0 or valley_score > peak_score * 0.22:
         return [content_box]
 
-    return _build_document_split_columns(mask, content_box, split_x)
+    return _build_document_split_columns(mask, content_box, split_x, image_columns=image_columns)
 
 
 def _widest_projection_valley_offset(values: list[float]) -> int:
@@ -618,9 +624,14 @@ def _document_split_ink_gutters(
     return _gutter(-1), _gutter(1)
 
 
-def _build_document_split_columns(mask: Image.Image, content_box: Box, split_x: int) -> list[Box]:
+def _build_document_split_columns(
+    mask: Image.Image, content_box: Box, split_x: int, *, image_columns: bool = False,
+) -> list[Box]:
     gutter = max(10, int(content_box.width * 0.025))
-    left_gutter, right_gutter = _document_split_ink_gutters(mask, content_box, split_x, gutter)
+    left_gutter, right_gutter = (
+        (gutter, gutter) if image_columns
+        else _document_split_ink_gutters(mask, content_box, split_x, gutter)
+    )
     left_box = Box.from_points(
         content_box.left,
         content_box.top,
@@ -3980,12 +3991,16 @@ def _is_image_upload_document_source(image_source: Any, metadata: dict[str, Any]
     return str(source_path).lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"))
 
 
-def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> tuple[Image.Image, Box, list[Box]]:
+def _visual_marker_column_boxes(
+    image: Image.Image, options: SegmentOptions, *, scan_mode: bool = False,
+) -> tuple[Image.Image, Box, list[Box]]:
     marker_mask = _dark_mask(image, min(options.document_dark_threshold, 190))
     content_box = _find_document_content_box(marker_mask, image.width, image.height)
-    columns = _detect_document_columns(marker_mask, content_box, options)
+    columns = _detect_document_columns(marker_mask, content_box, options, image_columns=not scan_mode)
     if not columns:
         columns = [content_box]
+    if not scan_mode:
+        return marker_mask, content_box, columns
     # Problem numbers are searched in a narrow strip at the column's left
     # edge.  The split sits mid-gutter, so on pages without a centre rule the
     # right column's box started far left of its text and every right-column
@@ -4167,6 +4182,7 @@ def _fit_visual_problem_box(
     boundary_bottom: float,
     page_width: int,
     page_height: int,
+    scan_mode: bool = False,
 ) -> Box | None:
     padding = max(16.0, float(page_height) * 0.015)
     top = max(0.0, marker_top - padding)
@@ -4187,8 +4203,11 @@ def _fit_visual_problem_box(
 
     # Pad around the ink, but never past the column's own gutter: the extra
     # padding used to reach the centre rule / neighbouring column.
-    left = max(0.0, column_box.left - 4.0, float(crop_box[0] + ink_bbox[0]) - padding)
-    right = min(float(page_width), column_box.right + 4.0, float(crop_box[0] + ink_bbox[2]) + padding)
+    left = max(0.0, float(crop_box[0] + ink_bbox[0]) - padding)
+    right = min(float(page_width), float(crop_box[0] + ink_bbox[2]) + padding)
+    if scan_mode:
+        left = max(column_box.left - 4.0, left)
+        right = min(column_box.right + 4.0, right)
     bottom = min(bottom_limit, float(crop_box[1] + ink_bbox[3]) + padding)
     if right - left < max(80.0, float(column_box.width) * 0.24):
         left = max(0.0, column_box.left)
@@ -4277,7 +4296,7 @@ def _segment_visual_problem_markers(
     skip_above: float | None = None,
     scan_mode: bool = False,
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
-    marker_mask, content_box, columns = _visual_marker_column_boxes(image, options)
+    marker_mask, content_box, columns = _visual_marker_column_boxes(image, options, scan_mode=scan_mode)
     # Component thresholds describe a workbook at roughly 800 px wide. Resize
     # once for marker analysis only; all masks and output crops stay full-size.
     # Scan-specific dot and whitespace thresholds stay at native resolution.
@@ -4323,6 +4342,7 @@ def _segment_visual_problem_markers(
                 boundary_bottom=probe_boundary_bottom,
                 page_width=image.width,
                 page_height=image.height,
+                scan_mode=scan_mode,
             ) is not None:
                 valid_tops.append(marker_top)
         leading_box = _visual_leading_continuation_box(
@@ -4381,6 +4401,7 @@ def _segment_visual_problem_markers(
                 boundary_bottom=boundary_bottom,
                 page_width=image.width,
                 page_height=image.height,
+                scan_mode=scan_mode,
             )
             if box is None:
                 continue
@@ -4433,10 +4454,12 @@ def _segment_visual_problem_markers(
     }
 
 
-def _segment_document_page(image: Image.Image, page_id: str, options: SegmentOptions) -> tuple[list[ContentBlock], dict[str, Any]]:
+def _segment_document_page(
+    image: Image.Image, page_id: str, options: SegmentOptions, *, image_columns: bool = False,
+) -> tuple[list[ContentBlock], dict[str, Any]]:
     mask = _dark_mask(image, options.document_dark_threshold)
     content_box = _find_document_content_box(mask, image.width, image.height)
-    columns = _detect_document_columns(mask, content_box, options)
+    columns = _detect_document_columns(mask, content_box, options, image_columns=image_columns)
     blocks: list[ContentBlock] = []
     page_area = _page_area_px(image.width, image.height)
 
@@ -5402,7 +5425,13 @@ def segment_page(
         elif scan_column_result is not None:
             blocks, metadata = scan_column_result
         else:
-            blocks, metadata = _segment_document_page(image, page_id, resolved_options)
+            blocks, metadata = _segment_document_page(
+                image, page_id, resolved_options,
+                image_columns=(
+                    _is_image_upload_document_source(image_path, source_metadata)
+                    and str(source_metadata.get("source_type") or "").lower() != "pdf"
+                ),
+            )
             if _is_image_upload_document_source(image_path, source_metadata):
                 # A projection-only split has not verified question starts.
                 # Surface this to automatic AI routing (or review when off).
