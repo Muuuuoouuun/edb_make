@@ -194,6 +194,16 @@ jobs:
               )
           PY
 
+      - name: Verify release OpenCV profile before private corpus
+        env:
+          QUALITY_PYTHON: ${{ steps.private-quality-work.outputs.quality_python }}
+          PRIVATE_VENV_ROOT: ${{ steps.private-quality-work.outputs.venv_root }}
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+        run: |
+          "$QUALITY_PYTHON" scripts/build_minimal_opencv.py --work-dir "$PRIVATE_VENV_ROOT/opencv-build" --cache-dir "$PRIVATE_VENV_ROOT/opencv-cache" --reference-out "$PRIVATE_VENV_ROOT/opencv-reference.json" --install
+          "$QUALITY_PYTHON" scripts/verify_minimal_opencv.py --require-profile --compare "$PRIVATE_VENV_ROOT/opencv-reference.json"
+
       - name: Evaluate protected real-document corpus
         env:
           QUALITY_PYTHON: ${{ steps.private-quality-work.outputs.quality_python }}
@@ -293,6 +303,31 @@ jobs:
         run: |
           echo "EDB_RELEASE_GIT_COMMIT=${GITHUB_SHA}" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+
+
+      - name: Cache image-only OpenCV wheel
+        id: opencv-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/edb-opencv-wheel-cache
+          key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
+
+      - name: Build and verify image-only OpenCV
+        run: |
+          .venv/bin/python scripts/build_minimal_opencv.py --work-dir "$RUNNER_TEMP/edb-opencv-build" --cache-dir "$RUNNER_TEMP/edb-opencv-wheel-cache" --reference-out "$RUNNER_TEMP/opencv-reference.json" --install
+          .venv/bin/python scripts/verify_minimal_opencv.py --require-profile --compare "$RUNNER_TEMP/opencv-reference.json"
+
+      - name: Save verified image-only OpenCV wheel
+        if: steps.opencv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/edb-opencv-wheel-cache
+          key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
+
+      - name: Run image-pipeline regression in isolated test tools
+        run: |
+          .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --no-deps --target "$RUNNER_TEMP/edb-image-test-tools" -r requirements-ci.lock
+          PYTHONPATH="$RUNNER_TEMP/edb-image-test-tools" .venv/bin/python -m pytest -q test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
 
       - name: Import macOS signing certificate
         env:
@@ -438,7 +473,7 @@ jobs:
 
   windows:
     name: Windows Setup
-    runs-on: windows-latest
+    runs-on: windows-2022
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
@@ -472,6 +507,44 @@ jobs:
           "EDB_RELEASE_GIT_COMMIT=$env:GITHUB_SHA" >> $env:GITHUB_ENV
           $sourceDateEpoch = git show -s --format=%ct HEAD
           "SOURCE_DATE_EPOCH=$sourceDateEpoch" >> $env:GITHUB_ENV
+
+
+      - name: Cache image-only OpenCV wheel
+        id: opencv-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/edb-opencv-wheel-cache
+          key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
+
+      - name: Build and verify image-only OpenCV
+        shell: pwsh
+        run: |
+          function Assert-OpenCVCommand([string]$Label) { if ($LASTEXITCODE -ne 0) { throw "$Label failed: $LASTEXITCODE" } }
+          .\.venv\Scripts\python.exe scripts\build_minimal_opencv.py --work-dir "$env:RUNNER_TEMP/edb-opencv-build" --cache-dir "$env:RUNNER_TEMP/edb-opencv-wheel-cache" --reference-out "$env:RUNNER_TEMP/opencv-reference.json" --install
+          Assert-OpenCVCommand "Image-only OpenCV build"
+          .\.venv\Scripts\python.exe scripts\verify_minimal_opencv.py --require-profile --compare "$env:RUNNER_TEMP/opencv-reference.json"
+          Assert-OpenCVCommand "Image-only page equivalence"
+
+      - name: Save verified image-only OpenCV wheel
+        if: steps.opencv-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/edb-opencv-wheel-cache
+          key: opencv-image-${{ runner.os }}-${{ runner.arch }}-cp311-${{ hashFiles('release/opencv-image-profile.json', 'requirements-opencv-build.lock', 'scripts/build_minimal_opencv.py') }}
+
+      - name: Run image-pipeline regression in isolated test tools
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m pip install --disable-pip-version-check --require-hashes --no-deps --target "$env:RUNNER_TEMP/edb-image-test-tools" -r requirements-ci.lock
+          if ($LASTEXITCODE -ne 0) { throw "Image test tools installation failed." }
+          $previousPythonPath = $env:PYTHONPATH
+          try {
+            $env:PYTHONPATH = "$env:RUNNER_TEMP/edb-image-test-tools"
+            .\.venv\Scripts\python.exe -m pytest -q test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
+            if ($LASTEXITCODE -ne 0) { throw "Image pipeline regression failed." }
+          } finally {
+            $env:PYTHONPATH = $previousPythonPath
+          }
 
       - name: Install Inno Setup
         shell: pwsh

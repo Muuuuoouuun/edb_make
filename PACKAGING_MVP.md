@@ -463,3 +463,17 @@ The base Python package also includes dependencies with copyleft or dual-license
 - Packaged builds still rely on Python-side native dependencies like Pillow, PyMuPDF, and OpenCV.
 - HWP conversion can still depend on external converters such as LibreOffice, Chrome, `hwpilot`, or configured command-line tools depending on the input path.
 - The UI is connected to the MVP pipeline, but it is not yet a full production desktop shell.
+
+
+### Image-only OpenCV builds
+
+The installer workflow builds the same pinned OpenCV 4.13.0.92 sources with only `core`, `imgproc`, and Python bindings. The app uses these APIs for page segmentation and image cleanup; image file decoding stays in Pillow, while PDF rendering stays in MuPDF. Video/camera backends, DNN, GUI, face-cascade data, and unused generated typing stubs are omitted. The wrapper packaging patch does not change native algorithms. macOS builds retain a 14.0 deployment target, matching the existing NumPy runtime requirement.
+
+`release/opencv-image-profile.json` pins both upstream commits, archive SHA-256 hashes, and CMake flags. `requirements-opencv-build.lock` hashes the isolated compiler helper environment, including the NumPy 2.0 C headers used to keep compatibility with the app's newer NumPy 2 runtime. Build tools never enter the app environment. Each wheel embeds a build receipt with the source profile and toolchain/builder hashes; release compliance metadata includes that receipt, the wheel hash, and a distinct dependency fingerprint. Existing package versions and notices remain checked by the standard release policy.
+
+```sh
+.venv/bin/python scripts/build_minimal_opencv.py --work-dir /tmp/edb-opencv-build --cache-dir /tmp/edb-opencv-wheels --install
+.venv/bin/python scripts/verify_minimal_opencv.py --require-profile
+```
+
+On Windows, use the equivalent `.venv\Scripts\python.exe` and writable temporary paths with Visual Studio 2022 C++ build tools installed. The workflow pins `windows-2022` to match the upstream wrapper's Visual Studio 17 generator. Initial native compilation takes several minutes; subsequent CI builds reuse a wheel cache keyed by OS, architecture, Python ABI, profile, toolchain lock, and builder. Cached wheel hashes are checked before installation. The API inventory rejects future app references to omitted OpenCV functions. Native jobs compare deterministic page-processing output against the full upstream wheel, run image-pipeline regression tests, then run the existing packaged-app and installer smoke checks. Benchmark timings are diagnostic measurements, not a cross-device speed guarantee.

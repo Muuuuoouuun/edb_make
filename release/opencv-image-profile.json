@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "name": "edb-image-only",
+  "package": "opencv-python-headless",
+  "version": "4.13.0.92",
+  "sources": [
+    {
+      "repo": "opencv/opencv-python",
+      "commit": "4ddfc013fd1f13d9b9e379dbebf2cdbeb052e7f8",
+      "sha256": "ecc18f96559493a7968da6a0fa8fff2094a0d8a41f9cc03c8333139da0644171"
+    },
+    {
+      "repo": "opencv/opencv",
+      "commit": "b4c5ec4042f097e2a5b386b9d413ec7333d0a184",
+      "sha256": "4f2a381ce3377e6f22d0718fe7101e97a21968a21c81f0356f2787bb21024dc4"
+    }
+  ],
+  "modules": [
+    "core",
+    "imgproc",
+    "python3"
+  ],
+  "cmakeArgs": [
+    "-DBUILD_LIST=core,imgproc,python3",
+    "-DWITH_FFMPEG=OFF",
+    "-DWITH_GSTREAMER=OFF",
+    "-DWITH_AVFOUNDATION=OFF",
+    "-DWITH_DSHOW=OFF",
+    "-DWITH_MSMF=OFF",
+    "-DWITH_OPENCL=OFF",
+    "-DWITH_IPP=ON",
+    "-DWITH_ITT=OFF",
+    "-DWITH_LAPACK=OFF",
+    "-DWITH_EIGEN=OFF",
+    "-DBUILD_TESTS=OFF",
+    "-DBUILD_PERF_TESTS=OFF",
+    "-DBUILD_EXAMPLES=OFF",
+    "-DBUILD_opencv_apps=OFF",
+    "-DBUILD_SHARED_LIBS=OFF",
+    "-DPYTHON3_LIMITED_API=ON"
+  ],
+  "minimumMacOS": "14.0"
+}

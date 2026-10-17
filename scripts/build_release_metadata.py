@@ -453,6 +453,17 @@ def build_release_metadata(
             "disposition": str(policy["disposition"]),
             "licenseFiles": copied_files,
         }
+        if normalized_name == "opencv-python-headless" and distribution.read_text("edb-build-profile.json"):
+            try:
+                from .verify_minimal_opencv import validate_image_profile
+            except ImportError:  # direct script execution
+                from verify_minimal_opencv import validate_image_profile
+            receipt = validate_image_profile(root)
+            direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
+            receipt["wheelSha256"] = direct_url.get("archive_info", {}).get("hashes", {}).get("sha256", "")
+            target = destination / "opencv-build-profile.json"
+            _write_json(target, receipt)
+            component["buildProfileSha256"] = _sha256(target)
         active_components.append(component)
         spdx_packages.append(
             {
@@ -507,7 +518,10 @@ def build_release_metadata(
     dependency_fingerprint = hashlib.sha256(
         _json_bytes(
             [
-                {"name": component["normalizedName"], "version": component["version"]}
+                {
+                    "name": component["normalizedName"], "version": component["version"],
+                    **({"buildProfileSha256": component["buildProfileSha256"]} if "buildProfileSha256" in component else {}),
+                }
                 for component in active_components
             ]
         )
