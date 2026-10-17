@@ -108,3 +108,25 @@ class TestOpenCVPerformanceGate(unittest.TestCase):
     def test_nonfinite_timing_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'performance regression'):
             self.run_comparison(float('nan'))
+
+class TestOpenCVAcceleration(unittest.TestCase):
+    def test_x86_profile_rejects_silent_ipp_fallback(self):
+        from unittest.mock import Mock, patch
+        from scripts.verify_minimal_opencv import validate_image_profile
+        root = Path(__file__).resolve().parent
+        profile = json.loads((root / 'release/opencv-image-profile.json').read_text())
+        receipt = {'profile': profile}
+        for field, relative in (
+            ('profileSha256', 'release/opencv-image-profile.json'),
+            ('toolchainLockSha256', 'requirements-opencv-build.lock'),
+            ('builderSha256', 'scripts/build_minimal_opencv.py'),
+        ):
+            receipt[field] = sha256(root / relative)
+        distribution = Mock(version=profile['version'])
+        distribution.read_text.return_value = json.dumps(receipt)
+        with patch('importlib.metadata.distribution', return_value=distribution), patch('platform.machine', return_value='AMD64'):
+            with patch('cv2.getBuildInformation', return_value='To be built: core imgproc python3\nIntel IPP: NO\n'):
+                with self.assertRaisesRegex(ValueError, 'retain Intel IPP'):
+                    validate_image_profile(root)
+            with patch('cv2.getBuildInformation', return_value='To be built: core imgproc python3\nIntel IPP: 2022.2.0\n'):
+                self.assertEqual(receipt, validate_image_profile(root))

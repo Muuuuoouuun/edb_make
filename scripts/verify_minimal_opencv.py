@@ -8,6 +8,7 @@ import hashlib
 import importlib.metadata
 import json
 import math
+import platform
 from pathlib import Path
 import re
 import statistics
@@ -80,6 +81,9 @@ def validate_image_profile(root: Path) -> dict:
     built = re.search(r"^\s*To be built:\s*(.+)$", cv2.getBuildInformation(), re.MULTILINE)
     if not built or set(built.group(1).split()) != set(expected["modules"]):
         raise ValueError("OpenCV contains an unexpected native module set")
+    if platform.machine().lower() in {"amd64", "x86_64"}:
+        if not re.search(r"^\s*Intel IPP:\s+.*[0-9]", cv2.getBuildInformation(), re.MULTILINE):
+            raise ValueError("Image-only x86 build must retain Intel IPP acceleration")
     missing = sorted(name for name in used_symbols(root) if not hasattr(cv2, name))
     if missing:
         raise ValueError(f"App requires missing OpenCV symbols: {missing}")
