@@ -5423,6 +5423,11 @@
   .review-wrap.manual-split-open{
     padding-right: 10px;
   }
+  .review-wrap.manual-split-open > .review-page{
+    /* Clip the page corners without creating a second scroll container.
+       The crop controls must stick to the actual review viewport. */
+    overflow: clip;
+  }
   .review-empty{
     padding: 60px 24px;
     text-align: center;
@@ -6640,7 +6645,7 @@
   .manual-split-badge{ pointer-events: none; }
   .manual-split-panel{
     position: sticky;
-    top: 12px;
+    top: var(--manual-panel-sticky-top, 12px);
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -7056,19 +7061,27 @@
       position: static;
       max-height: none;
     }
+  }
+  @media (max-width: 700px){
     .manual-split-layout.panel-left,
     .manual-split-layout.panel-right{ grid-template-columns: 1fr; }
     .manual-split-layout.panel-left .manual-split-canvas-shell,
     .manual-split-layout.panel-right .manual-split-canvas-shell{
       grid-column: 1;
-      grid-row: 1;
+      grid-row: 2;
     }
     .manual-split-layout.panel-left .manual-split-panel,
     .manual-split-layout.panel-right .manual-split-panel{
       grid-column: 1;
-      grid-row: 2;
+      grid-row: 1;
     }
-    .manual-split-panel{ position: static; max-height: none; }
+    .manual-split-panel{
+      position: sticky;
+      top: var(--manual-panel-sticky-top, 12px);
+      z-index: 10;
+      min-height: 0;
+      max-height: min(var(--manual-panel-available, 45vh), 45vh);
+    }
     .manual-split-panel-move{ display: none; }
   }
   .view-toggle{
