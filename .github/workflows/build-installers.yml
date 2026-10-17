@@ -194,6 +194,16 @@ jobs:
               )
           PY
 
+      - name: Verify release OpenCV profile before private corpus
+        env:
+          QUALITY_PYTHON: ${{ steps.private-quality-work.outputs.quality_python }}
+          PRIVATE_VENV_ROOT: ${{ steps.private-quality-work.outputs.venv_root }}
+          PYTHONNOUSERSITE: "1"
+          PYTHONPATH: ""
+        run: |
+          "$QUALITY_PYTHON" scripts/build_minimal_opencv.py --work-dir "$PRIVATE_VENV_ROOT/opencv-build" --cache-dir "$PRIVATE_VENV_ROOT/opencv-cache" --reference-out "$PRIVATE_VENV_ROOT/opencv-reference.json" --install
+          "$QUALITY_PYTHON" scripts/verify_minimal_opencv.py --require-profile --compare "$PRIVATE_VENV_ROOT/opencv-reference.json"
+
       - name: Evaluate protected real-document corpus
         env:
           QUALITY_PYTHON: ${{ steps.private-quality-work.outputs.quality_python }}
@@ -304,8 +314,7 @@ jobs:
 
       - name: Build and verify image-only OpenCV
         run: |
-          .venv/bin/python scripts/verify_minimal_opencv.py --reference-out "$RUNNER_TEMP/opencv-reference.json"
-          .venv/bin/python scripts/build_minimal_opencv.py --work-dir "$RUNNER_TEMP/edb-opencv-build" --cache-dir "$RUNNER_TEMP/edb-opencv-wheel-cache" --install
+          .venv/bin/python scripts/build_minimal_opencv.py --work-dir "$RUNNER_TEMP/edb-opencv-build" --cache-dir "$RUNNER_TEMP/edb-opencv-wheel-cache" --reference-out "$RUNNER_TEMP/opencv-reference.json" --install
           .venv/bin/python scripts/verify_minimal_opencv.py --require-profile --compare "$RUNNER_TEMP/opencv-reference.json"
 
       - name: Save verified image-only OpenCV wheel
@@ -511,9 +520,7 @@ jobs:
         shell: pwsh
         run: |
           function Assert-OpenCVCommand([string]$Label) { if ($LASTEXITCODE -ne 0) { throw "$Label failed: $LASTEXITCODE" } }
-          .\.venv\Scripts\python.exe scripts\verify_minimal_opencv.py --reference-out "$env:RUNNER_TEMP/opencv-reference.json"
-          Assert-OpenCVCommand "Reference page probe"
-          .\.venv\Scripts\python.exe scripts\build_minimal_opencv.py --work-dir "$env:RUNNER_TEMP/edb-opencv-build" --cache-dir "$env:RUNNER_TEMP/edb-opencv-wheel-cache" --install
+          .\.venv\Scripts\python.exe scripts\build_minimal_opencv.py --work-dir "$env:RUNNER_TEMP/edb-opencv-build" --cache-dir "$env:RUNNER_TEMP/edb-opencv-wheel-cache" --reference-out "$env:RUNNER_TEMP/opencv-reference.json" --install
           Assert-OpenCVCommand "Image-only OpenCV build"
           .\.venv\Scripts\python.exe scripts\verify_minimal_opencv.py --require-profile --compare "$env:RUNNER_TEMP/opencv-reference.json"
           Assert-OpenCVCommand "Image-only page equivalence"

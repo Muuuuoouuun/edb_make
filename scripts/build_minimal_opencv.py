@@ -183,12 +183,15 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--cache-dir", type=Path, required=True)
+    parser.add_argument("--reference-out", type=Path, help="Measure full wheel after build, immediately before replacement")
     parser.add_argument("--install", action="store_true", help="Replace the full wheel in this Python environment")
     args = parser.parse_args(argv)
     if sys.version_info[:2] not in ((3, 11), (3, 12)):
         parser.error("The pinned source-build toolchain supports Python 3.11 and 3.12")
     wheel = build_wheel(args.work_dir.resolve(), args.cache_dir.resolve())
     print(f"[opencv-image] wheel: {wheel.name} ({wheel.stat().st_size} bytes)", flush=True)
+    if args.reference_out:
+        subprocess.run([sys.executable, str(ROOT / "scripts/verify_minimal_opencv.py"), "--reference-out", str(args.reference_out)], check=True)
     if args.install:
         subprocess.run([sys.executable, "-m", "pip", "install", "--no-deps", "--force-reinstall", str(wheel)], check=True)
         subprocess.run([sys.executable, str(ROOT / "scripts/verify_minimal_opencv.py"), "--root", str(ROOT), "--require-profile"], check=True)

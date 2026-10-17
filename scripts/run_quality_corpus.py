@@ -153,12 +153,16 @@ def build_dependency_inventory(python_executable: str) -> dict[str, Any]:
         "paddleocr",
     ]
     inventory_script = (
-        "import importlib.metadata as m,json\n"
+        "import importlib.metadata as m,json,hashlib\n"
         f"names={package_names!r}\n"
         "versions={}\n"
         "for name in names:\n"
         "    try: versions[name]=m.version(name)\n"
         "    except m.PackageNotFoundError: versions[name]=None\n"
+        "try:\n"
+        "    receipt=m.distribution('opencv-python-headless').read_text('edb-build-profile.json')\n"
+        "except m.PackageNotFoundError: receipt=None\n"
+        "versions['opencv_build_profile_sha256']=hashlib.sha256(receipt.encode()).hexdigest() if receipt else None\n"
         "print(json.dumps(versions,sort_keys=True))\n"
     )
     try:

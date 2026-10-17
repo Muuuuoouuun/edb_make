@@ -7,6 +7,7 @@ import ast
 import hashlib
 import importlib.metadata
 import json
+import math
 from pathlib import Path
 import re
 import statistics
@@ -37,7 +38,7 @@ def page_probe() -> dict:
             image[y:y + 11, x:x + 13] = [20, 40, 90]
     elapsed = []
     try:
-        for _ in range(8):
+        for _ in range(36):
             started = time.perf_counter()
             gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
             blur = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -50,7 +51,7 @@ def page_probe() -> dict:
         cv2.setNumThreads(previous_threads)
     return {
         "version": cv2.__version__, "componentCount": int(count),
-        "medianMs": statistics.median(elapsed[1:]),
+        "medianMs": statistics.median(elapsed[6:]),
         "hashes": {name: hashlib.sha256(array.tobytes()).hexdigest() for name, array in (
             ("blur", blur), ("binary", binary), ("closed", closed), ("stats", stats), ("edges", edges),
         )},
@@ -91,7 +92,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--require-profile", action="store_true")
     parser.add_argument("--reference-out", type=Path)
     parser.add_argument("--compare", type=Path)
+    parser.add_argument("--max-timing-ratio", type=float, default=1.10)
     args = parser.parse_args(argv)
+    if not math.isfinite(args.max_timing_ratio) or args.max_timing_ratio < 1:
+        parser.error("Timing ratio limit must be finite and at least 1")
     if args.require_profile:
         validate_image_profile(args.root)
     result = page_probe()
@@ -99,12 +103,16 @@ def main(argv: list[str] | None = None) -> int:
         reference = json.loads(args.compare.read_text())
         if result["hashes"] != reference["hashes"] or result["componentCount"] != reference["componentCount"]:
             raise ValueError("Image-only OpenCV page output differs from the full wheel")
+        if not math.isfinite(reference["medianMs"]) or reference["medianMs"] <= 0:
+            raise ValueError("Reference timing must be positive and finite")
         result["referenceMedianMs"] = reference["medianMs"]
         result["timingRatio"] = result["medianMs"] / reference["medianMs"]
     if args.reference_out:
         args.reference_out.parent.mkdir(parents=True, exist_ok=True)
         args.reference_out.write_text(json.dumps(result, indent=2) + "\n")
     print("[opencv-image] " + json.dumps(result, sort_keys=True))
+    if args.compare and (not math.isfinite(result["timingRatio"]) or result["timingRatio"] > args.max_timing_ratio):
+        raise ValueError("OpenCV performance regression exceeds timing ratio limit")
     return 0
 
 

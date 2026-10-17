@@ -85,3 +85,26 @@ class TestMinimalOpenCV(unittest.TestCase):
         second = page_probe()
         self.assertEqual(first["hashes"], second["hashes"])
         self.assertEqual(52, first["componentCount"])
+
+class TestOpenCVPerformanceGate(unittest.TestCase):
+    def run_comparison(self, elapsed):
+        from unittest.mock import patch
+        from scripts import verify_minimal_opencv as verifier
+        with TemporaryDirectory() as temp:
+            reference = Path(temp) / 'reference.json'
+            reference.write_text(json.dumps({'hashes': {'image': 'same'}, 'componentCount': 1, 'medianMs': 10}))
+            with patch.object(verifier, 'page_probe', return_value={
+                'hashes': {'image': 'same'}, 'componentCount': 1, 'medianMs': elapsed,
+            }):
+                return verifier.main(['--compare', str(reference)])
+
+    def test_equivalent_output_with_large_slowdown_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'performance regression'):
+            self.run_comparison(1000)
+
+    def test_small_measurement_variation_is_allowed(self):
+        self.assertEqual(0, self.run_comparison(10.5))
+
+    def test_nonfinite_timing_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'performance regression'):
+            self.run_comparison(float('nan'))

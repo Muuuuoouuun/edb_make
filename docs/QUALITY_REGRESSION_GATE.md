@@ -190,3 +190,16 @@ JSON report는 기본적으로 manifest, corpus root, result 절대경로를 포
 - 실패 report의 원문이나 OCR 텍스트를 공개 CI artifact에 올리지 않는다. case ID와 집계 지표만 공유한다.
 - threshold 변경은 실패를 숨기는 수단이 아니라 코퍼스 변경, 장비 변경, 사용자 검수 결과 같은 근거와 함께 리뷰한다.
 - private `--work-dir`에는 원문 복제본과 OCR 중간 산출물이 있으므로 접근을 제한하고 보존 정책에 따라 삭제한다.
+
+### 경량 OpenCV 배포 검증
+
+실문서 검사도 설치 파일과 같은 `release/opencv-image-profile.json` 및 빌더로
+OpenCV를 생성·검증한 후 실행한다. 빌드 작업·캐시는 private venv 임시 경로에
+두어 종료 시 함께 삭제한다. 환경 fingerprint에는 OpenCV 빌드 receipt의
+SHA-256이 포함되므로 기존 full-wheel baseline은 재승인 없이 재사용할 수 없다.
+
+네이티브 패키징과 private gate는 빌드가 끝난 직후 기존 wheel을 측정하고 교체한
+wheel과 비교한다. 대표 이미지 연산은 6회 준비 후 30회 측정의 중앙값을 사용한다.
+출력 일치와 함께 실행 시간 비율 1.10 이하를 요구한다. 10%는 현재 보수적인
+배포 허용 기준이며 앱 전체 UI 지연율을 의미하지 않는다. 실패 시 기준을 높여
+통과시키지 말고 동일 실행기에서 재현과 실제 편집 작업 측정을 우선한다.
