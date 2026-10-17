@@ -460,14 +460,65 @@ def _detect_document_columns(mask: Image.Image, content_box: Box, options: Segme
     if not center_slice:
         return [content_box]
 
-    split_offset = min(range(len(center_slice)), key=lambda idx: center_slice[idx])
+    split_offset = _widest_projection_valley_offset(center_slice)
     split_x = search_start + split_offset
+    # If the chosen gutter is bounded by a printed vertical rule (just
+    # outside the 35-65% separator search window), split on the rule itself
+    # so neither column box absorbs the empty gutter.
+    rule_min = max(40, int(crop.height * 0.42))
+    for direction in (1, -1):
+        x = split_x
+        while 0 <= x < len(column_projection) and (
+            column_projection[x] == 0 or column_projection[x] >= rule_min
+        ):
+            if column_projection[x] >= rule_min:
+                split_x = x
+                break
+            x += direction
+        else:
+            continue
+        break
     valley_score = smoothed[split_x]
     peak_score = max(smoothed)
     if peak_score <= 0 or valley_score > peak_score * 0.22:
         return [content_box]
 
     return _build_document_split_columns(mask, content_box, split_x)
+
+
+def _widest_projection_valley_offset(values: list[float]) -> int:
+    """Pick the column gutter: the widest run at (near) the minimum.
+
+    ``min()`` returned the FIRST minimal index.  On pages without a printed
+    centre rule, ragged short lines (choices, list items) leave an empty band
+    inside the left column that ties with the real gutter, so the split landed
+    inside the left column.  The right "column" then spanned the real gutter,
+    left-column text and the right column together, i.e. a wide region read
+    row by row (Z order) instead of column by column (N order).
+    """
+    if not values:
+        return 0
+    lowest = min(values)
+    peak = max(values)
+    tolerance = lowest + max(1.0, (peak - lowest) * 0.01)
+    best_start, best_length = 0, 0
+    run_start: int | None = None
+    centre = (len(values) - 1) / 2.0
+    for index, value in enumerate([*values, float("inf")]):
+        if value <= tolerance:
+            if run_start is None:
+                run_start = index
+            continue
+        if run_start is not None:
+            length = index - run_start
+            run_centre = run_start + (length - 1) / 2.0
+            best_centre = best_start + (best_length - 1) / 2.0
+            if length > best_length or (
+                length == best_length and abs(run_centre - centre) < abs(best_centre - centre)
+            ):
+                best_start, best_length = run_start, length
+            run_start = None
+    return best_start + max(0, best_length - 1) // 2
 
 
 def _detect_document_separator_split_x(
@@ -517,16 +568,67 @@ def _detect_document_separator_split_x(
     return split_x
 
 
+def _document_split_ink_gutters(
+    mask: Image.Image,
+    content_box: Box,
+    split_x: int,
+    default_gutter: int,
+) -> tuple[int, int]:
+    """Shrink the fixed column gutter so it never cuts real column ink.
+
+    A fixed 2.5%-of-width gutter is wider than the white space between a
+    full-width bordered box (<보기>, 조건) and a printed centre rule, so the
+    box's right border was clipped off every crop in the left column.  Walk
+    out from the split, skip the centre rule itself, and stop the gutter just
+    before the first column of real ink.
+    """
+    left_px = int(content_box.left)
+    top_px = int(content_box.top)
+    bottom_px = int(content_box.bottom)
+    width = int(content_box.width)
+    if width <= 2 or bottom_px <= top_px:
+        return default_gutter, default_gutter
+    height = bottom_px - top_px
+    strip_left = max(0, split_x - default_gutter - 2)
+    strip_right = min(width, split_x + default_gutter + 3)
+    strip = mask.crop((left_px + strip_left, top_px, left_px + strip_right, bottom_px))
+    projection = [
+        int(strip.crop((x, 0, x + 1, strip.height)).histogram()[255])
+        for x in range(strip.width)
+    ]
+    rule_min = max(40, int(height * 0.42))
+
+    def _gutter(direction: int) -> int:
+        x = split_x - strip_left
+        # step over the centre rule (a run of very tall ink columns) and its
+        # anti-aliased / dashed edges, which are still far taller than text
+        rule_edge = max(20, int(height * 0.2))
+        while 0 <= x < len(projection) and projection[x] >= rule_edge:
+            x += direction
+        distance = 0
+        while 0 <= x < len(projection):
+            if 0 < projection[x] < rule_edge:
+                break
+            x += direction
+            distance = abs(x - (split_x - strip_left))
+        else:
+            return default_gutter
+        return max(2, min(default_gutter, distance - 2))
+
+    return _gutter(-1), _gutter(1)
+
+
 def _build_document_split_columns(mask: Image.Image, content_box: Box, split_x: int) -> list[Box]:
     gutter = max(10, int(content_box.width * 0.025))
+    left_gutter, right_gutter = _document_split_ink_gutters(mask, content_box, split_x, gutter)
     left_box = Box.from_points(
         content_box.left,
         content_box.top,
-        content_box.left + float(split_x - gutter),
+        content_box.left + float(split_x - left_gutter),
         content_box.bottom,
     )
     right_box = Box.from_points(
-        content_box.left + float(split_x + gutter),
+        content_box.left + float(split_x + right_gutter),
         content_box.top,
         content_box.right,
         content_box.bottom,
@@ -2522,6 +2624,27 @@ def _segment_pdf_problem_markers(
                 continue
         highest_number = max(highest_number, number)
 
+    # A printed list "1. … 2. … 3. …" inside a passage that sits directly
+    # above question 4 looks like the leading 1,2,3,4 run and was protected
+    # by it (2025 3월 고1 국어 2쪽: 1~3 duplicated).  Exam numbers share the
+    # column's left edge; a marker indented past a LATER marker of the same
+    # column is list content.
+    indent_tolerance = max(16.0, float(image.width) * 0.008)
+    for _column_index, column_markers, _bounds in column_entries:
+        boxed = [
+            (marker, box)
+            for marker in column_markers
+            if isinstance(marker.get("number"), int) and (box := _marker_bbox(marker)) is not None
+        ]
+        boxed.sort(key=lambda item: item[1].top)
+        for index, (marker, box) in enumerate(boxed):
+            if any(
+                box.left - later_box.left >= indent_tolerance
+                and int(later["number"]) > int(marker["number"])
+                for later, later_box in boxed[index + 1 :]
+            ):
+                nested_enumeration_marker_ids.add(id(marker))
+
     # The rule above only sees a list that the exam sequence resumes after.
     # A list printed inside the last question on a page has nothing after it,
     # so it is caught by its indentation instead.
@@ -3287,7 +3410,13 @@ def _colored_problem_marker_offsets(image: Image.Image, column_box: Box, box: Bo
     return [min(rows)]
 
 
-def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+def _dark_numeric_problem_marker_component_offsets(
+    image: Image.Image,
+    column_box: Box,
+    box: Box,
+    *,
+    max_digit_left: int = 50,
+) -> list[int]:
     if cv2 is None or np is None:
         return []
 
@@ -3325,9 +3454,10 @@ def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_bo
         component
         for component in components
         if component["x"] <= 50
-        and 2 <= component["width"] <= 28
+        # bold italic two-digit numbers ("25.") touch into one component
+        and 2 <= component["width"] <= (40 if component["height"] >= 18 else 28)
         and 6 <= component["height"] <= 46
-        and 8 <= component["area"] <= 320
+        and 8 <= component["area"] <= (420 if component["width"] > 28 else 320)
     ]
     dot_like = [
         component
@@ -3340,26 +3470,125 @@ def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_bo
     if not digit_like or not dot_like:
         return []
 
-    offsets: list[int] = []
+    # A bordered box (<보기>, 조건, 안내문) puts its own left rule inside this
+    # left-edge strip.  "ㄱ." / "ㄴ." / "1)" list items inside that box have
+    # the same digit+dot shape as a problem number, and used to split the
+    # question at the box.  A problem number is never enclosed by a box rule
+    # to its left, so drop candidates that sit beside a tall vertical rule.
+    # Glyphs are at most ~46px tall here; a 60px+ component that is either
+    # thin or sparse (a frame corner: one side plus short top/bottom rules)
+    # is a box border.
+    box_rules = [
+        component
+        for component in components
+        if component["height"] >= 60
+        and (
+            component["width"] <= max(8, component["height"] // 6)
+            or component["area"] <= component["height"] * 8
+        )
+    ]
+
+    def _inside_box_rule(digit: dict[str, int]) -> bool:
+        for rule in box_rules:
+            if rule["x"] + 1 >= digit["x"]:
+                continue
+            if rule["y"] + 4 <= digit["y"] and digit["bottom"] <= rule["bottom"] - 4:
+                return True
+        return False
+
+    digit_like = [digit for digit in digit_like if not _inside_box_rule(digit)]
+    if not digit_like:
+        return []
+
+    candidates: list[tuple[int, int]] = []
     for dot in dot_like:
         candidate_digits = [
             digit
             for digit in digit_like
-            if digit["right"] <= dot["x"] + 2
-            and 1 <= dot["x"] - digit["right"] <= 18
+            # the tail of a "2"/"7" can reach under the dot in scans
+            if digit["right"] <= dot["x"] + (9 if digit["height"] >= 18 else 4)
+            and (-9 if digit["height"] >= 18 else -3) <= dot["x"] - digit["right"] <= 18
             and dot["y"] >= digit["y"] + max(2, int(digit["height"] * 0.45))
             and dot["y"] <= digit["bottom"] + 8
-            # Parentheses and fragments of circled answer choices are not
-            # the small baseline punctuation in a question label such as 7.
-            and max(dot["width"], dot["height"]) <= max(3, digit["height"] * 0.4)
+            # A period is far smaller than a digit and sits on its baseline.
+            # Lowercase letters ("e" + "o", "s" + "i") passed the size gates
+            # in scans of English passages and split them at every line.
+            and digit["height"] >= max(dot["height"], dot["width"]) * 3.0
+            and abs(dot["bottom"] - digit["bottom"]) <= max(6, int(digit["height"] * 0.35))
+            # at scan size a period sits on the baseline; the "~" of a
+            # "[31 ~ 34]" range or a jamo stroke sits higher
+            and (digit["height"] < 18 or dot["bottom"] >= digit["bottom"] - 2)
+            # single-pixel scan noise / thin strokes are not a printed period
+            # (only at scan resolution; tiny bitmap-font digits have 1px dots)
+            and (
+                digit["height"] < 12
+                or (
+                    min(dot["width"], dot["height"]) >= 2
+                    and dot["area"] >= max(4, int(dot["width"] * dot["height"] * 0.5))
+                )
+            )
+
         ]
         if not candidate_digits:
             continue
         digit = max(candidate_digits, key=lambda item: item["right"])
-        offsets.append(min(digit["y"], dot["y"]))
+        # Small "digits" (the bitmap-font regime, < 12px) next to a glyph
+        # twice their height are pieces of a scanned Hangul syllable.
+        if digit["height"] < 12 and any(
+            other["height"] >= digit["height"] * 1.8
+            and other["height"] <= 46
+            and digit["x"] <= other["x"] <= dot["right"] + 30
+            and other["y"] < digit["bottom"]
+            and other["bottom"] > digit["y"]
+            for other in components
+        ):
+            continue
+        # A printed period is followed by a word space.  Jamo pieces of a
+        # Hangul syllable or letters inside a word have ink right after the
+        # "dot" and split prose pages at random line starts.
+        space_px = max(3, int(digit["height"] * 0.2))
+        if any(
+            other is not dot
+            and other is not digit
+            and dot["right"] <= other["x"] + 1 < dot["right"] + space_px
+            and other["y"] < digit["bottom"]
+            and other["bottom"] > digit["y"]
+            for other in components
+        ):
+            continue
+        # walk left over the other digits of a multi-digit number ("11.")
+        leftmost = digit
+        while True:
+            previous_digit = next(
+                (
+                    other
+                    for other in digit_like
+                    if other is not leftmost
+                    and -6 <= leftmost["x"] - other["right"] <= 8
+                    and other["x"] < leftmost["x"]
+                    and abs(other["y"] - leftmost["y"]) <= 6
+                ),
+                None,
+            )
+            if previous_digit is None:
+                break
+            leftmost = previous_digit
+        if leftmost["x"] > 50:
+            continue
+        candidates.append((leftmost["x"], min(leftmost["y"], dot["y"])))
 
-    if not offsets:
+    if not candidates:
         return []
+    # Problem numbers share the column's left margin.  The column box edge
+    # may sit left of that margin (gutter, divider rule), so measure the
+    # indent from the leftmost candidate: choice marks, list items and
+    # annotations indented further are not problem numbers.
+    # the running page number / header in the top strip is not a margin
+    header_limit = image.height * 0.01 - top
+    footer_limit = image.height * 0.96 - top
+    body_candidates = [item for item in candidates if header_limit <= item[1] <= footer_limit] or candidates
+    margin_x = min(x for x, _ in body_candidates)
+    offsets = [offset for x, offset in candidates if x <= margin_x + max_digit_left]
 
     clustered: list[int] = []
     for offset in sorted(offsets):
@@ -3370,10 +3599,16 @@ def _dark_numeric_problem_marker_component_offsets(image: Image.Image, column_bo
     return clustered
 
 
-def _visual_problem_marker_offsets(image: Image.Image, column_box: Box, box: Box) -> list[int]:
+def _visual_problem_marker_offsets(
+    image: Image.Image,
+    column_box: Box,
+    box: Box,
+    *,
+    max_digit_left: int = 50,
+) -> list[int]:
     offsets = [
         *_colored_problem_marker_offsets(image, column_box, box),
-        *_dark_numeric_problem_marker_component_offsets(image, column_box, box),
+        *_dark_numeric_problem_marker_component_offsets(image, column_box, box, max_digit_left=max_digit_left),
     ]
     if not offsets:
         return []
@@ -3703,9 +3938,39 @@ def _reassign_single_column_entries_by_visual_columns(
     return [left_entries, right_entries], [left_box, right_box], True
 
 
+VISUAL_MARKER_MAX_PER_COLUMN = 8
+
+
+def _visual_marker_density_plausible(blocks: list[ContentBlock]) -> bool:
+    """Real exam columns hold at most ~6-7 numbered questions."""
+    per_column: dict[Any, int] = {}
+    for block in blocks:
+        if block.metadata.get("visual_problem_marker"):
+            column = block.metadata.get("column_index")
+            per_column[column] = per_column.get(column, 0) + 1
+    return bool(per_column) and max(per_column.values()) <= VISUAL_MARKER_MAX_PER_COLUMN
+
+
+def _is_scanned_pdf_page_metadata(metadata: dict[str, Any]) -> bool:
+    """A PDF page with no usable text layer is a scan, not a born-digital PDF.
+
+    Such pages carry no ``pdf_text_lines``/``pdf_problem_markers`` and used to
+    fall straight through to row-band segmentation, which has no notion of
+    problem numbers and grid-splits two-column scans.  Treat them like image
+    uploads so the visual problem-number detector runs first.
+    """
+    for key in ("pdf_text_lines", "pdf_problem_markers", "pdf_text_stem_markers"):
+        value = metadata.get(key)
+        if isinstance(value, list) and value:
+            return False
+    return True
+
+
 def _is_image_upload_document_source(image_source: Any, metadata: dict[str, Any]) -> bool:
     source_type = str(metadata.get("source_type") or "").strip().lower()
     if source_type == "image":
+        return True
+    if source_type == "pdf" and _is_scanned_pdf_page_metadata(metadata):
         return True
     if metadata:
         return False
@@ -3721,22 +3986,174 @@ def _visual_marker_column_boxes(image: Image.Image, options: SegmentOptions) -> 
     columns = _detect_document_columns(marker_mask, content_box, options)
     if not columns:
         columns = [content_box]
-    return marker_mask, content_box, columns
+    # Problem numbers are searched in a narrow strip at the column's left
+    # edge.  The split sits mid-gutter, so on pages without a centre rule the
+    # right column's box started far left of its text and every right-column
+    # number fell outside the strip; the whole right column then became an
+    # unnumbered tail of the left column's last question.
+    tightened: list[Box] = []
+    for column_index, column in enumerate(columns):
+        crop = marker_mask.crop((int(column.left), int(column.top), int(column.right), int(column.bottom)))
+        if crop.width <= 1 or crop.height <= 1:
+            tightened.append(column)
+            continue
+        # First x with a real share of the column's ink; a centred page
+        # header crossing the gutter must not drag the edge leftwards.
+        projection = [int(crop.crop((x, 0, x + 1, crop.height)).histogram()[255]) for x in range(crop.width)]
+        # Tall vertical rules (centre divider, box sides) dominated the peak:
+        # the 5% threshold then sat above body-text ink and the edge landed
+        # on the rule or inside the text.  Ignore them for the threshold.
+        rule_height = crop.height * 0.4
+        text_projection = [0 if value >= rule_height else value for value in projection]
+        peak = max(text_projection) or max(projection)
+        threshold = max(2, int(peak * 0.05))
+        # A centre divider within the first 30px marks the column edge; ink
+        # left of it belongs to the neighbouring column.
+        search_from = 0
+        for x in range(min(30, crop.width)):
+            if projection[x] >= rule_height:
+                search_from = x + 1
+        first_x = next(
+            (x for x in range(search_from, crop.width) if text_projection[x] >= threshold),
+            None,
+        )
+        # Skip a vertical divider rule at the column edge: a run of at most
+        # 6px whose ink covers 85% of the column height (box borders are shorter), followed by a gap.
+        # Only a column right of the split can start with the centre divider;
+        # the first column's leading rule is a passage box border.
+        for _ in range(1 if column_index > 0 else 0):
+            if first_x is None:
+                break
+            run_end = first_x
+            while run_end < crop.width and projection[run_end] >= threshold:
+                run_end += 1
+            is_rule = run_end - first_x <= 6 and max(projection[first_x:run_end]) >= crop.height * 0.85
+            gap_end = min(crop.width, run_end + 6)
+            if not is_rule or any(value >= threshold for value in projection[run_end:gap_end]):
+                break
+            first_x = next((x for x in range(run_end, crop.width) if projection[x] >= threshold), None)
+        if first_x is None:
+            tightened.append(column)
+            continue
+        tightened.append(
+            Box.from_points(
+                max(column.left, column.left + float(first_x) - 2.0),
+                column.top,
+                column.right,
+                column.bottom,
+            )
+        )
+    return marker_mask, content_box, tightened
 
 
-def _visual_problem_marker_tops(image: Image.Image, column_box: Box) -> list[float]:
-    colored = _colored_problem_marker_offsets(image, column_box, column_box)
-    # Repeated colored question labels are stronger evidence than black
-    # components in the answer-choice rows. Do not combine both into starts.
-    offsets = colored if len(colored) >= 2 else sorted([
-        *colored, *_dark_numeric_problem_marker_component_offsets(image, column_box, column_box),
-    ])
+# Visual columns are tightened to the text's left margin, where exam numbers
+# sit.  Choice marks (①②…), list items and ㉠ annotations are indented by
+# 25px+ at 200 dpi; with the old 50px window they were read as problem
+# numbers and real scans were split into 2-3x as many regions.
+VISUAL_MARKER_MAX_DIGIT_LEFT_PX = 14  # indent past the leftmost candidate
+
+
+def _starts_after_white_space(ink_rows: Any, top: int, gap_px: int, ink_limit: int, line_ink: int = 10, rule_ink: int = 0) -> bool:
+    """True when a blank band of ``gap_px`` precedes row ``top``.
+
+    One or two lines directly above are allowed when they themselves follow
+    such a band: a group instruction ("[41~42] 다음 글을 읽고 …") sits tight
+    above the first question number.  Prose is packed line after line.
+    """
+    row = top - 3
+    for line_count in range(4):
+        blank = 0
+        while row > 0 and int(ink_rows[row]) <= ink_limit:
+            blank += 1
+            row -= 1
+            if blank >= gap_px:
+                return True
+        if row <= 0:
+            return True
+        # a box border / rule right above closes the previous block
+        if rule_ink and blank >= 4 and int(ink_rows[row]) >= rule_ink:
+            return True
+        if line_count == 3:
+            return False
+        # climb over the text line above (dense rows only, so a packed
+        # paragraph is not climbed through its sparse inter-line rows)
+        dense = max(ink_limit + 1, line_ink)
+        sparse_steps = 0
+        while row > 0 and ink_limit < int(ink_rows[row]) <= dense and sparse_steps < 4:
+            row -= 1
+            sparse_steps += 1
+        if int(ink_rows[row]) <= ink_limit:
+            continue  # only a descender/ascender sliver: scan the blank above
+        if int(ink_rows[row]) <= dense:
+            return False
+        while row > 0 and int(ink_rows[row]) > dense:
+            row -= 1
+        sparse_steps = 0
+        while row > 0 and ink_limit < int(ink_rows[row]) <= dense and sparse_steps < 4:
+            row -= 1
+            sparse_steps += 1
+    return False
+
+
+def _visual_problem_marker_tops(
+    image: Image.Image, column_box: Box, *, scan_mode: bool = False,
+) -> list[float]:
+    if scan_mode:
+        offsets = _visual_problem_marker_offsets(
+            image,
+            column_box,
+            column_box,
+            max_digit_left=VISUAL_MARKER_MAX_DIGIT_LEFT_PX,
+        )
+    else:
+        colored = _colored_problem_marker_offsets(image, column_box, column_box)
+        # Repeated colored question labels are stronger evidence than black
+        # components in the answer-choice rows. Do not combine both into starts.
+        offsets = colored if len(colored) >= 2 else sorted([
+            *colored, *_dark_numeric_problem_marker_component_offsets(image, column_box, column_box),
+        ])
+    # A question starts after white space (column top, or a gap after the
+    # previous question's choices).  Prose lines are packed at line pitch,
+    # so a "number" at a prose line start has ink right above it.
+    ink_rows = None
+    if scan_mode and np is not None:
+        crop = np.array(
+            image.crop((int(column_box.left), 0, int(column_box.right), image.height)).convert("L")
+        ) < 160
+        ink_rows = crop.sum(axis=1)
+    gap_px = max(10, int(image.height * 0.006))
+    if ink_rows is not None:
+        # blank runs between body lines: a question start needs clearly more
+        # than the column's usual line gap
+        runs: list[int] = []
+        run = 0
+        for value in ink_rows[int(column_box.top) : int(column_box.bottom)]:
+            if int(value) <= 1:
+                run += 1
+            else:
+                if 3 <= run <= 80:
+                    runs.append(run)
+                run = 0
+        if len(runs) >= 8:
+            runs.sort()
+            line_gap = runs[len(runs) // 2]
+            gap_px = max(gap_px, int(line_gap * 1.35) + 2)
+
     tops: list[float] = []
     for offset in offsets:
         top = column_box.top + float(offset)
+        # just under the page header an instruction line may sit tight above
+        if ink_rows is not None and top > float(image.height) * 0.1:
+            if not _starts_after_white_space(ink_rows, int(top), gap_px, 1, rule_ink=int(column_box.width * 0.5)):
+                continue
         if top < column_box.top - 1.0 or top > column_box.bottom + 1.0:
             continue
-        if tops and top - tops[-1] <= 22.0:
+        # running header page number / footer page box ("5 / 16")
+        if scan_mode and (top < float(image.height) * 0.01 or top > float(image.height) * 0.96):
+            continue
+        # The wrapped second line of a stem starts at the same margin; two
+        # questions never start within ~one line height of each other.
+        if tops and top - tops[-1] <= max(22.0, float(image.height) * 0.022):
             continue
         tops.append(top)
     return tops
@@ -3768,8 +4185,10 @@ def _fit_visual_problem_box(
     if ink_bbox is None:
         return None
 
-    left = max(0.0, float(crop_box[0] + ink_bbox[0]) - padding)
-    right = min(float(page_width), float(crop_box[0] + ink_bbox[2]) + padding)
+    # Pad around the ink, but never past the column's own gutter: the extra
+    # padding used to reach the centre rule / neighbouring column.
+    left = max(0.0, column_box.left - 4.0, float(crop_box[0] + ink_bbox[0]) - padding)
+    right = min(float(page_width), column_box.right + 4.0, float(crop_box[0] + ink_bbox[2]) + padding)
     bottom = min(bottom_limit, float(crop_box[1] + ink_bbox[3]) + padding)
     if right - left < max(80.0, float(column_box.width) * 0.24):
         left = max(0.0, column_box.left)
@@ -3779,15 +4198,90 @@ def _fit_visual_problem_box(
     return Box.from_points(left, top, right, bottom)
 
 
+def _visual_leading_continuation_box(
+    mask: Image.Image,
+    column_box: Box,
+    *,
+    first_marker_top: float | None,
+    boundary_padding: float,
+    page_width: int,
+    page_height: int,
+) -> Box | None:
+    """Return the ink above a column's first problem number, if substantial.
+
+    On scanned pages the top of a column (or a whole column with no number)
+    is usually a passage or question that continues from the previous
+    column/page.  It used to be dropped silently because only regions that
+    start at a visible problem number became blocks.
+    """
+    bottom = column_box.bottom if first_marker_top is None else first_marker_top - boundary_padding * 0.5
+    top = column_box.top
+    if bottom - top < max(52.0, float(page_height) * 0.035):
+        return None
+    crop_box = (
+        max(0, int(column_box.left)),
+        max(0, int(top)),
+        min(page_width, int(column_box.right)),
+        min(page_height, int(bottom)),
+    )
+    if crop_box[2] <= crop_box[0] or crop_box[3] <= crop_box[1]:
+        return None
+    crop = mask.crop(crop_box)
+    ink_bbox = crop.getbbox()
+    if ink_bbox is None:
+        return None
+    ink_height = float(ink_bbox[3] - ink_bbox[1])
+    ink_width = float(ink_bbox[2] - ink_bbox[0])
+    # Ignore page headers, footers and stray rules: require at least two text
+    # lines of height and a quarter of the column width.
+    if ink_height < max(16.0, float(page_height) * 0.007) or ink_width < float(column_box.width) * 0.25:
+        return None
+    pad = max(8.0, float(page_height) * 0.006)
+    return Box.from_points(
+        max(0.0, float(crop_box[0] + ink_bbox[0]) - pad),
+        max(0.0, float(crop_box[1] + ink_bbox[1]) - pad),
+        min(float(page_width), float(crop_box[0] + ink_bbox[2]) + pad),
+        min(bottom, float(crop_box[1] + ink_bbox[3]) + pad),
+    )
+
+
+def _merge_visual_leading_row_bands(blocks: list[ContentBlock]) -> list[ContentBlock]:
+    leading = [block for block in blocks if block.metadata.get("visual_leading_continuation")]
+    if len(leading) < 2:
+        return blocks
+    first = min(leading, key=lambda block: int(block.metadata.get("column_index") or 0))
+    partners = [
+        block
+        for block in leading
+        if block is not first and _same_row_band(first.bbox, block.bbox)
+    ]
+    if not partners:
+        return blocks
+    merged = first.bbox
+    for block in partners:
+        merged = _merge_box_pair(merged, block.bbox)
+    first.bbox = merged
+    first.metadata["full_width_band"] = True
+    first.metadata["visual_leading_continuation"] = False
+    first.metadata["review_flags"] = ["visual_full_width_band"]
+    partner_ids = {block.block_id for block in partners}
+    return [block for block in blocks if block.block_id not in partner_ids]
+
+
 def _segment_visual_problem_markers(
     image: Image.Image,
     page_id: str,
     options: SegmentOptions,
+    *,
+    min_markers: int = 2,
+    skip_above: float | None = None,
+    scan_mode: bool = False,
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
     marker_mask, content_box, columns = _visual_marker_column_boxes(image, options)
     # Component thresholds describe a workbook at roughly 800 px wide. Resize
     # once for marker analysis only; all masks and output crops stay full-size.
-    scale = min(1.0, 800.0 / image.width)
+    # Scan-specific dot and whitespace thresholds stay at native resolution.
+    scale = 1.0 if scan_mode else min(1.0, 800.0 / image.width)
     analysis_image = image if scale == 1.0 else image.resize(
         (800, max(1, round(image.height * scale))), Image.Resampling.LANCZOS,
     )
@@ -3798,12 +4292,12 @@ def _segment_visual_problem_markers(
             column.right * scale, column.bottom * scale,
         )
         marker_tops_by_column.append([
-            top / scale for top in _visual_problem_marker_tops(analysis_image, analysis_column)
+            top / scale for top in _visual_problem_marker_tops(analysis_image, analysis_column, scan_mode=scan_mode)
         ])
+    if skip_above is not None:
+        marker_tops_by_column = [[top for top in tops if top > skip_above] for tops in marker_tops_by_column]
     marker_count = sum(len(tops) for tops in marker_tops_by_column)
-    # A partially recognized page must fall back as a whole. Otherwise an
-    # unmarked column disappears while the remaining blocks look successful.
-    if marker_count < 2 or any(not tops for tops in marker_tops_by_column):
+    if marker_count < min_markers or (not scan_mode and any(not tops for tops in marker_tops_by_column)):
         return None
 
     blocks: list[ContentBlock] = []
@@ -3831,7 +4325,46 @@ def _segment_visual_problem_markers(
                 page_height=image.height,
             ) is not None:
                 valid_tops.append(marker_top)
+        leading_box = _visual_leading_continuation_box(
+            marker_mask,
+            column_box,
+            first_marker_top=valid_tops[0] if valid_tops else None,
+            boundary_padding=boundary_padding,
+            page_width=image.width,
+            page_height=image.height,
+        ) if scan_mode else None
+        if leading_box is not None:
+            metadata = _enrich_block_segmentation_metadata(
+                {
+                    "segmenter": "visual-problem-markers",
+                    "column_index": column_index,
+                    "question_band_index": 0,
+                    "source_band_index": 0,
+                    "visual_problem_marker": False,
+                    "visual_leading_continuation": True,
+                    "force_image_record": True,
+                    "review_flags": ["visual_unnumbered_leading_region"],
+                },
+                segmentation_mode=SEGMENTATION_MODE_DOCUMENT,
+                block_area=leading_box.area,
+                page_area=page_area,
+                large_block_threshold=LARGE_BLOCK_AREA_RATIO,
+                page_width=image.width,
+                page_height=image.height,
+            )
+            blocks.append(
+                ContentBlock(
+                    block_id=f"{page_id}-block-{len(blocks) + 1:03d}",
+                    block_type=BlockType.STEM,
+                    bbox=leading_box,
+                    reading_order=len(blocks),
+                    confidence=1.0,
+                    metadata=metadata,
+                )
+            )
         if not valid_tops:
+            if scan_mode:
+                continue
             return None
 
         for marker_index, marker_top in enumerate(valid_tops, start=1):
@@ -3880,6 +4413,7 @@ def _segment_visual_problem_markers(
                 )
             )
 
+    blocks = _merge_visual_leading_row_bands(blocks)
     if len(blocks) < 2:
         return None
 
@@ -4304,6 +4838,479 @@ def _classify_geometry(image: Image.Image, box: Box, board_region: Box, fill_rat
     return BlockType.STEM, metadata
 
 
+def _clip_problem_blocks_at_passage_starts(
+    blocks: list[ContentBlock],
+) -> tuple[list[ContentBlock], int]:
+    """Stop a question's crop where a shared passage starts below it.
+
+    Passage-range blocks are built separately from numbered markers, so the
+    question just above a "[n~m] 다음 글을 읽고" header kept running to the
+    column bottom and swallowed the whole passage (one tall region covering
+    the left column).  Clip it to end just above the passage header.
+    """
+    passage_starts = [
+        block
+        for block in blocks
+        if block.metadata.get("segmenter") == "pdf-passage-range"
+        and block.metadata.get("marker_kind") == "passage_range"
+    ]
+    if not passage_starts:
+        return blocks, 0
+    clipped = 0
+    for block in blocks:
+        if block.metadata.get("segmenter") != "pdf-text-markers":
+            continue
+        column = block.metadata.get("column_index")
+        for passage in passage_starts:
+            if passage.metadata.get("column_index") != column:
+                continue
+            horizontal_overlap = min(block.bbox.right, passage.bbox.right) - max(block.bbox.left, passage.bbox.left)
+            if horizontal_overlap <= 0:
+                continue
+            if block.bbox.top + 24.0 < passage.bbox.top < block.bbox.bottom:
+                new_bottom = passage.bbox.top - 2.0
+                if new_bottom - block.bbox.top >= 24.0:
+                    block.bbox = Box.from_points(block.bbox.left, block.bbox.top, block.bbox.right, new_bottom)
+                    block.metadata["clipped_at_passage_start"] = True
+                    clipped += 1
+    return blocks, clipped
+
+
+def _same_row_band(first: Box, second: Box) -> bool:
+    """Two boxes in adjacent columns that occupy the same row band.
+
+    A full-width header/notice box gets cut in half by the column split; the
+    halves share both their top and bottom.  A passage that runs down the
+    whole left column and continues at the top of the right column shares
+    only the top, so it is not a row band.
+    """
+    tolerance = max(24.0, min(first.height, second.height) * 0.2)
+    return abs(first.top - second.top) <= tolerance and abs(first.bottom - second.bottom) <= tolerance
+
+
+UNCOVERED_REGION_DARK_THRESHOLD = 200
+PDF_GROUP_INSTRUCTION_RE = re.compile(r"^\s*[\[［(<]\s*[0-9０-９]{1,3}\s*[~～〜\-－]\s*[0-9０-９]{1,3}\s*[\]］)>]")
+UNCOVERED_REGION_ROW_GAP_PX = 28
+
+
+def _merge_consecutive_column_regions(
+    regions: list[tuple[int, Box]],
+    blocks: list[ContentBlock],
+    columns: list[Box],
+) -> list[tuple[int, Box]]:
+    """Join leftover regions of one column that no question block separates.
+
+    On scans a passage-only column (no problem number) is unclaimed ink cut
+    at every paragraph gap; each paragraph then became its own unit.  When no
+    block of that column lies between two leftovers they are one passage.
+    """
+    merged: list[tuple[int, Box]] = []
+    for column_index in sorted({index for index, _ in regions}):
+        column = columns[column_index]
+        separators = [
+            block.bbox
+            for block in blocks
+            if column.left - 4 <= (block.bbox.left + block.bbox.right) / 2.0 <= column.right + 4
+        ]
+        current: Box | None = None
+        for _, box in sorted((item for item in regions if item[0] == column_index), key=lambda item: item[1].top):
+            if current is not None and not any(
+                separator.top < box.top and separator.bottom > current.bottom for separator in separators
+            ):
+                current = _merge_box_pair(current, box)
+                continue
+            if current is not None:
+                merged.append((column_index, current))
+            current = box
+        if current is not None:
+            merged.append((column_index, current))
+    return merged
+
+
+def _segment_scan_passage_columns(
+    image: Image.Image,
+    page_id: str,
+) -> tuple[list[ContentBlock], dict[str, Any]] | None:
+    """Scanned page without any problem number: one block per text column.
+
+    Such pages carry passages only ((가)/(나) 지문, 대화문).  Row-band
+    segmentation cut them into 8-20 paragraph pieces; the passage reads as
+    one unit per column in N order.
+    """
+    if np is None:
+        return None
+    gray = np.array(image.convert("L"))
+    ink = gray < UNCOVERED_REGION_DARK_THRESHOLD
+    height, width = ink.shape
+    ink[:, ink.sum(axis=0) >= height * 0.42] = False
+    columns = _detect_pdf_visual_column_boxes(image) or [Box.from_points(0.0, 0.0, float(width), float(height))]
+    blocks: list[ContentBlock] = []
+    pad = max(8.0, float(height) * 0.006)
+    for column_index, column in enumerate(columns):
+        x0, x1 = max(0, int(column.left)), min(width, int(column.right) + 1)
+        sub = ink[: int(height * 0.96), x0:x1]
+        rows = np.where(sub.sum(axis=1) > 2)[0]
+        cols = np.where(sub.sum(axis=0) > 2)[0]
+        if rows.size == 0 or cols.size == 0:
+            continue
+        box = Box.from_points(
+            max(0.0, float(x0 + cols[0]) - pad),
+            max(0.0, float(rows[0]) - pad),
+            min(float(width), float(x0 + cols[-1] + 1) + pad),
+            min(float(height), float(rows[-1] + 1) + pad),
+        )
+        blocks.append(
+            ContentBlock(
+                block_id=f"{page_id}-column-{column_index + 1:03d}",
+                block_type=BlockType.STEM,
+                bbox=box,
+                reading_order=len(blocks),
+                confidence=0.5,
+                metadata={
+                    "segmenter": "scan-passage-columns",
+                    "column_index": column_index + 1,
+                    "question_band_index": 0,
+                    "scan_passage_column": True,
+                    "force_image_record": True,
+                    "review_flags": ["scan_unnumbered_column"],
+                },
+            )
+        )
+    if not blocks:
+        return None
+    return blocks, {"segmenter": "scan-passage-columns", "scan_passage_column_count": len(blocks)}
+
+
+def _scan_page_header_rule_bottom(image: Image.Image) -> float | None:
+    """Bottom of the page-wide rule under a scanned exam's running header."""
+    if np is None:
+        return None
+    ink = np.array(image.convert("L")) < UNCOVERED_REGION_DARK_THRESHOLD
+    height, width = ink.shape
+    # Korean exam headers (과목명 + 제1교시/쪽 상자) end around 12% of the
+    # page.  A bordered notice box near the top has a long horizontal edge
+    # too; it is content, recognised by vertical sides at the edge's ends.
+    limit = int(height * 0.13)
+    rows = np.where(ink[:limit].sum(axis=1) >= width * 0.6)[0]
+    for row in rows[::-1]:
+        xs = np.where(ink[row])[0]
+        left_end, right_end = int(xs[0]), int(xs[-1])
+        def _side(x: int) -> bool:
+            band = ink[max(0, row - 40) : max(0, row - 4), max(0, x - 2) : x + 3]
+            return band.size > 0 and bool((band.any(axis=1)).mean() >= 0.8)
+        if _side(left_end) and _side(right_end):
+            continue  # bottom edge of a box
+        below = ink[row + 4 : min(height, row + 40), max(0, left_end - 2) : left_end + 3]
+        if below.size and bool((below.any(axis=1)).mean() >= 0.8):
+            continue  # top edge of a box
+        return float(row + 1)
+    return None
+
+
+def _drop_scan_page_header_blocks(image: Image.Image, blocks: list[ContentBlock]) -> list[ContentBlock]:
+    """Scans: the running header (과목명, 쪽번호, 고1 box) is page chrome.
+
+    Born-digital PDFs leave it out; on scans it became a leading region of
+    each column, one extra unit per page.  Drop blocks above the header rule
+    and start the others below it.
+    """
+    rule_bottom = _scan_page_header_rule_bottom(image)
+    if rule_bottom is None:
+        return blocks
+    kept: list[ContentBlock] = []
+    for block in blocks:
+        box = block.bbox
+        if box.bottom <= rule_bottom + 4:
+            continue
+        if box.top < rule_bottom and not block.metadata.get("visual_problem_marker"):
+            if box.bottom - rule_bottom < 40:
+                continue
+            block.bbox = Box.from_points(box.left, rule_bottom + 2, box.right, box.bottom)
+        kept.append(block)
+    for order, block in enumerate(kept):
+        block.reading_order = order
+    return kept or blocks
+
+
+def _recover_uncovered_document_regions(
+    image: Image.Image,
+    page_id: str,
+    blocks: list[ContentBlock],
+    *,
+    column_top_continuations_only: bool = False,
+    text_lines: list[Any] | None = None,
+) -> tuple[list[ContentBlock], int]:
+    """Keep content that no marker-based crop claimed.
+
+    Marker segmenters only create a crop where a problem number or passage
+    header starts.  Ink before the first marker of a column (a question or
+    passage continuing from the previous column/page) or a tall narrow
+    leftover such as a table tail at the bottom of a column was silently
+    dropped.  Recover each such region as a block flagged for review and
+    place it in reading order right after the block that precedes it, so the
+    grouping stage attaches it to that problem as a continuation.
+    """
+    if not blocks or np is None:
+        return blocks, 0
+    gray = np.array(image.convert("L"))
+    ink = gray < UNCOVERED_REGION_DARK_THRESHOLD
+    height, width = ink.shape
+    ink_rows_full = ink.sum(axis=1)
+    # Drop full-height vertical rules (column dividers / page frame).
+    tall_columns = ink.sum(axis=0) >= height * 0.42
+    ink[:, tall_columns] = False
+    covered = np.zeros_like(ink)
+    for block in blocks:
+        box = block.bbox
+        covered[
+            max(0, int(box.top) - 2) : min(height, int(box.bottom) + 3),
+            max(0, int(box.left) - 2) : min(width, int(box.right) + 3),
+        ] = True
+    leftover = ink & ~covered
+    if not leftover.any():
+        return blocks, 0
+
+    columns = _detect_pdf_visual_column_boxes(image) or [Box.from_points(0.0, 0.0, float(width), float(height))]
+    regions: list[tuple[int, Box]] = []
+    min_height = max(16.0, float(height) * 0.007)
+    # scans: the running header above the page-wide rule is page chrome
+    header_rule_bottom = None if column_top_continuations_only else _scan_page_header_rule_bottom(image)
+    for column_index, column in enumerate(columns):
+        x0 = max(0, int(column.left))
+        x1 = min(width, int(column.right) + 1)
+        if x1 - x0 < 8:
+            continue
+        sub = leftover[:, x0:x1]
+        row_hits = sub.sum(axis=1) > 0
+        y = 0
+        while y < height:
+            if not row_hits[y]:
+                y += 1
+                continue
+            start = y
+            last = y
+            while y < height and (row_hits[y] or y - last <= UNCOVERED_REGION_ROW_GAP_PX):
+                if row_hits[y]:
+                    last = y
+                y += 1
+            band = sub[start : last + 1]
+            cols = np.where(band.any(axis=0))[0]
+            if cols.size == 0:
+                continue
+            box = Box.from_points(
+                float(x0 + cols[0]),
+                float(start),
+                float(x0 + cols[-1] + 1),
+                float(last + 1),
+            )
+            if box.height < min_height:
+                continue
+            # A lone short line in the bottom 5% centred on the page is a
+            # page number / footer, not content.
+            centre = (box.left + box.right) / 2.0
+            if (
+                box.top >= height * 0.94
+                and box.height <= height * 0.03
+                and (box.width <= max(120.0, width * 0.12) or abs(centre - width / 2.0) <= width * 0.15)
+            ):
+                continue
+            if int(np.count_nonzero(band)) < 60:
+                continue
+            if header_rule_bottom is not None and box.bottom <= header_rule_bottom + 4:
+                continue
+            regions.append((column_index, box))
+    if not regions:
+        return blocks, 0
+    if not column_top_continuations_only:
+        regions = _merge_consecutive_column_regions(regions, blocks, columns)
+
+    def _column_of(box: Box) -> int:
+        centre = (box.left + box.right) / 2.0
+        for index, column in enumerate(columns):
+            if column.left - 4 <= centre <= column.right + 4:
+                return index
+        return 0
+
+    ordered = sorted(blocks, key=lambda block: block.reading_order)
+    result = list(ordered)
+    pad = max(8.0, float(height) * 0.006)
+    # A row band split across columns at the top of the page (full-width
+    # header / notice box) is one region read first, not a left half plus a
+    # right half that continues the left column's last question (Z order).
+    original_regions = list(regions)
+    merged_regions: list[tuple[int, Box]] = []
+    consumed: set[int] = set()
+    for index, (column_index, box) in enumerate(regions):
+        if index in consumed:
+            continue
+        band = box
+        for other_index, (other_column, other_box) in enumerate(regions):
+            if other_index <= index or other_index in consumed or other_column == column_index:
+                continue
+            if band.top <= height * 0.25 and _same_row_band(band, other_box):
+                band = _merge_box_pair(band, other_box)
+                consumed.add(other_index)
+        if band is not box:
+            # In born-digital PDFs a full-width band above the columns is the
+            # page header (과목명/쪽 머리말), deliberately left out.  Never let
+            # its halves become column-top continuations.
+            if not column_top_continuations_only:
+                merged_regions.append((-1, band))
+        else:
+            merged_regions.append((column_index, box))
+    regions = merged_regions
+
+    group_instruction_count = 0
+    for recovered_index, (column_index, box) in enumerate(regions, start=1):
+        padded = Box.from_points(
+            max(0.0, box.left - pad),
+            max(0.0, box.top - pad),
+            min(float(width), box.right + pad),
+            min(float(height), box.bottom + pad),
+        )
+        # Insert right after the block that precedes the region on the page:
+        # the lowest block above it in the same column, else the lowest
+        # block of the nearest earlier column (column-top continuation).
+        if column_index == -1:
+            result.insert(
+                0,
+                ContentBlock(
+                    block_id=f"{page_id}-recovered-{recovered_index:03d}",
+                    block_type=BlockType.STEM,
+                    bbox=padded,
+                    reading_order=0,
+                    confidence=0.5,
+                    metadata={
+                        "segmenter": "uncovered-region-recovery",
+                        "column_index": 1,
+                        "question_band_index": 0,
+                        "recovered_uncovered_region": True,
+                        "recovered_region_position": "full_width_band",
+                        "full_width_band": True,
+                        "force_image_record": True,
+                        "review_flags": ["recovered_uncovered_region"],
+                    },
+                ),
+            )
+            continue
+        insert_at = 0
+        best_key: tuple[int, float] | None = None
+        for index, block in enumerate(result):
+            if block.metadata.get("recovered_uncovered_region"):
+                continue
+            block_column = _column_of(block.bbox)
+            if block_column == column_index and block.bbox.top <= box.top:
+                key = (column_index, block.bbox.bottom)
+            elif block_column < column_index:
+                key = (block_column, block.bbox.bottom)
+            else:
+                continue
+            if best_key is None or key > best_key:
+                best_key = key
+                insert_at = index + 1
+        if column_top_continuations_only:
+            # Only a region at the top of a later column, before any block of
+            # that column, that continues the previous column's last block.
+            same_column_above = any(
+                not block.metadata.get("recovered_uncovered_region")
+                and _column_of(block.bbox) == column_index
+                and block.bbox.top <= box.top
+                for block in result
+            )
+            # Unclaimed ink at the same rows in the previous column means a
+            # band running across the gutter: the page header (subject
+            # title, page/수험번호 boxes), not a column-top continuation.
+            def _row_overlap(other: Box) -> float:
+                return max(0.0, min(other.bottom, box.bottom) - max(other.top, box.top))
+
+            header_band = any(
+                other_column == column_index - 1
+                and _row_overlap(other_box) >= box.height * 0.5
+                # a passage continuing down the previous column is tall; a
+                # header half is about as short as this region
+                and other_box.height <= max(box.height * 3.0, height * 0.1)
+                for other_column, other_box in original_regions
+            )
+            # A page-wide rule just below the region separates the page
+            # header (subject title, 홀수형/page boxes) from the columns.
+            rule_rows = ink_rows_full[int(box.top) : min(height, int(box.bottom) + 60)]
+            above_header_rule = bool(rule_rows.size) and bool((rule_rows >= width * 0.6).any())
+            if (
+                best_key is None
+                or best_key[0] == column_index
+                or same_column_above
+                or box.top > height * 0.4
+                or header_band
+                or above_header_rule
+            ):
+                continue
+        heading_target = None
+        if text_lines:
+            region_text = " ".join(
+                str(line.get("text") or "")
+                for line in text_lines
+                if isinstance(line, dict)
+                and (line_box := _marker_bbox(line)) is not None
+                and box.left - 4 <= (line_box.left + line_box.right) / 2.0 <= box.right + 4
+                and box.top - 4 <= (line_box.top + line_box.bottom) / 2.0 <= box.bottom + 4
+            )
+            if PDF_GROUP_INSTRUCTION_RE.match(region_text):
+                below = [
+                    block
+                    for block in result
+                    if not block.metadata.get("recovered_uncovered_region")
+                    and _column_of(block.bbox) == column_index
+                    and block.bbox.top >= box.bottom - 4
+                ]
+                if below:
+                    heading_target = min(below, key=lambda block: block.bbox.top)
+        if heading_target is not None:
+            # "[31~34] 다음 빈칸에 …" group instruction: it introduces the
+            # questions below it, so extend the next question's crop up to
+            # include it instead of gluing it to the previous column's last
+            # question.
+            heading_target.bbox = _merge_box_pair(heading_target.bbox, padded)
+            heading_target.metadata["group_instruction_included"] = True
+            group_instruction_count += 1
+            continue
+        predecessor = result[insert_at - 1] if best_key is not None and insert_at > 0 else None
+        predecessor_column = predecessor.metadata.get("column_index") if predecessor is not None else None
+        predecessor_band = predecessor.metadata.get("question_band_index") if predecessor is not None else None
+        metadata = {
+            "segmenter": "uncovered-region-recovery",
+            # Inherit the predecessor's column/band so reading-order sorting
+            # (column, band, ...) keeps the region right after it.
+            "column_index": predecessor_column if predecessor_column is not None else column_index + 1,
+            "question_band_index": predecessor_band if predecessor_band is not None else 0,
+            "recovered_after_block_id": predecessor.block_id if predecessor is not None else None,
+            "recovered_uncovered_region": True,
+            "recovered_region_position": (
+                "column_top"
+                if best_key is None or best_key[0] != column_index
+                else "after_block"
+            ),
+            "force_image_record": True,
+            "review_flags": ["recovered_uncovered_region"],
+        }
+        result.insert(
+            insert_at,
+            ContentBlock(
+                block_id=f"{page_id}-recovered-{recovered_index:03d}",
+                block_type=BlockType.STEM,
+                bbox=padded,
+                reading_order=0,
+                confidence=0.5,
+                metadata=metadata,
+            ),
+        )
+    recovered_total = sum(1 for block in result if block.metadata.get("recovered_uncovered_region")) + group_instruction_count
+    if not recovered_total:
+        return blocks, 0
+    for order, block in enumerate(result):
+        block.reading_order = order
+    return result, recovered_total
+
+
 def segment_page(
     image_path: str | Path | Image.Image | Any,
     *,
@@ -4317,6 +5324,7 @@ def segment_page(
     if _is_document_like_page(image_path, image):
         source_metadata = _source_metadata(image_path)
         marker_result = None
+        scan_column_result = None
         raw_text_lines = source_metadata.get("pdf_text_lines")
         usable_text_lines = raw_text_lines if isinstance(raw_text_lines, list) else []
         raw_markers = source_metadata.get("pdf_problem_markers")
@@ -4341,9 +5349,58 @@ def segment_page(
                 usable_text_lines,
             )
         if marker_result is None and _is_image_upload_document_source(image_path, source_metadata):
-            marker_result = _segment_visual_problem_markers(image, page_id, resolved_options)
+            # Scanned exam PDFs: a page holding one question after a long
+            # passage has a single number; the stricter scan marker checks
+            # (period shape, white space above) make one marker trustworthy.
+            scanned_pdf_page = str(source_metadata.get("source_type") or "").lower() == "pdf" and _is_scanned_pdf_page_metadata(source_metadata)
+            marker_result = _segment_visual_problem_markers(
+                image,
+                page_id,
+                resolved_options,
+                min_markers=1 if scanned_pdf_page else 2,
+                skip_above=_scan_page_header_rule_bottom(image) if scanned_pdf_page else None,
+                scan_mode=scanned_pdf_page,
+            )
+            if (
+                marker_result is None
+                and str(source_metadata.get("source_type") or "").lower() == "pdf"
+                and _is_scanned_pdf_page_metadata(source_metadata)
+            ):
+                scan_column_result = _segment_scan_passage_columns(image, page_id)
+            if (
+                marker_result is not None
+                and str(source_metadata.get("source_type") or "").lower() == "pdf"
+                and not _visual_marker_density_plausible(marker_result[0])
+            ):
+                # Scanned PDF where the digit+dot detector fires on body text
+                # (English/Korean passages, numbered lists): keep the previous
+                # row-band behaviour rather than over-splitting the page.
+                marker_result = None
+        if marker_result is not None and str(marker_result[1].get("segmenter") or "") == "visual-problem-markers" and str(source_metadata.get("source_type") or "").lower() == "pdf":
+            marker_result = (_drop_scan_page_header_blocks(image, marker_result[0]), marker_result[1])
         if marker_result is not None:
             blocks, metadata = marker_result
+            blocks, clipped_count = _clip_problem_blocks_at_passage_starts(blocks)
+            if clipped_count:
+                metadata = dict(metadata)
+                metadata["problem_blocks_clipped_at_passage_start"] = clipped_count
+            # Born-digital PDF segmenters exclude some ink on purpose (section
+            # headings, trailing material after the last choice, passages that
+            # later text-based stages place); only recover column-top
+            # continuations there.  Scans have no such stages: recover all.
+            if str(source_metadata.get("source_type") or "").lower() == "pdf":
+                blocks, recovered_count = _recover_uncovered_document_regions(
+                    image,
+                    page_id,
+                    blocks,
+                    column_top_continuations_only=str(metadata.get("segmenter") or "") != "visual-problem-markers",
+                    text_lines=usable_text_lines,
+                )
+                if recovered_count:
+                    metadata = dict(metadata)
+                    metadata["recovered_uncovered_region_count"] = recovered_count
+        elif scan_column_result is not None:
+            blocks, metadata = scan_column_result
         else:
             blocks, metadata = _segment_document_page(image, page_id, resolved_options)
             if _is_image_upload_document_source(image_path, source_metadata):
