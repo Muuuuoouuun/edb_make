@@ -257,14 +257,18 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn(".main.review-editor-focus", html)
         self.assertIn(".main.review-editor-focus > .col.right", html)
 
-    def test_manual_split_panel_stays_beside_canvas_at_standard_desktop_widths(self) -> None:
-        # 920px is the editor's compact breakpoint: the topbar, item rail and
-        # this panel all switch to a stacked layout at the same width.
-        responsive_block = media_rules(board_document(), "max-width: 920px")
+    def test_manual_split_panel_stays_accessible_above_canvas_in_narrow_windows(self) -> None:
+        responsive_block = media_rules(board_document(), "max-width: 700px")
 
         self.assertIn(".manual-split-layout.panel-left", responsive_block)
         self.assertIn(".manual-split-layout.panel-right", responsive_block)
         self.assertIn("grid-template-columns: 1fr", responsive_block)
+        self.assertIn("position: sticky", responsive_block)
+        self.assertIn("45vh", responsive_block)
+        panel = responsive_block.split('.manual-split-layout.panel-right .manual-split-panel', 1)[1].split('}', 1)[0]
+        self.assertIn('grid-row: 1', panel)
+        active_page = board_document().split('.review-wrap.manual-split-open > .review-page{', 1)[1].split('}', 1)[0]
+        self.assertIn('overflow: clip', active_page, 'rounded page clipping must not steal sticky scrolling')
 
     def test_manual_split_exposes_productive_keyboard_shortcuts_and_bulk_actions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
