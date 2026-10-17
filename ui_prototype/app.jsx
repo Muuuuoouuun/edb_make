@@ -5911,6 +5911,7 @@ function ItemsRail({
   const [materialFilter, setMaterialFilter] = useState('all');
   const [dragPreview, setDragPreview] = useState(null);
   const [pressedItemId, setPressedItemId] = useState(null);
+  const railRowHandlersRef = useRef(null);
   const selectionAnchorRef = useRef(null);
   const railSelectionSnapshotRef = useRef('');
   const railRef = useRef(null);
@@ -5969,7 +5970,7 @@ function ItemsRail({
       || (materialFilter === 'questions' && !isPassageFragmentProblem(item))
       || (materialFilter === 'passages' && isPassageFragmentProblem(item))), [items, materialFilter, editScope]);
   const filterActive = !editScope && materialFilter !== 'all';
-  const itemOrderSignature = items.map(item => String(item.id)).join('|');
+  const itemOrderSignature = useMemo(() => items.map(item => String(item.id)).join('|'), [items]);
   const draggingLayoutSignature = Array.from(draggingIds).join('|');
   const dropTargetLayoutSignature = dropTarget
     ? `${String(dropTarget.id)}:${dropTarget.position}`
@@ -6517,6 +6518,11 @@ function ItemsRail({
     });
   };
 
+  useLayoutEffect(() => {
+    railRowHandlersRef.current = { selectRailItem, applyRailSelectionKeyboard, moveItemByKeyboard,
+      startPointerDrag, onDownloadItemImage, removeItem, removeSelectedItems, setSelectedItemIds, selectedItemCount };
+  });
+
   // keep active item visible
   useEffect(() => {
     const el = itemRefs.current[activeId];
@@ -7034,23 +7040,45 @@ function ItemsRail({
         {displayedItemRows.map(({ item: it, displayIndex: i }) => {
           const itemId = String(it.id);
           const isSelected = selectedItemIds.has(itemId);
-          const dropPosition = (
-            String(dropTarget?.id || '') === itemId
-              ? dropTarget.position
-              : null
-          );
-          const isDownloading = downloadingItemId === it.id;
-          const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
-          const hasPageChrome = hasPageChromeArtifactFlag(it);
-          const originalNumber = originalProblemNumberInfo(it);
-          const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
-          const moveDirection = isJustMoved ? moveFeedback.direction : null;
-          const downloadTitle = isDownloading
-            ? '다운로드 준비 중'
-            : canDownloadItem
-              ? '이 자료 PNG 다운로드'
-              : '다운로드할 이미지가 아직 없습니다';
-          return (
+          const isJustMoved = String(moveFeedback?.id || '') === itemId;
+          return <MemoRailRow key={it.id} it={it} i={i}
+            isSelected={isSelected} isActive={activeId === it.id} isPressed={pressedItemId === itemId}
+            isJustMoved={isJustMoved} moveDirection={isJustMoved ? moveFeedback.direction : null}
+            dropPosition={String(dropTarget?.id || '') === itemId ? dropTarget.position : null}
+            isDownloading={downloadingItemId === it.id} reorderBusy={reorderBusy} filterActive={filterActive}
+            editScope={Boolean(editScope)} editTarget={editScopeIds.has(itemId)}
+            selectedItemCount={isSelected ? selectedItemCount : 0}
+            displayedCount={displayedItemRows.length} itemCount={items.length}
+            itemRefs={itemRefs} suppressClickRef={suppressClickRef} handlersRef={railRowHandlersRef} />;
+        })}
+        {hasSessionItems && visibleItemRows.length === 0 && (
+          <div className="material-filter-empty">
+            <strong>해당 자료가 없습니다</strong>
+            <small>분류를 수정하거나 전체 보기로 돌아가세요.</small>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RailRow({ it, i, isSelected, isActive, isPressed, isJustMoved, moveDirection,
+  dropPosition, isDownloading, reorderBusy, filterActive, editScope, editTarget,
+  selectedItemCount, displayedCount, itemCount, itemRefs, suppressClickRef, handlersRef }){
+  const itemId = String(it.id);
+  const canDownloadItem = Boolean(it.chalkUrl || it.imageUrl);
+  const hasPageChrome = hasPageChromeArtifactFlag(it);
+  const downloadTitle = isDownloading ? '다운로드 준비 중'
+    : canDownloadItem ? '이 자료 PNG 다운로드' : '다운로드할 이미지가 아직 없습니다';
+  const selectRailItem = (...args) => handlersRef.current.selectRailItem?.(...args);
+  const applyRailSelectionKeyboard = (...args) => handlersRef.current.applyRailSelectionKeyboard?.(...args);
+  const moveItemByKeyboard = (...args) => handlersRef.current.moveItemByKeyboard?.(...args);
+  const startPointerDrag = (...args) => handlersRef.current.startPointerDrag?.(...args);
+  const onDownloadItemImage = (...args) => handlersRef.current.onDownloadItemImage?.(...args);
+  const removeItem = (...args) => handlersRef.current.removeItem?.(...args);
+  const removeSelectedItems = (...args) => handlersRef.current.removeSelectedItems?.(...args);
+  const setSelectedItemIds = (...args) => handlersRef.current.setSelectedItemIds?.(...args);
+  return (
           <React.Fragment key={it.id}>
           {dropPosition === 'before' && (
             <div
@@ -7064,19 +7092,19 @@ function ItemsRail({
               if (el) itemRefs.current[it.id] = el;
               else delete itemRefs.current[it.id];
             }}
-            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${pressedItemId === itemId ? 'is-pressed' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
+            className={`item ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${isActive ? 'active' : ''} ${isPressed ? 'is-pressed' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''}`}
             data-item-id={it.id}
-            data-edit-target={editScopeIds.has(itemId) ? "true" : undefined}
+            data-edit-target={editTarget ? "true" : undefined}
             role="group"
             tabIndex={editScope ? -1 : 0}
-            aria-current={activeId === it.id ? 'true' : undefined}
+            aria-current={isActive ? 'true' : undefined}
             aria-busy={reorderBusy ? 'true' : undefined}
             aria-roledescription={editScope ? '자르기 적용 범위' : filterActive ? '필터된 문제' : '순서 변경 가능한 문제'}
             aria-keyshortcuts={editScope ? undefined : filterActive ? 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Enter Space Delete Backspace' : 'Control+A Meta+A Shift+ArrowUp Shift+ArrowDown Escape Alt+ArrowUp Alt+ArrowDown Enter Space Delete Backspace'}
             aria-posinset={i + 1}
-            aria-setsize={displayedItemRows.length}
+            aria-setsize={displayedCount}
             aria-describedby={editScope ? undefined : "problem-order-help"}
-            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${editScopeIds.has(itemId) ? ', 교체 대상' : ''}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${editTarget ? ', 교체 대상' : ''}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
             onClick={e => {
               if (editScope || suppressClickRef.current) return;
               selectRailItem(it.id, e);
@@ -7090,7 +7118,7 @@ function ItemsRail({
                 moveItemByKeyboard(it, e.key === 'ArrowUp' ? 'up' : 'down');
                 return;
               }
-              if ((e.key === 'Delete' || e.key === 'Backspace') && selectedItemCount > 0) {
+              if ((e.key === 'Delete' || e.key === 'Backspace') && handlersRef.current.selectedItemCount > 0) {
                 e.preventDefault();
                 removeSelectedItems();
                 return;
@@ -7116,26 +7144,7 @@ function ItemsRail({
                 </span>
               )}
             </div>
-            <div className="thumb">
-              <TileImage item={it} forceMode="raw" />
-            </div>
-            <div className="meta">
-              <div className={`name original-number-${originalNumber.status}`} title={`${originalNumber.description}\n자료명: ${it.name || ''}`}>
-                <span
-                  className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
-                  title={it.statusReason || it.statusLabel}
-                />
-                <span className="original-number-label">{originalNumber.status === 'known' || originalNumber.status === 'inferred' ? problemDisplayName(it, i) : originalNumber.label}</span>
-              </div>
-              <div className="sub">
-                {it.step === 's1' && <span className="tag s1">1단계</span>}
-                {it.step === 's2' && <span className="tag s2">보존</span>}
-                {it.step === 's3' && <span className="tag s3">고화질</span>}
-                {it.step === 'raw' && <span className="tag">대기</span>}
-                {hasPageChrome && <span className="tag page-chrome-tag">페이지 장식</span>}
-                <span className="source-label" title={problemSourceLabel(it)}>{problemSourceLabel(it)}</span>
-              </div>
-            </div>
+            <MemoRailItemDetails it={it} i={i} hasPageChrome={hasPageChrome} />
             <div className="actions">
               <button
                 className="icon-btn item-move-action"
@@ -7157,7 +7166,7 @@ function ItemsRail({
                 title="한 칸 아래로"
                 data-tooltip="한 칸 아래로 이동"
                 aria-label={`${problemDisplayName(it, i)} 한 칸 아래로 이동`}
-                disabled={!!editScope || reorderBusy || filterActive || i === items.length - 1}
+                disabled={!!editScope || reorderBusy || filterActive || i === itemCount - 1}
                 onClick={e => {
                   e.stopPropagation();
                   moveItemByKeyboard(it, 'down');
@@ -7214,17 +7223,10 @@ function ItemsRail({
             />
           )}
           </React.Fragment>
-        );})}
-        {hasSessionItems && visibleItemRows.length === 0 && (
-          <div className="material-filter-empty">
-            <strong>해당 자료가 없습니다</strong>
-            <small>분류를 수정하거나 전체 보기로 돌아가세요.</small>
-          </div>
-        )}
-      </div>
-    </div>
+
   );
 }
+const MemoRailRow = React.memo(RailRow);
 
 // ─── CENTER: big scrollable board stage ──
 function buildClassinPageBands(layout, pageH, classinPageCount){
@@ -7265,6 +7267,8 @@ function BoardStage({
   aiEnabled = true, userSettings = null,
   onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
 }){
+  const boardTileHandlersRef = useRef(null);
+  const boardSelectionIntentRef = useRef(null);
   const scrollRef = useRef(null);
   const contentRef = useRef(null);
   const tileRefs = useRef({});
@@ -7336,6 +7340,7 @@ function BoardStage({
     };
   }, [estimateDetailsOpen]);
   const [contentW, setContentW] = useState(0);
+  const [boardViewport, setBoardViewport] = useState(() => ({ top: Math.max(0, Number(savedScrollTop) || 0), height: 800 }));
   const columnCount = normalizeBoardColumns(boardColumns);
   const boardOrderSignature = useMemo(
     () => items.map(item => String(item.id)).join('|'),
@@ -7361,6 +7366,7 @@ function BoardStage({
     const measure = () => {
       const style = window.getComputedStyle(el);
       const height = el.clientHeight || 400;
+      setBoardViewport(previous => previous.height === height ? previous : { top: el.scrollTop, height });
       const nextBasePageH = boardPreviewBasePageHeight(
         height,
         Number.parseFloat(style.paddingTop) || 0,
@@ -7460,6 +7466,19 @@ function BoardStage({
     const totalPages = Math.max(1, Math.ceil(totalH / pageH));
     return { items: layoutItems, positions, endTop, endH, totalH, totalPages, usesPlacement: true };
   }, [layoutItems, pageH, columnCount]);
+
+  const renderedBoardItems = useMemo(() => {
+    const overscan = Math.max(400, boardViewport.height);
+    const top = Math.max(0, boardViewport.top - overscan);
+    const bottom = boardViewport.top + boardViewport.height + overscan;
+    return layout.items.flatMap((it, i) => {
+      const p = layout.positions[i];
+      if (!p) return [];
+      const tileTop = p.top + (p.yRatio || 0) * Math.max(0, p.rowHeightPages - p.renderedHeightPages) * pageH;
+      const visible = tileTop + p.renderedHeightPages * pageH >= top && tileTop <= bottom;
+      return visible || it.id === activeId || it.id === positioningId ? [{ it, p, i }] : [];
+    });
+  }, [layout, boardViewport, pageH, activeId, positioningId]);
 
   const previewEstimate = useMemo(
     () => deriveBoardPreviewEstimate(layout.items, activeId, DEFAULT_SLOT_HEIGHT_PAGES),
@@ -7585,7 +7604,7 @@ function BoardStage({
     setCurrentPage(prev => prev === nextPage ? prev : nextPage);
     // Intermediate frames of a selection-driven scroll must keep its target
     // selected; direct wheel or pointer input cancels that scroll below.
-    if (positionDragRef.current || previewFitActive || c.__scrollResolve) return;
+    if (positionDragRef.current || previewFitActive || c.__scrollResolve || boardSelectionIntentRef.current) return;
     const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
     const id = items[nearestIdx]?.id;
     if (id && id !== activeId){
@@ -7600,6 +7619,11 @@ function BoardStage({
     if (scrollSyncFrameRef.current != null) return;
     scrollSyncFrameRef.current = window.requestAnimationFrame(() => {
       scrollSyncFrameRef.current = null;
+      const container = scrollRef.current;
+      if (container) setBoardViewport(previous => (
+        Math.abs(previous.top - container.scrollTop) < Math.max(200, previous.height / 2)
+          ? previous : { top: container.scrollTop, height: container.clientHeight || previous.height }
+      ));
       syncBoardScrollState();
     });
   };
@@ -7613,6 +7637,7 @@ function BoardStage({
 
   const onTileClick = (id, event = {}) => {
     if (suppressClickRef.current === id) return;
+    boardSelectionIntentRef.current = String(id);
     syncLock.current = Date.now();
     syncLockOriginIdRef.current = String(id);
     const orderedIds = items.map(item => String(item.id));
@@ -7627,6 +7652,10 @@ function BoardStage({
     setSelectedIds?.(new Set(result.selectedIds));
     setActive(id);
   };
+
+  useLayoutEffect(() => {
+    boardTileHandlersRef.current = { onTileClick, beginPositionDrag };
+  });
 
   const focusActiveTileAtPreviewZoom = (value) => {
     const container = scrollRef.current;
@@ -8300,8 +8329,13 @@ function BoardStage({
               className="stage-scroll"
               ref={scrollRef}
               onScroll={onScroll}
-              onWheel={() => cancelSmoothScroll(scrollRef.current)}
-              onPointerDown={() => cancelSmoothScroll(scrollRef.current)}
+              onWheel={() => (boardSelectionIntentRef.current = null, cancelSmoothScroll(scrollRef.current))}
+              onPointerDown={() => (boardSelectionIntentRef.current = null, cancelSmoothScroll(scrollRef.current))}
+              onKeyDown={event => {
+                if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+                  boardSelectionIntentRef.current = null;
+                }
+              }}
             >
               <div
                 className={`stage-content ${previewFitActive ? 'is-fit-preview' : ''} ${columnCount > 1 ? 'has-column-guides' : ''} ${positioningId ? 'is-positioning' : ''}`}
@@ -8371,104 +8405,15 @@ function BoardStage({
                   </div>
                 ))}
 
-                {layout.items.map((it, i) => {
-                  const p = layout.positions[i];
-                  if (!p) return null;
-                  const tileBounds = boardItemVisualBounds(it);
-                  const tileRenderedBottomPages = tileBounds.bottom;
-                  const tileClassinStartPage = classinBoardPageNumberAtOffset(tileBounds.start);
-                  const tileClassinEndPage = classinPageNumberForRenderedEnd(
-                    tileRenderedBottomPages,
-                    DEFAULT_SLOT_HEIGHT_PAGES
-                  );
-                  const tileWidth = contentW > 0
-                    ? isContinuousPlacementItem(it)
-                      ? Math.max(120, contentW / PLACEMENT_FIT_WIDTH_SCALE_RATIO)
-                      : Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
-                    : null;
-                  const maxScale = tileWidth
-                    ? isContinuousPlacementItem(it)
-                      ? Math.max(
-                        PLACEMENT_SCALE_MIN,
-                        Math.min(
-                          PLACEMENT_FIT_WIDTH_SCALE_RATIO,
-                          contentW / Math.max(tileWidth, 1)
-                        )
-                      )
-                      : Math.max(
-                        PLACEMENT_SCALE_MIN,
-                        Math.min(
-                          PLACEMENT_SCALE_MAX,
-                          contentW / Math.max(tileWidth, 1),
-                          ((p.snappedNext * pageH) - p.top) / Math.max(p.height, 1)
-                        )
-                      )
-                    : placementScaleLimitForItem(it);
-                  const scaleRatio = normalizePlacementScaleRatio(it.placementScaleRatio, maxScale);
-                  const scaledWidth = tileWidth ? tileWidth * scaleRatio : null;
-                  const scaledHeight = p.renderedHeightPages * pageH;
-                  const maxLeft = scaledWidth ? Math.max(0, contentW - scaledWidth) : 0;
-                  const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - scaledHeight);
-                  const xRatio = normalizePlacementXRatio(p.xRatio);
-                  const yRatio = normalizePlacementYRatio(p.yRatio);
-                  const dropPosition = boardDropTarget?.id === it.id ? boardDropTarget.position : null;
-                  const hasPageChrome = hasPageChromeArtifactFlag(it);
+                {renderedBoardItems.map(({ it, p, i }) => {
                   const isJustMoved = String(moveFeedback?.id || '') === String(it.id);
-                  const moveDirection = isJustMoved ? moveFeedback.direction : null;
-                  const tileStyle = {
-                    top: p.top + (yRatio * maxTopOffset),
-                    height: scaledHeight,
-                    ...(scaledWidth ? { left: xRatio * maxLeft, width: scaledWidth } : null),
-                  };
-                  return (
-                    <button
-                      key={it.id}
-                      ref={el => { tileRefs.current[it.id] = el; }}
-                      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${selectedIds?.has(String(it.id)) ? 'is-selected' : ''} ${activeId === it.id ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${positioningId === it.id ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${dropPosition === 'gap' ? 'drop-gap' : ''}`}
-                      onClick={event => onTileClick(it.id, event)}
-                      onPointerDown={e => beginPositionDrag(e, it, p)}
-                      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. ${smartMove ? '문제 위로 드래그하면 순서 변경, 옆에 놓으면 뒤 여백 당기기' : `드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}`}
-                      aria-pressed={selectedIds?.has(String(it.id)) ? 'true' : 'false'}
-                      style={tileStyle}
-                    >
-                      <div
-                        className="tile-hd"
-                        title={`${problemDisplayName(it, i)} · ${smartMove ? '문제 위: 순서 변경 · 옆: 뒤 여백 당기기 · Esc: 취소' : `드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}`}
-                      >
-                        <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
-                        <span className="n">{String(i+1).padStart(2,'0')}</span>
-                        <span className="nm">{problemDisplayName(it, i)}</span>
-                        {isJustMoved && (
-                          <span className={`tile-move-cue move-${moveDirection}`} aria-hidden="true">
-                            {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
-                          </span>
-                        )}
-                        {tileClassinEndPage > tileClassinStartPage && (
-                          <span
-                            className="span-mark"
-                            title={`ClassIn ${tileClassinStartPage}–${tileClassinEndPage}페이지`}
-                          >
-                            C{tileClassinStartPage}–C{tileClassinEndPage}
-                          </span>
-                        )}
-                        {p.columnCount > 1 && (
-                          <span className="column-mark">칸 {p.columnIndex + 1}</span>
-                        )}
-                        {p.rowHeightPages > p.renderedHeightPages + 0.05 && (
-                          <span className="row-mark">{formatClassinPageAmount(p.rowHeightPages)}</span>
-                        )}
-                        {hasPageChrome && (
-                          <span className="page-chrome-mark">페이지 장식</span>
-                        )}
-                        <span className={`step-mark ${it.step}`}>
-                          {it.step === 's1' ? '1' : it.step === 's2' ? '2' : it.step === 's3' ? 'HQ' : '··'}
-                        </span>
-                      </div>
-                      <div className="tile-art">
-                        <TileImage item={it} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} />
-                      </div>
-                    </button>
-                  );
+                  return <MemoBoardTile key={it.id} it={it} p={p} i={i}
+                    contentW={contentW} pageH={pageH} smartMove={smartMove}
+                    isSelected={Boolean(selectedIds?.has(String(it.id)))} isActive={activeId === it.id}
+                    isPositioning={positioningId === it.id} isJustMoved={isJustMoved}
+                    moveDirection={isJustMoved ? moveFeedback.direction : null}
+                    dropPosition={boardDropTarget?.id === it.id ? boardDropTarget.position : null}
+                    tileRefs={tileRefs} handlersRef={boardTileHandlersRef} />;
                 })}
 
                 {/* end slot */}
@@ -8523,6 +8468,137 @@ function BoardStage({
     </div>
   );
 }
+
+function RailItemDetails({ it, i, hasPageChrome }){
+  const originalNumber = originalProblemNumberInfo(it);
+  return <>
+            <div className="thumb">
+              <TileImage item={it} forceMode="raw" />
+            </div>
+            <div className="meta">
+              <div className={`name original-number-${originalNumber.status}`} title={`${originalNumber.description}\n자료명: ${it.name || ''}`}>
+                <span
+                  className={`status-dot ${reviewStatusClass(it.reviewStatus)}`}
+                  title={it.statusReason || it.statusLabel}
+                />
+                <span className="original-number-label">{originalNumber.status === 'known' || originalNumber.status === 'inferred' ? problemDisplayName(it, i) : originalNumber.label}</span>
+              </div>
+              <div className="sub">
+                {it.step === 's1' && <span className="tag s1">1단계</span>}
+                {it.step === 's2' && <span className="tag s2">보존</span>}
+                {it.step === 's3' && <span className="tag s3">고화질</span>}
+                {it.step === 'raw' && <span className="tag">대기</span>}
+                {hasPageChrome && <span className="tag page-chrome-tag">페이지 장식</span>}
+                <span className="source-label" title={problemSourceLabel(it)}>{problemSourceLabel(it)}</span>
+              </div>
+            </div>
+  </>;
+}
+const MemoRailItemDetails = React.memo(RailItemDetails);
+
+function BoardTile({ it, p, i, contentW, pageH, isSelected, isActive, isPositioning,
+  isJustMoved, moveDirection, dropPosition, smartMove, tileRefs, handlersRef }){
+  // The element stays memoized; events always use the latest selection and drag state.
+  const onTileClick = (...args) => handlersRef.current.onTileClick(...args);
+  const beginPositionDrag = (...args) => handlersRef.current.beginPositionDrag(...args);
+  const tileWidth = contentW > 0
+    ? isContinuousPlacementItem(it)
+      ? Math.max(120, contentW / PLACEMENT_FIT_WIDTH_SCALE_RATIO)
+      : Math.max(120, (contentW * FIXED_LEFT_ZONE_RATIO) - 10)
+    : null;
+  const maxScale = tileWidth
+    ? isContinuousPlacementItem(it)
+      ? Math.max(
+        PLACEMENT_SCALE_MIN,
+        Math.min(
+          PLACEMENT_FIT_WIDTH_SCALE_RATIO,
+          contentW / Math.max(tileWidth, 1)
+        )
+      )
+      : Math.max(
+        PLACEMENT_SCALE_MIN,
+        Math.min(
+          PLACEMENT_SCALE_MAX,
+          contentW / Math.max(tileWidth, 1),
+          ((p.snappedNext * pageH) - p.top) / Math.max(p.height, 1)
+        )
+      )
+    : placementScaleLimitForItem(it);
+  const scaleRatio = normalizePlacementScaleRatio(it.placementScaleRatio, maxScale);
+  const scaledWidth = tileWidth ? tileWidth * scaleRatio : null;
+  const scaledHeight = p.renderedHeightPages * pageH;
+  const maxLeft = scaledWidth ? Math.max(0, contentW - scaledWidth) : 0;
+  const maxTopOffset = Math.max(0, (p.snappedNext * pageH) - p.top - scaledHeight);
+  const xRatio = normalizePlacementXRatio(p.xRatio);
+  const yRatio = normalizePlacementYRatio(p.yRatio);
+  const hasPageChrome = hasPageChromeArtifactFlag(it);
+  const tileStyle = {
+    top: p.top + (yRatio * maxTopOffset),
+    height: scaledHeight,
+    ...(scaledWidth ? { left: xRatio * maxLeft, width: scaledWidth } : null),
+  };
+  return (
+    <button
+      key={it.id}
+      ref={el => { tileRefs.current[it.id] = el; }}
+      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${isActive ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${isPositioning ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${dropPosition === 'gap' ? 'drop-gap' : ''}`}
+      onClick={event => onTileClick(it.id, event)}
+      onPointerDown={e => beginPositionDrag(e, it, p)}
+      aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. ${smartMove ? '문제 위로 드래그하면 순서 변경, 옆에 놓으면 뒤 여백 당기기' : `드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}`}
+      aria-pressed={isSelected ? 'true' : 'false'}
+      style={tileStyle}
+    >
+      <MemoBoardTileContents it={it} p={p} i={i} smartMove={smartMove}
+        isJustMoved={isJustMoved} moveDirection={moveDirection} hasPageChrome={hasPageChrome} />
+    </button>
+  );
+}
+const MemoBoardTile = React.memo(BoardTile);
+
+function BoardTileContents({ it, p, i, smartMove, isJustMoved, moveDirection, hasPageChrome }){
+  const tileBounds = boardItemVisualBounds(it);
+  const tileClassinStartPage = classinBoardPageNumberAtOffset(tileBounds.start);
+  const tileClassinEndPage = classinPageNumberForRenderedEnd(tileBounds.bottom, DEFAULT_SLOT_HEIGHT_PAGES);
+  return <>
+      <div
+        className="tile-hd"
+        title={`${problemDisplayName(it, i)} · ${smartMove ? '문제 위: 순서 변경 · 옆: 뒤 여백 당기기 · Esc: 취소' : `드래그: 위치 이동 · ${ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소`}`}
+      >
+        <span className="tile-grip-icon" aria-hidden="true">{Icon.grip}</span>
+        <span className="n">{String(i+1).padStart(2,'0')}</span>
+        <span className="nm">{problemDisplayName(it, i)}</span>
+        {isJustMoved && (
+          <span className={`tile-move-cue move-${moveDirection}`} aria-hidden="true">
+            {moveDirection === 'up' ? Icon.arrowUp : Icon.arrowDown}
+          </span>
+        )}
+        {tileClassinEndPage > tileClassinStartPage && (
+          <span
+            className="span-mark"
+            title={`ClassIn ${tileClassinStartPage}–${tileClassinEndPage}페이지`}
+          >
+            C{tileClassinStartPage}–C{tileClassinEndPage}
+          </span>
+        )}
+        {p.columnCount > 1 && (
+          <span className="column-mark">칸 {p.columnIndex + 1}</span>
+        )}
+        {p.rowHeightPages > p.renderedHeightPages + 0.05 && (
+          <span className="row-mark">{formatClassinPageAmount(p.rowHeightPages)}</span>
+        )}
+        {hasPageChrome && (
+          <span className="page-chrome-mark">페이지 장식</span>
+        )}
+        <span className={`step-mark ${it.step}`}>
+          {it.step === 's1' ? '1' : it.step === 's2' ? '2' : it.step === 's3' ? 'HQ' : '··'}
+        </span>
+      </div>
+      <div className="tile-art">
+        <TileImage item={it} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} />
+      </div>
+  </>;
+}
+const MemoBoardTileContents = React.memo(BoardTileContents);
 
 function HomeDashboard({
   onUpload, onFilesDropped, onAddMockSample, canAddDummy,
@@ -10027,13 +10103,13 @@ function SidePanel({
 
                       {previewMode === 'compare' ? (
                         <div className="canvas-mini" style={{ background: 'white' }}>
-                          <div className="inner"><TileImage item={item} forceMode="raw" /></div>
+                          <div className="inner"><TileImage item={item} forceMode="raw" previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} /></div>
                           <div style={{
                             position: 'absolute', inset: 0,
                             clipPath: `inset(0 0 0 ${compareX}%)`,
                             background: boardColor,
                           }}>
-                            <div className="inner"><TileImage item={item} forceMode="chalk" /></div>
+                            <div className="inner"><TileImage item={item} forceMode="chalk" previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} /></div>
                           </div>
                           <div className="compare-handle"
                                role="slider" tabIndex={0} aria-label="원본과 칠판용 비교"
@@ -10049,7 +10125,7 @@ function SidePanel({
                       ) : (
                         <div className={`canvas-mini ${previewMode==='chalk' ? 'board' : ''}`}
                              style={previewMode==='chalk' ? { background: boardColor } : null}>
-                          <div className="inner"><TileImage item={item} forceMode={previewMode==='chalk' ? 'chalk' : 'raw'} /></div>
+                          <div className="inner"><TileImage item={item} forceMode={previewMode==='chalk' ? 'chalk' : 'raw'} previewMaxDimension={CENTER_PANEL_PREVIEW_MAX_DIMENSION} /></div>
                         </div>
                       )}
                     </div>

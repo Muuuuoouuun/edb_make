@@ -143,6 +143,7 @@ class TestEditorBasicMode(unittest.TestCase):
           ALTERNATE_MODIFIER_NAME:'Alt', problemDisplayName:it=>it.name,
           reviewStatusClass:()=> 'status-normal', problemSourceLabel:()=> '원본 1쪽',
           TileImage:()=>null, suppressClickRef:{current:false}, selectedItemCount:0,
+          railRowHandlersRef:{current:sandbox},
           selectRailItem:(id,e)=>calls.push(['select',id,e.ctrlKey]),
           applyRailSelectionKeyboard:()=>false,
           moveItemByKeyboard:(it,direction)=>calls.push(['move',it.id,direction]),
@@ -152,7 +153,10 @@ class TestEditorBasicMode(unittest.TestCase):
           removeSelectedItems:()=>calls.push(['removeSelected']),
           setSelectedItemIds:update=>{sandbox.selectedItemIds=update(sandbox.selectedItemIds);},
         });
-        compile(sandbox, 'globalThis.rows = () => (<>'
+        sandbox.React.memo = fn => fn;
+        compile(sandbox, section('function RailItemDetails(', 'function BoardTile(')
+          + section('function RailRow(', '// ─── CENTER:')
+          + 'globalThis.rows = () => (<>'
           + section('        {displayedItemRows.map(', '        {hasSessionItems && visibleItemRows.length === 0 && (') + '</>);');
         const rows = ()=>walk(sandbox.rows()).filter(node=>node.props['data-item-id']);
         const first = rows()[0];

@@ -32,7 +32,7 @@ function derive() {
 }
 function deriveLayout() {
   return vm.runInContext('(() => {'
-    + section('  // Compute pixel positions', '  const previewEstimate =')
+    + section('  // Compute pixel positions', '  const renderedBoardItems =')
     + 'return layout; })()', sandbox);
 }
 """
