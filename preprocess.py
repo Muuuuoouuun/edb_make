@@ -3721,6 +3721,57 @@ def _prefer_pdf_text_stem_markers_when_numeric_sparse(
     return updated
 
 
+DESKEW_MAX_ANGLE_DEGREES = 5.0
+DESKEW_COARSE_STEP_DEGREES = 0.25
+DESKEW_FINE_STEP_DEGREES = 0.05
+# The best angle must sharpen the row profile by at least this fraction over
+# the unrotated page; otherwise the page is treated as already straight.
+DESKEW_MIN_SCORE_GAIN = 0.03
+
+
+def _estimate_skew_angle_by_projection(thresh) -> float | None:
+    """Estimate page skew from horizontal ink-profile sharpness.
+
+    ``cv2.minAreaRect`` over every ink pixel measures the hull of the whole
+    page, not the text lines.  Uneven columns, bordered <보기> boxes and
+    column dividers make that hull a non-rectangle, so clean pages were being
+    rotated by up to ~0.7 degrees, which tilted box borders into neighbouring
+    question bands.  Text lines and box rules are horizontal, so the correct
+    rotation is the one whose row-sum profile is sharpest.
+    """
+    height, width = thresh.shape[:2]
+    scale = min(1.0, 900.0 / float(max(height, width)))
+    small = cv2.resize(thresh, (max(1, int(width * scale)), max(1, int(height * scale))), interpolation=cv2.INTER_AREA)
+    small = (small > 64).astype("uint8") * 255
+    if int(np.count_nonzero(small)) < 50:
+        return None
+    center = (small.shape[1] / 2.0, small.shape[0] / 2.0)
+
+    def score(angle: float) -> float:
+        matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+        rotated = cv2.warpAffine(small, matrix, (small.shape[1], small.shape[0]), flags=cv2.INTER_NEAREST, borderValue=0)
+        profile = rotated.sum(axis=1, dtype=np.float64)
+        return float(np.sum(np.diff(profile) ** 2))
+
+    base = score(0.0)
+    best_angle, best_score = 0.0, base
+    steps = int(DESKEW_MAX_ANGLE_DEGREES / DESKEW_COARSE_STEP_DEGREES)
+    for index in range(-steps, steps + 1):
+        angle = index * DESKEW_COARSE_STEP_DEGREES
+        value = score(angle)
+        if value > best_score:
+            best_angle, best_score = angle, value
+    fine_center = best_angle
+    for index in range(-5, 6):
+        angle = fine_center + index * DESKEW_FINE_STEP_DEGREES
+        value = score(angle)
+        if value > best_score:
+            best_angle, best_score = angle, value
+    if base > 0 and best_score < base * (1.0 + DESKEW_MIN_SCORE_GAIN):
+        return 0.0
+    return best_angle
+
+
 def deskew_image(image: Image.Image) -> Image.Image:
     if cv2 is None or np is None:
         return image
@@ -3732,12 +3783,8 @@ def deskew_image(image: Image.Image) -> Image.Image:
     if len(coords) < 50:
         return image
 
-    angle = cv2.minAreaRect(coords)[-1]
-    if angle < -45:
-        angle = -(90 + angle)
-    else:
-        angle = -angle
-    if abs(angle) < 0.2:
+    angle = _estimate_skew_angle_by_projection(thresh)
+    if angle is None or abs(angle) < 0.2:
         return image
 
     center = (image_bgr.shape[1] // 2, image_bgr.shape[0] // 2)
