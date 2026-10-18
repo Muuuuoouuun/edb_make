@@ -1,3 +1,58 @@
+# Design QA — 원본 파일 탐색과 수업 이름 편집 (2026-10-18)
+
+final result: passed
+
+## Scope and visual truth
+
+- 사용자가 선택한 통합 시안: `/workspace/generated_images/exec-8967b2de-977a-4d96-a9a6-854ff9ca67f9.png`.
+- 이름 편집 동작의 보조 시안: `/workspace/generated_images/exec-a9db86ff-5a9c-4959-b4e2-ac86ad491e89.png`.
+- 사용자 범위 지정: **좌측 원본 파일 영역과 상단 이름만** 시안으로 구현. 우측은 시안 대신 기존 `feat/right-panel-ia`의 `9fba92f` 디자인을 통합했다. 최신 메인의 자르기·선택 최적화를 보존했다.
+- 우측 통합에 필요한 기능 보완: 설정을 native modal로 열고 PDF viewer의 포커스 간섭을 차단한다. 빈 홈에서는 우측 패널 없이 설정만 열 수 있다. 기존 Alt+1/2 및 패널 다시 열기의 포커스 대상을 새 inspector region에 연결했다.
+
+## Environment and normalized comparison
+
+- Browser plugin not available. 설치된 Playwright와 `/usr/bin/chromium`을 사용했다.
+- 구현 URL: `http://127.0.0.1:18769/`; 격리된 빈 홈: `http://127.0.0.1:18770/`. 실제 사용자 runtime 및 외부 AI를 사용하지 않았다.
+- Source pixels: 1487×1058; 비교용 source: 1440×1024로 정규화. Implementation: 1440×1024 pixels, CSS viewport 1440×1024, deviceScaleFactor=1.
+- 비교 상태: 베이지 테마, 원본 파일 3개, 자료 12개, 목록 순서 03 선택, 원본 파일 선택창 열림. 파일별 쪽수와 문항 이미지 내용은 합성 fixture의 실제 데이터다.
+- 최종 구현: `/workspace/edb-source-name-20261018/final-source-picker.png`, `final-name-editor.png`, `final-long-name.png`.
+- Source와 구현을 같은 이미지에 놓고 비교: `comparison-full.png`, `comparison-picker.png`, `comparison-title.png`, `comparison-name-editor.png` (모두 `/workspace/edb-source-name-20261018/`).
+- 반응형: 1024×768, 390×844, 320×744, 900×600 dark. 각 상태의 picker/name screenshot과 검사 결과는 같은 디렉터리에 저장했다.
+
+## Required fidelity surfaces
+
+| Surface | Result |
+| --- | --- |
+| Fonts / typography | 기존 offline Pretendard 사용. 파일명 14px, 보조 설명은 기존 11–13px 토큰. 전체 이름 편집창은 줄바꿈·높이 증가를 지원한다. |
+| Spacing / layout | 좌측에 원본 파일 선택·이전/다음, 고정 위치 420px popup, 검색·목록·footer 순서를 적용했다. Popup은 목록을 밀어내지 않는다. 작은 창의 상단 이름과 보조 작업은 별도 행으로 배치한다. |
+| Colors / tokens | 기존 베이지·크림·갈색 action·복숭아 선택 색상을 재사용한다. Dark theme, font/spacing/layer/breakpoint token 회귀 검사를 통과했다. |
+| Image / asset fidelity | 실제 제품의 기존 logo, crop thumbnail과 기존 UI icon을 재사용한다. 새 사진·장식·가짜 문항 이미지를 UI에 추가하지 않았다. 중앙 칠판은 실제 합성 세션 데이터로 렌더링한다. |
+| Copy / content | 전체 파일명을 검색창 목록에서 읽을 수 있다. 목록 순서와 원문 번호를 분리하고 번호가 없으면 자료명을 유지하며 `원문 번호 —`를 보조로 표시한다. 이름 편집에는 실제 export helper가 만드는 EDB 파일명을 표시한다. |
+
+의도적으로 유지한 차이: 기존 compact 자료 행과 제품 brand/상단 보조 작업은 유지했다. 등록된 원본은 검색·전환·전체 보기를 제공하고, 파일 교체는 아직 처리하지 않은 대기 파일에만 제공한다. 원본 파일을 몰래 삭제하거나 다시 인식하지 않는다. 수업 이름 저장은 metadata만 갱신하며 미저장 crop·배치·처리 방식은 유지한다.
+
+## Findings and comparison history
+
+1. [P1, fixed] 파일별 모아보기에서 순서가 01부터 다시 표시됨. 전체 수업의 순서 번호와 aria-posinset/setsize를 보존하도록 수정했고 Shift 범위 선택·재정렬 비활성화·전체 보기 복원을 확인했다.
+2. [P1, fixed] PDF viewer가 popup/설정의 포커스를 가져감. Popup의 PDF focus 격리와 native 설정 dialog의 포커스 복원·Tab 순환을 추가했다. 새로 로드되는 PDF를 둔 상태로 키보드 흐름을 검사했다.
+3. [P2, fixed] 390px 창에서 이름과 상단 보조 작업이 겹침. 상단 행을 분리한 뒤 `name-390.png`, `picker-320.png` 및 실제 클릭으로 가림·가로 넘침이 없음을 확인했다.
+4. [P2, fixed] Popup 위치 계산 전 autofocus가 실패함. 위치가 준비된 뒤 포커스를 설정하도록 수정했다. 검색 필드/이름 필드의 초기 포커스, 선택된 전체 이름, Esc 후 opener 복원을 확인했다.
+5. 최종 combined comparison에서 요청 범위 내 미해결 P0/P1/P2는 없다. 기존 compact 자료 행의 크기와 문서 모양 검색 아이콘은 기존 제품 체계를 유지한 P3 차이다.
+
+## Validation
+
+- 전체 로컬 검사(1차 통합): **2047 passed, 38 skipped, 365 subtests**. 이후 popup·native modal 통합의 최종 UI/API 회귀: **530 passed, 83 subtests**.
+- 주요 브라우저 흐름 **23개 통과**: 파일 검색·키보드 전환·파일별 Shift 선택·전체 보기·전체 이름/EDB명 표시·IME Enter·빈 이름 검증·저장 500 실패와 재시도·중복 저장 차단·reload 후 이름 보존·undo·미저장 편집 보존·대기 파일 한 개 교체와 중복 거부·설정 포커스·responsive/dark. Page error 및 app console warning **0개**.
+- 별도 검사: 빈 홈 우측 숨김과 설정 modal, Alt+1/2 및 크기·간격 포커스 통과.
+- 500문항 selection/preview 브라우저 흐름 **9개 통과**: Shift/Ctrl 선택, 미리보기 이동, bounded preview, 먼 문항 이동, pointer 이동·undo, 좁은 창. 칠판 tile windowing 유지.
+- 4× CPU, 500문항, click→두 RAF 측정: 미리보기 다음 중앙값 **89.5ms**, Shift 범위 중앙값 **184.9ms**. 기존 우측 구조까지 달라졌으므로 과거 benchmark와의 직접 개선율은 주장하지 않는다.
+- Frontend deterministic bundle/package 검증, synthetic quality smoke 2 cases, `git diff --check` 통과.
+- Commands: `.venv/bin/python -m pytest -q`; `.venv/bin/python -m pytest -q test_ui_*.py test_session_name.py`; `node scripts/build_frontend_bundle.mjs`; `.venv/bin/python scripts/verify_frontend_package.py`.
+- Evidence: `/workspace/edb-source-name-20261018/browser-results.json`, `ui-complete.log`, `pytest.log`, `selection-functional.log`, `selection-performance-clean.json`, `empty-results.json`, `shortcuts-results.json`.
+- 한계: Linux Chromium의 합성 세션 검증이다. 실제 macOS/Windows native WebView와 새 설치 파일 빌드·공개 배포는 이번 UI 검증에 포함하지 않았다.
+
+---
+
 # 최신 재검증 — 2026-10-04
 
 현재 구현의 검증 근거는 이 절에 기록한다. 아래의 기존 Design QA는 당시 구현과 화면의 이력으로 보존한다.

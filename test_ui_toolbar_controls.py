@@ -71,7 +71,7 @@ class TestUiToolbarControls(unittest.TestCase):
         assert.equal(walk(empty).some(node => node.props.id === 'topbar-export'), false);
         assert.equal(walk(empty).some(node => node.props.onClick === base.onPublish && text(node).includes('EDB 제작')), false);
         const busy = sandbox.TopBar({ ...base, operationBusy: true });
-        assert.equal(walk(busy).find(node => node.type === 'input').props.disabled, true);
+        assert.equal(walk(busy).find(node => node.type === sandbox.LessonNameEditor).props.disabled, true);
         const more = walk(busy).find(node => node.props.id === 'topbar-more');
         assert.equal(more.props.items.find(item => item.id === 'review').disabled, true);
         assert.equal(more.props.items.find(item => item.id === 'reset').disabled, true);

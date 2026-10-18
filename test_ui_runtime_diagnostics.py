@@ -598,7 +598,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         item_tab = item_tab.split('id="side-panel-placement"', 1)[0]
         placement_tab = side_panel.split('id="side-panel-placement"', 1)[1]
         placement_tab = placement_tab.split('id="side-panel-board"', 1)[0]
-        settings_tab = side_panel.split("{settingsDialogOpen && (", 1)[1]
+        settings_tab = side_panel.split("{settingsDialogOpen && (", 1)[1].split("</dialog>", 1)[0]
         materialize = source.split("function materializeSessionForItems", 1)[1]
         materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
 
