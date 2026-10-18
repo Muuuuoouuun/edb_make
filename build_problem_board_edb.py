@@ -66,6 +66,7 @@ from page_tiling import PageTilingOptions, tile_page_columns
 from passage_quality import assess_passage_crop_quality
 from placement_engine import place_problems, normalize_placement_extra_slots
 from preprocess import PreparedPage, prepare_source_pages
+from raster_media import detect_color_media_regions, stage2_media_regions
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
 
 
@@ -1905,6 +1906,7 @@ class _ProblemAssetTask:
     subject: Subject = Subject.UNKNOWN
     source_hints: tuple[str, ...] = ()
     source_media_regions: tuple[dict[str, Any], ...] = ()
+    detect_color_media: bool = False
     render_board_asset: bool = True
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
 
@@ -2242,7 +2244,7 @@ def _stage2_prefers_chalk_math_media(
     processing_step: str,
     *source_hints: Any,
 ) -> bool:
-    """Keep math figures in the Stage-2 chalk treatment.
+    """Prefer chalk for monochrome math figures; retain substantial color media.
 
     Recognition intentionally leaves the subject open-ended. When it is
     unknown, use source-local evidence only for this rendering decision; do
@@ -2271,19 +2273,15 @@ def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> N
             enhanced_crop,
             chalk_color=task.chalk_color,
         )
-    # Math diagrams are usually dark line art on white. The Stage-2 cutout
-    # above turns them into bright chalk strokes on transparency, so restoring
-    # their source pixels would reintroduce an opaque white box.
-    if not _stage2_prefers_chalk_math_media(
-        task.subject,
-        PROCESSING_STEP_CHALK,
-        *task.source_hints,
-    ):
-        cutout_image = _apply_selective_media_preservation(
-            cutout_image,
-            crop,
-            task.rendered_media_regions,
-        )
+    # Monochrome math line art stays chalk. Substantial color media is restored
+    # last from the immutable source, including for math documents.
+    regions = stage2_media_regions(
+        crop, task.rendered_media_regions,
+        chalk_math=_stage2_prefers_chalk_math_media(
+            task.subject, PROCESSING_STEP_CHALK, *task.source_hints,
+        ),
+    )
+    cutout_image = _apply_selective_media_preservation(cutout_image, crop, regions)
     _write_render_image(cutout_image, task.board_render_path)
 
 
@@ -2428,6 +2426,8 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             task.bounds,
             column_index=(task.segment_column_indices or (None,))[0],
         )
+    if task.detect_color_media and not task.rendered_media_regions:
+        task.rendered_media_regions = detect_color_media_regions(crop)
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(
         task.crop_path,
@@ -2473,6 +2473,7 @@ def _problem_asset_task_dedup_key(task: _ProblemAssetTask) -> tuple[Any, ...]:
         task.text_priority,
         task.pad_edges,
         task.subject.value if isinstance(task.subject, Subject) else str(task.subject),
+        task.detect_color_media,
         _source_hints_suggest_math(*task.source_hints),
         media_key,
     )
@@ -6410,6 +6411,7 @@ def build_problem_entries(
                             if _problem_allows_selective_media_preservation(problem)
                             else ()
                         ),
+                        detect_color_media=_problem_allows_selective_media_preservation(problem),
                         render_board_asset=render_board_assets,
                     ),
                 )
@@ -10762,7 +10764,6 @@ def _build_image_only_record_image(
         dark_board
         and processing_step != PROCESSING_STEP_RECONSTRUCT
         and entry.preserve_media_regions
-        and not chalk_math_media
     ):
         # Text-priority exports rebuild and normalize the cutout at final size.
         # Restore media last so photos, table shading, legends, and colors can
@@ -10770,7 +10771,7 @@ def _build_image_only_record_image(
         board_image = _apply_selective_media_preservation(
             board_image,
             crop_image,
-            entry.preserve_media_regions,
+            stage2_media_regions(crop_image, entry.preserve_media_regions, chalk_math=chalk_math_media),
         )
 
     jpeg_quality = (
