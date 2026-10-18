@@ -26,7 +26,10 @@ _KOREAN_MATERIAL_NOUNS = (
 )
 _KOREAN_MATERIAL_RE = re.compile(
     rf"(?:다음|아래|위의?|윗)(?:은|는)?\s*.{{0,36}}?(?:{_KOREAN_MATERIAL_NOUNS})|"
-    rf"(?:{_KOREAN_MATERIAL_NOUNS})\s*(?:을|를|에|에서|의|이(?:다|고)|이다)",
+    rf"(?:{_KOREAN_MATERIAL_NOUNS})\s*(?:을|를|에|에서|의|이(?:다|고)|이다)|"
+    # "[43~45] 다음을 읽고 물음에 답하시오." / "(가)와 (나)를 읽고" name no
+    # material noun; the object marker plus a reading verb is the cue.
+    r"(?:다음|아래|\([가-힣]\)(?:\s*(?:와|과)\s*\([가-힣]\))?)\s*(?:을|를)\s*(?:읽|보|살펴)",
     re.IGNORECASE,
 )
 _KOREAN_TASK_RE = re.compile(

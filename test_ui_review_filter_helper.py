@@ -13,6 +13,36 @@ def run_node(script: str) -> None:
 
 
 class TestUiReviewFilterHelper(unittest.TestCase):
+    def test_unresolved_page_warnings_count_as_check_needed(self) -> None:
+        run_node(
+            """
+            const { problemMatchesReviewFilter, countReviewFilters } = require('./ui_prototype/review_filters.js');
+            const problems = [
+              { id: 'p1', reviewStatus: 'normal' },
+              { id: 'p2', reviewStatus: 'normal' },
+              { id: 'p3', reviewStatus: 'failed' },
+            ];
+            const options = { unresolvedProblemIds: new Set(['p1', 'p3']) };
+            if (!problemMatchesReviewFilter(problems[0], 'check_needed', options)) {
+              throw new Error('normal problem on an unresolved page should match check_needed');
+            }
+            if (problemMatchesReviewFilter(problems[1], 'check_needed', options)) {
+              throw new Error('resolved normal problem should stay normal');
+            }
+            if (!problemMatchesReviewFilter(problems[2], 'failed', options)) {
+              throw new Error('failed status must not be downgraded');
+            }
+            const counts = countReviewFilters(problems, options);
+            if (counts.check_needed !== 1 || counts.normal !== 1 || counts.failed !== 1 || counts.all !== 3) {
+              throw new Error(`unexpected counts ${JSON.stringify(counts)}`);
+            }
+            const plain = countReviewFilters(problems);
+            if (plain.normal !== 2 || plain.check_needed !== 0) {
+              throw new Error(`counts without options should be unchanged ${JSON.stringify(plain)}`);
+            }
+            """
+        )
+
     def test_supplemental_filter_matches_continuation_problem_variants(self) -> None:
         run_node(
             """
