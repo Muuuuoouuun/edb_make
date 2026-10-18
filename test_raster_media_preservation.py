@@ -69,6 +69,14 @@ def test_transparent_color_pixels_do_not_create_a_picture():
     assert raster_media.detect_color_media_regions(image) == []
 
 
+def test_colored_body_text_is_not_restored_as_an_opaque_figure():
+    image = Image.new("RGB", (900, 650), "white")
+    ImageDraw.Draw(image).multiline_text((240, 220), "READ THIS\nCOLOR TEXT\nQUESTION", spacing=0,
+        font=ImageFont.load_default(size=28), fill=(25, 125, 195),
+        stroke_width=1, stroke_fill=(25, 125, 195))
+    assert raster_media.detect_color_media_regions(image) == []
+
+
 def test_optional_cv_dependency_missing_keeps_legacy_behavior(monkeypatch):
     monkeypatch.setattr(raster_media, "cv2", None)
     assert raster_media.detect_color_media_regions(color_worksheet()) == []
