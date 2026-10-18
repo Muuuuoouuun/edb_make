@@ -28,9 +28,11 @@ def component(name: str) -> str:
 
 SIDE_PANEL = component("SidePanel")
 LAYOUT_CONTROLS = component("BoardLayoutControls")
-ITEM_TAB = SIDE_PANEL.split("{tab === 'item' && (", 1)[1].split("{tab === 'placement' && (", 1)[0]
-PLACEMENT_TAB = SIDE_PANEL.split("{tab === 'placement' && (", 1)[1].split("{tab === 'board' && (", 1)[0]
-SETTINGS_TAB = SIDE_PANEL.split("{tab === 'board' && (", 1)[1]
+# The right panel is now a state-driven inspector (item + placement sections)
+# and app settings live in a dialog opened from the top-bar menu.
+ITEM_TAB = SIDE_PANEL.split('id="side-panel-item"', 1)[1].split('id="side-panel-placement"', 1)[0]
+PLACEMENT_TAB = SIDE_PANEL.split('id="side-panel-placement"', 1)[1].split('id="side-panel-board"', 1)[0]
+SETTINGS_TAB = SIDE_PANEL.split("{settingsDialogOpen && (", 1)[1].split("</dialog>", 1)[0]
 
 
 class TestSettingsTabHoldsRealSettings(unittest.TestCase):
@@ -210,13 +212,26 @@ class TestTabNavigation(unittest.TestCase):
         self.assertIn("isEditableKeyboardTarget(evt.target)", handler)
         self.assertIn("evt.metaKey || evt.ctrlKey || evt.shiftKey", handler)
 
-    def test_choosing_a_problem_leaves_the_settings_tab(self) -> None:
-        effect = SIDE_PANEL.split("const lastItemIdRef = useRef(", 1)[1].split("}, [item?.id]);", 1)[0]
-
-        self.assertIn("tab === 'board'", effect)
-        self.assertIn("setTab('item')", effect)
-        # A session finishing its load is not a choice.
-        self.assertIn("previousId != null", effect)
+    def test_settings_modal_opens_natively_and_restores_focus_on_close(self) -> None:
+        run_node(r"""
+        const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
+        const source = fs.readFileSync('ui_prototype/app.jsx','utf8');
+        const start = source.indexOf('  useEffect(() => {\n    if (!settingsDialogOpen) return undefined;');
+        const end = source.indexOf('}, [settingsDialogOpen, setTab]);',start);
+        assert.ok(start >= 0 && end > start);
+        let cleanup, opens=0, closes=0, focuses=0, restored=0;
+        const dialog={open:false,showModal(){this.open=true;opens++},close(){this.open=false;closes++},focus(){focuses++}};
+        const sandbox={settingsDialogOpen:true,settingsDialogRef:{current:dialog},setTab(){},
+          document:{activeElement:{isConnected:true,focus(){restored++}}},
+          useEffect:effect=>{cleanup=effect()}};
+        vm.createContext(sandbox);
+        const effect=source.slice(start,end+'}, [settingsDialogOpen, setTab]);'.length);
+        vm.runInContext(effect,sandbox);
+        assert.equal(opens,1);assert.equal(focuses,1);assert.equal(restored,0);
+        cleanup();assert.equal(closes,1);assert.equal(restored,1);
+        sandbox.settingsDialogOpen=false;vm.runInContext(effect,sandbox);
+        assert.equal(opens,1);assert.equal(cleanup,undefined);
+        """)
 
 
 class TestStatusChips(unittest.TestCase):
