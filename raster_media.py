@@ -119,4 +119,5 @@ def stage2_media_regions(
     image: Image.Image, regions: Sequence[Mapping[str, Any]], *, chalk_math: bool,
 ) -> list[Mapping[str, Any]]:
     return [region for region in regions
-            if not chalk_math or region_has_substantial_color(image, region)]
+            if region.get("source") == "manual" or region.get("renderMode") == "grayscale"
+            or not chalk_math or region_has_substantial_color(image, region)]

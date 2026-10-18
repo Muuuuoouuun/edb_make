@@ -3463,6 +3463,16 @@
     box-shadow: var(--shadow-2);
   }
   .app-update-dialog::backdrop{ background: rgba(15, 23, 42, .38); }
+  .figure-color-toggle{ display: flex; width: 100%; box-sizing: border-box; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--surface); cursor: pointer; }
+  .figure-color-toggle > span{ min-width: 0; display: grid; gap: 4px; }
+  .figure-color-toggle strong{ font-size: var(--text-sm); }
+  .figure-color-toggle small{ font-size: var(--text-xs); color: var(--muted); line-height: 1.5; }
+  .figure-color-toggle input{ appearance: none; position: relative; flex: 0 0 auto; width: 38px; height: 22px; margin: 0; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--line-strong); cursor: pointer; }
+  .figure-color-toggle input::before{ content: ''; position: absolute; width: 16px; height: 16px; top: 2px; left: 2px; border-radius: 50%; background: var(--surface); transition: transform var(--motion-fast); }
+  .figure-color-toggle input:checked{ background: var(--accent-ink); border-color: var(--accent-ink); }
+  .figure-color-toggle input:checked::before{ transform: translateX(16px); }
+  .figure-color-toggle input:focus-visible{ outline: 2px solid var(--accent-ink); outline-offset: 3px; }
+  .figure-color-toggle:has(input:disabled){ cursor: default; opacity: .65; }
   .app-update-dialog > header{
     display: flex;
     align-items: center;

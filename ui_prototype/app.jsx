@@ -9894,6 +9894,7 @@ function SidePanel({
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
   onEditOriginal, onDownloadItemImage, onRemoveItem,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
+  keepAttachedFigures = true, setKeepAttachedFigures,
   focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
@@ -10858,6 +10859,10 @@ function SidePanel({
                   </button>
                 </div>
 
+                <FigureColorToggle checked={keepsFigureColors(item)} busy={panelBusy || !session}
+                  label="문제 속 그림 원본 유지"
+                  onChange={enabled => mutateSession?.('preserve-media', { problemIds: [item.id], mode: enabled ? 'auto' : 'grayscale' })} />
+
                 <p className="panel-scope-note">
                   선택 1개 · 처리 방식은 아래 적용 버튼으로 저장합니다.
                   {session && <> 적용 시 수업의 미저장 변경도 함께 저장됩니다.</>}
@@ -11142,6 +11147,7 @@ function SidePanel({
                 splitMode={splitMode}
                 setSplitMode={setSplitMode}
                 showActions={false}
+                keepAttachedFigures={keepAttachedFigures} setKeepAttachedFigures={setKeepAttachedFigures}
               />
             ) : items.length === 0 ? (
               <div className="side-panel-home-empty">
@@ -11163,6 +11169,10 @@ function SidePanel({
 
           {showItemConfirmBar && (
           <div className="tab-foot">
+            <FigureColorToggle checked={items.every(keepsFigureColors)} busy={panelBusy || !session || !items.length}
+              label="전체 자료 속 그림 원본 유지"
+              note={items.some(keepsFigureColors) && !items.every(keepsFigureColors) ? '일부 자료는 흑백 처리 중 · 전체 설정 변경' : '전체 자료에 즉시 저장 · 원문 보존 방식에 적용'}
+              onChange={enabled => mutateSession?.('preserve-media', { problemIds: items.map(candidate => candidate.id), mode: enabled ? 'auto' : 'grayscale' })} />
             {remainingReviewItems.length>0 ? <label className={`inspector-remaining-card ${bulk?'on':''}`}>
               <span className="inspector-remaining-icon">{Icon.check}</span><span><strong>남은 {remainingReviewItems.length}개에도 적용</strong><small>‘{stepLabel(item.step)}’ 방식으로 함께 확인</small></span>
               <input type="checkbox" role="switch" checked={bulk} disabled={panelBusy} onChange={e=>setBulk(e.target.checked)} aria-label={`남은 확인 대상 ${remainingReviewItems.length}개에도 적용`}/>
@@ -11462,6 +11472,18 @@ function SidePanel({
     </div>}
     </>
   );
+}
+
+function FigureColorToggle({ checked, busy = false, label, note, onChange }){
+  return <label className="figure-color-toggle">
+    <span><strong>{label}</strong><small>{note || (checked ? '문제 중간·아래 그림의 원래 색상 유지 · 원문 보존에 적용' : '그림의 명암을 유지한 흑백 처리 · 원문 보존에 적용')}</small></span>
+    <input type="checkbox" role="switch" aria-label={label} checked={checked} disabled={busy}
+      onChange={event => onChange?.(event.target.checked)} />
+  </label>;
+}
+
+function keepsFigureColors(item){
+  return !['off', 'grayscale'].includes(item?.preserveMediaMode);
 }
 
 function HomeUpdateDialog({ open, onClose, busy, versionLine, statusLabel, children }){
@@ -12155,7 +12177,7 @@ function SplitModePicker({ splitMode, setSplitMode, disabled, compact = false, i
   );
 }
 
-function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false, showActions = true }){
+function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false, showActions = true, keepAttachedFigures = true, setKeepAttachedFigures }){
   const [objectUrl, setObjectUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
   const isImagePreview = canPreviewImageFile(file);
@@ -12205,6 +12227,9 @@ function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewErro
 
   return (
     <div className="pending-preview-panel">
+      {setKeepAttachedFigures ? <FigureColorToggle checked={keepAttachedFigures} busy={queueBusy}
+        label="첨부한 자료 속 그림 원본 유지" note="문제 인식 후 원문 보존에 적용 · 끄면 그림만 흑백 처리"
+        onChange={setKeepAttachedFigures} /> : null}
       <div className="pending-preview-head">
         <span className="pending-preview-icon">{isImagePreview ? Icon.scan : Icon.fileText}</span>
         <div className="pending-preview-copy">
@@ -13269,6 +13294,8 @@ function mapProblemToItem(problem, idx, rawSession = null){
       ? Number(problem.boardRowHeightPages ?? problem.board_row_height_pages)
       : null,
     manualCrop,
+    preserveMediaMode: problem.preserveMediaMode || problem.preserve_media_mode || 'auto',
+    preserveMediaRegions: problem.preserveMediaRegions || problem.preserve_media_regions || [],
   };
 }
 
@@ -15721,6 +15748,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       sourceMode: 'auto',
       source_mode: 'auto',
       subject: 'unknown',
+      preserveMediaMode: options.preserveMediaMode || 'auto',
       ocr: options.ocr || 'auto',
       edbName,
       exportEdb: Object.prototype.hasOwnProperty.call(options, 'exportEdb') ? !!options.exportEdb : !options.preview,
@@ -16368,6 +16396,7 @@ function App(){
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiToggleBusy, setAiToggleBusy] = useState(false);
+  const [keepAttachedFigures, setKeepAttachedFigures] = useStoredPreference('edb-keep-attached-figures', true, isStoredBoolean);
   const [splitMode, setSplitModeState] = useState(readStoredSplitMode);
   const inputIntent = normalizeSplitMode(splitMode) === 'recognize' ? 'multi-problem' : 'page-as-is';
   const setSplitMode = useCallback((value) => {
@@ -17166,6 +17195,7 @@ function App(){
         : action === 'merge' ? '문제를 합치는 중…'
         : action === 'crop' ? '이미지를 자르는 중…'
         : action === 'stitch-crop' ? '지문 영역을 이어붙이는 중…'
+        : action === 'preserve-media' ? '그림 보존 영역을 적용하는 중…'
         : action === 'bulk-crop' ? '수동 자르기를 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
         : action === 'confirm' ? '확인 상태를 저장하는 중…'
@@ -17190,6 +17220,7 @@ function App(){
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
         : action === 'stitch-crop' ? '선택 영역을 한 지문으로 합쳤어요'
+        : action === 'preserve-media' ? '그림 원본 보존 설정을 저장했어요'
         : action === 'bulk-crop' ? '수동 자르기를 적용했어요'
         : action === 'confirm' ? '확인 상태를 저장했어요'
         : action === 'confirm-page' ? '지문 없음으로 확인했어요'
@@ -18014,6 +18045,7 @@ function App(){
       });
       try {
         const incomingSession = await postExport(files, aiFallback, resolvedInputIntent, {
+          preserveMediaMode: keepAttachedFigures ? 'auto' : 'grayscale',
           signal: job.controller.signal,
           preview: true,
           edbName: fileName,
@@ -18106,6 +18138,7 @@ function App(){
     const previousItemIds = new Set(items.map(item => item.id).filter(Boolean));
     try {
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
+        preserveMediaMode: keepAttachedFigures ? 'auto' : 'grayscale',
         edbName: fileName,
         ocr: recognitionOcr,
         aiEnabled,
@@ -18182,7 +18215,7 @@ function App(){
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
+  }, [keepAttachedFigures, initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
 
   // Recognition results are applied as soon as they arrive (no confirm
   // popup). Ctrl+Z restores the previous board when one existed.
@@ -19639,6 +19672,7 @@ function App(){
           pendingFile={selectedPendingFile}
           pendingFileCount={pendingFiles.length}
           pendingImageOnly={isImageOnlyFileBatch(pendingFiles)}
+          keepAttachedFigures={keepAttachedFigures} setKeepAttachedFigures={setKeepAttachedFigures}
           processQueuedFiles={processQueuedFiles}
           queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
           onPendingPreviewError={showPendingPreviewError}

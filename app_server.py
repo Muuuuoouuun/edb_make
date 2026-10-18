@@ -5090,6 +5090,7 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                 ),
                 crop_path=crop_path,
                 board_render_path=board_render_path,
+                crop_source_offset=problem.get("cropSourceOffset"),
                 blocks=[],  # image-only mode doesn't use OCR blocks
                 actual_height_pages=_actual_height_pages_from_problem_image(
                     problem,
@@ -5127,6 +5128,8 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                     )
                     if isinstance(region, dict)
                 ],
+                preserve_media_mode=_media_mode(problem),
+                source_segments=_clone_jsonish(problem.get("sourceSegments") or problem.get("source_segments") or []),
             )
         )
     return entries
@@ -5478,6 +5481,148 @@ def _crop_refreshes_board_render(problem: dict[str, Any]) -> bool:
     return step in {"s2", "s3"}
 
 
+def _media_mode(problem: dict[str, Any]) -> str:
+    mode = problem.get("preserveMediaMode", problem.get("preserve_media_mode", "auto"))
+    return mode if mode in {"auto", "manual", "off", "grayscale"} else "auto"
+
+
+def _set_media_regions(problem: dict[str, Any], regions: list[dict[str, Any]]) -> None:
+    problem["preserveMediaRegions"] = regions
+    problem["preserve_media_regions"] = _clone_jsonish(regions)
+
+
+def _media_box(raw: Any) -> Box:
+    if not isinstance(raw, dict):
+        raise ValueError("media region must be an object")
+    try:
+        left, top = float(raw["left"]), float(raw["top"])
+        width = float(raw["width"] if "width" in raw else float(raw["right"]) - left)
+        height = float(raw["height"] if "height" in raw else float(raw["bottom"]) - top)
+    except (KeyError, ValueError, TypeError, OverflowError):
+        raise ValueError("media region requires finite left, top, width and height") from None
+    if not all(math.isfinite(value) for value in (left, top, width, height)) or min(width, height) <= 0:
+        raise ValueError("media region must have finite positive dimensions")
+    return Box(left=left, top=top, width=width, height=height)
+
+
+def _mapped_media_regions(
+    regions: list[dict[str, Any]], source: Box, target: Box,
+) -> list[dict[str, Any]]:
+    """Intersect source-local boxes and map them into target-local pixels."""
+    mapped = []
+    for region in regions:
+        box = _media_box(region.get("bbox", region))
+        left, top = max(0.0, box.left), max(0.0, box.top)
+        right, bottom = min(source.width, box.right), min(source.height, box.bottom)
+        if right <= left or bottom <= top:
+            continue
+        left = target.left + left * target.width / source.width
+        top = target.top + top * target.height / source.height
+        right = target.left + right * target.width / source.width
+        bottom = target.top + bottom * target.height / source.height
+        mapped.append({**region, "bbox": {"left": left, "top": top,
+            "width": right - left, "height": bottom - top}})
+    return mapped
+
+
+def _manual_media_source_regions(problem: dict[str, Any], image_size: tuple[int, int]) -> list[dict[str, Any]]:
+    """Anchor user selections to pages so crop/stitch never reuse stale pixels."""
+    regions = problem.get("preserveMediaRegions") or problem.get("preserve_media_regions") or []
+    segments = problem.get("sourceSegments") or problem.get("source_segments") or []
+    if not segments:
+        offset = problem.get("cropSourceOffset")
+        bbox = _media_box(problem.get("bbox"))
+        if isinstance(offset, dict):
+            bbox = Box(left=float(offset["left"]), top=float(offset["top"]), width=image_size[0], height=image_size[1])
+        elif (math.ceil(bbox.right) - math.floor(bbox.left), math.ceil(bbox.bottom) - math.floor(bbox.top)) != image_size:
+            return []  # Old padded crops have no reliable source origin.
+        segments = [{"sourcePageId": problem.get("sourcePageId"), "bbox": problem.get("bbox"),
+                     "cropBbox": {"left": 0, "top": 0, "width": image_size[0], "height": image_size[1]}}]
+        segments[0]["bbox"] = {"left": bbox.left, "top": bbox.top, "width": bbox.width, "height": bbox.height}
+    anchored = []
+    for segment in segments:
+        if not segment.get("cropBbox") or not segment.get("bbox"):
+            continue  # Legacy stitched sessions have no reliable pixel-to-page transform.
+        crop_box, page_box = _media_box(segment["cropBbox"]), _media_box(segment["bbox"])
+        local = []
+        for region in regions:
+            box = _media_box(region.get("bbox"))
+            local.append({**region, "bbox": {"left": box.left - crop_box.left,
+                "top": box.top - crop_box.top, "width": box.width, "height": box.height}})
+        for region in _mapped_media_regions(local, crop_box, page_box):
+            anchored.append({**region, "sourcePageId": segment.get("sourcePageId") or segment.get("source_page_id")})
+    return anchored
+
+
+def _check_manual_media_anchors(problem: dict[str, Any]) -> None:
+    if (_media_mode(problem) == "manual" and problem.get("preserveMediaRegions")
+            and not problem.get("preserveMediaSourceRegions")):
+        raise ValueError("이 자료의 원본 위치 정보가 없어 지정한 그림을 옮길 수 없습니다. 그림 보존을 자동 감지로 바꾼 뒤 다시 자르거나 이어붙여 주세요.")
+
+
+def _manual_media_for_crop(problem: dict[str, Any], page_id: str, bbox: Box) -> list[dict[str, Any]]:
+    anchored = problem.get("preserveMediaSourceRegions") or []
+    local = []
+    for region in anchored:
+        if str(region.get("sourcePageId") or "") != str(page_id):
+            continue
+        box = _media_box(region["bbox"])
+        local.append({**region, "bbox": {"left": box.left - math.floor(bbox.left),
+            "top": box.top - math.floor(bbox.top), "width": box.width, "height": box.height}})
+    size = Box(left=0, top=0, width=math.ceil(bbox.right) - math.floor(bbox.left),
+               height=math.ceil(bbox.bottom) - math.floor(bbox.top))
+    return _mapped_media_regions(local, size, size)
+
+
+def _cropped_source_segments(segments: list[dict[str, Any]], crop: Box) -> list[dict[str, Any]]:
+    result = []
+    for segment in segments:
+        if not segment.get("cropBbox"):
+            continue
+        dest, source = _media_box(segment["cropBbox"]), _media_box(segment["bbox"])
+        left, top = max(dest.left, crop.left), max(dest.top, crop.top)
+        right, bottom = min(dest.right, crop.right), min(dest.bottom, crop.bottom)
+        if right <= left or bottom <= top:
+            continue
+        result.append({**segment, "bbox": {
+            "left": source.left + (left - dest.left) * source.width / dest.width,
+            "top": source.top + (top - dest.top) * source.height / dest.height,
+            "width": (right - left) * source.width / dest.width,
+            "height": (bottom - top) * source.height / dest.height},
+            "cropBbox": {"left": left - crop.left, "top": top - crop.top,
+                         "width": right - left, "height": bottom - top}})
+    return result
+
+
+def _manual_media_for_segments(problem: dict[str, Any], segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    result = []
+    for segment in segments:
+        source, dest = _media_box(segment["bbox"]), _media_box(segment["cropBbox"])
+        local = []
+        for region in problem.get("preserveMediaSourceRegions") or []:
+            if region.get("sourcePageId") != (segment.get("sourcePageId") or segment.get("source_page_id")):
+                continue
+            box = _media_box(region["bbox"])
+            local.append({**region, "bbox": {"left": box.left - source.left,
+                "top": box.top - source.top, "width": box.width, "height": box.height}})
+        result.extend(_mapped_media_regions(local, source, dest))
+    return result
+
+
+def _refresh_media_for_crop(problem: dict[str, Any], path: Path, manual_regions: list[dict[str, Any]] | None = None) -> None:
+    from PIL import Image
+
+    mode = _media_mode(problem)
+    role = problem.get("passageRole") or problem.get("passage_role") or (problem.get("metadata") or {}).get("passage_role")
+    with Image.open(path) as image:
+        regions = ([] if mode == "off" or (mode in {"auto", "grayscale"} and role == "child_question")
+                   else (manual_regions or []) if mode == "manual"
+                   else _lazy_call("raster_media", "detect_color_media_regions", image))
+    if mode == "grayscale":
+        regions = [{**region, "renderMode": "grayscale"} for region in regions]
+    _set_media_regions(problem, regions)
+
+
 def _render_board_crop_from_raw(
     raw_crop_path: Path,
     board_crop_path: Path,
@@ -5487,6 +5632,18 @@ def _render_board_crop_from_raw(
 
     board_crop_path.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(raw_crop_path) as image:
+        if _normalize_processing_step((problem or {}).get("step") or (problem or {}).get("processingStep")) == "s2":
+            task = _lazy_attr("build_problem_board_edb", "_ProblemAssetTask")(
+                source_image=image, bounds=Box(left=0, top=0, width=image.width, height=image.height),
+                crop_path=raw_crop_path, board_render_path=board_crop_path,
+                chalk_color=_lazy_call("build_problem_board_edb", "_resolve_chalk_color", DEFAULT_BOARD_THEME),
+                subject=resolve_subject((problem or {}).get("subject")),
+                source_hints=(str((problem or {}).get("sourceFileName") or ""),),
+                text_priority=_problem_prefers_text_preservation((problem or {}).get("subject"), (problem or {}).get("sourceFileName")),
+                rendered_media_regions=(problem or {}).get("preserveMediaRegions") or [],
+            )
+            _lazy_call("build_problem_board_edb", "_render_problem_board_asset", image, task)
+            return
         board_image = _build_transparent_reconstruction_image(
             image,
             board_theme=DEFAULT_BOARD_THEME,
@@ -5497,6 +5654,63 @@ def _render_board_crop_from_raw(
             ),
         )
         board_image.save(board_crop_path)
+
+
+def _mutate_preserve_media(session: dict[str, Any], problem_id: str, mode: str, raw_regions: Any) -> dict[str, Any]:
+    from PIL import Image
+
+    _index, problem = _find_problem(session, problem_id)
+    step = _normalize_processing_step(problem.get("step") or problem.get("processingStep"))
+    if mode == "manual" and step != "s2":
+        raise ValueError("그림 원본 보존은 2단계 분필 변환에서 설정할 수 있습니다.")
+    if mode not in {"auto", "manual", "off", "grayscale"}:
+        raise ValueError("mode must be auto, manual, off or grayscale")
+    path = _resolve_session_path(problem.get("imagePath"))
+    if path is None or not path.exists():
+        raise FileNotFoundError("problem image missing")
+    with Image.open(path) as image:
+        size = image.size
+    regions = []
+    if mode == "manual":
+        if not isinstance(raw_regions, list) or len(raw_regions) > 16:
+            raise ValueError("regions must contain at most 16 boxes")
+        for raw in raw_regions:
+            box = _media_box(raw.get("bbox", raw) if isinstance(raw, dict) else raw)
+            left, top = max(0.0, box.left), max(0.0, box.top)
+            right, bottom = min(size[0], box.right), min(size[1], box.bottom)
+            if right - left < 2 or bottom - top < 2:
+                raise ValueError("그림 영역은 이미지 안에서 최소 2×2 픽셀이어야 합니다.")
+            regions.append({"kind": "image", "source": "manual", "confidence": 1.0,
+                "bbox": {"left": left, "top": top, "width": right - left, "height": bottom - top}})
+    updated = _clone_jsonish(problem)
+    updated["preserveMediaMode"] = updated["preserve_media_mode"] = mode
+    _set_media_regions(updated, regions)
+    updated["preserveMediaSourceRegions"] = _manual_media_source_regions(updated, size) if mode == "manual" else []
+    _refresh_media_for_crop(updated, path, regions)
+    pdf_regions = [dict(region) for region in (problem.get("preserveMediaRegions") or [])
+                   if str(region.get("source") or "").startswith("pdf_")]
+    if mode in {"auto", "grayscale"} and pdf_regions:
+        for region in pdf_regions:
+            region.pop("renderMode", None)
+            if mode == "grayscale":
+                region["renderMode"] = "grayscale"
+        _set_media_regions(updated, pdf_regions)
+    if step == "s2":
+        board_path = _crop_dir_for_session(session) / _make_crop_filename(problem_id, "media_board")
+        _render_board_crop_from_raw(path, board_path, updated)
+        updated["boardRenderPath"] = board_path.resolve().as_uri()
+    problem.update(updated)
+    _refresh_mutated_crop_layout(problem, path)
+    return session
+
+
+def _mutate_preserve_media_many(session: dict[str, Any], problem_ids: list[str], mode: str) -> dict[str, Any]:
+    if mode not in {"auto", "grayscale"} or not problem_ids:
+        raise ValueError("그림 색상 설정과 적용할 자료를 선택해 주세요.")
+    updated = _clone_jsonish(session)
+    for problem_id in dict.fromkeys(problem_ids):
+        _mutate_preserve_media(updated, problem_id, mode, [])
+    return updated
 
 
 def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
@@ -5845,6 +6059,12 @@ def _copy_publish_problem_layout_metadata(target: dict[str, Any], source: dict[s
         ("cropBaseImagePath", "crop_base_image_path"),
         ("cropBaseBoardRenderPath", "crop_base_board_render_path"),
         ("cropBasePreserveMediaRegions", "crop_base_preserve_media_regions"),
+        ("cropBaseSourceOffset", "crop_base_source_offset"),
+        ("cropBaseSourceSegments", "crop_base_source_segments"),
+        ("preserveMediaMode", "preserve_media_mode"),
+        ("preserveMediaSourceRegions", "preserve_media_source_regions"),
+        ("manualStitch", "manual_stitch"),
+        ("sourceSegments", "source_segments"),
     ):
         _copy_session_metadata_aliases_overwrite(target, source, aliases, include_empty=True)
 
@@ -6597,10 +6817,21 @@ def _materialize_crop_base_image(
 
 def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dict[str, Any]:
     _index, problem = _find_problem(session, problem_id)
+    _check_manual_media_anchors(problem)
     crop_payload = raw_crop if isinstance(raw_crop, dict) else {}
-    page_source_path = _source_page_path_for_problem(session, problem)
+    is_stitched = bool(problem.get("manualStitch") or problem.get("manual_stitch")
+        or len(problem.get("sourceSegments") or problem.get("source_segments") or []) > 1)
+    if is_stitched and any(not segment.get("cropBbox") for segment in
+            (problem.get("sourceSegments") or problem.get("source_segments") or [])):
+        raise ValueError("이전 형식의 이어붙인 자료는 위치 정보가 부족해 여백을 자를 수 없습니다. 원본에서 다시 이어붙인 뒤 적용해 주세요.")
+    page_source_path = None if is_stitched else _source_page_path_for_problem(session, problem)
     if "cropBaseBbox" not in problem:
         base_bbox = _bbox_from_problem(problem)
+        if is_stitched:
+            from PIL import Image
+            with Image.open(_resolve_session_path(problem.get("imagePath"))) as image:
+                base_bbox = Box(left=0, top=0, width=image.width, height=image.height)
+            problem["cropBaseSourceSegments"] = _clone_jsonish(problem.get("sourceSegments") or problem.get("source_segments") or [])
         crop_base_image_path = problem.get("imagePath")
         if (
             not crop_base_image_path
@@ -6626,6 +6857,7 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
             or problem.get("preserve_media_regions")
             or []
         )
+        problem["cropBaseSourceOffset"] = problem.get("cropSourceOffset")
     else:
         base_bbox = _bbox_from_problem(problem, prefer_crop_base=True)
         if (
@@ -6699,6 +6931,31 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
             _crop_image_by_ratios(base_board_path, crop, board_crop_path)
             board_uri = board_crop_path.resolve().as_uri()
 
+    if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
+        from PIL import Image
+        with Image.open(raw_crop_path_for_board) as image:
+            crop_width, crop_height = image.size
+        if is_stitched:
+            with Image.open(base_image_path) as base_image:
+                left = round(base_image.width * crop["leftRatio"])
+                top = round(base_image.height * crop["topRatio"])
+            segments = _cropped_source_segments(problem.get("cropBaseSourceSegments") or [],
+                Box(left=left, top=top, width=crop_width, height=crop_height))
+            problem["sourceSegments"] = problem["source_segments"] = segments
+            _refresh_media_for_crop(problem, raw_crop_path_for_board, _manual_media_for_segments(problem, segments))
+        else:
+            offset = (problem.get("cropBaseSourceOffset") if _manual_crop_is_empty(crop) else None) or {
+                "left": math.floor(next_bbox.left), "top": math.floor(next_bbox.top)}
+            if page_source_path is None and not _manual_crop_is_empty(crop):
+                base_offset = problem.get("cropBaseSourceOffset") or {"left": math.floor(base_bbox.left), "top": math.floor(base_bbox.top)}
+                with Image.open(base_image_path) as base_image:
+                    offset = {"left": base_offset["left"] + round(base_image.width * crop["leftRatio"]),
+                              "top": base_offset["top"] + round(base_image.height * crop["topRatio"])}
+            problem["cropSourceOffset"] = dict(offset)
+            _refresh_media_for_crop(problem, raw_crop_path_for_board,
+                _manual_media_for_crop(problem, str(problem.get("sourcePageId") or ""),
+                    Box(left=offset["left"], top=offset["top"], width=crop_width, height=crop_height)))
+
     if (
         raw_crop_path_for_board is not None
         and raw_crop_path_for_board.exists()
@@ -6716,17 +6973,10 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
         "width": next_bbox.width,
         "height": next_bbox.height,
     }
+    if is_stitched and problem.get("sourceSegments"):
+        problem["bbox"] = dict(problem["sourceSegments"][0]["bbox"])
     problem["manualCrop"] = crop
     problem["manual_crop"] = crop
-    # A manual crop changes the local coordinate system. Until those regions
-    # are re-detected, stale PDF media boxes must not be pasted elsewhere.
-    preserved_regions = (
-        list(problem.get("cropBasePreserveMediaRegions") or [])
-        if _manual_crop_is_empty(crop)
-        else []
-    )
-    problem["preserveMediaRegions"] = preserved_regions
-    problem["preserve_media_regions"] = list(preserved_regions)
     if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
         _refresh_mutated_crop_layout(problem, raw_crop_path_for_board)
     _refresh_session_problem_counts(session)
@@ -6740,6 +6990,7 @@ def _mutate_stitch_crop(
 ) -> dict[str, Any]:
     """Replace one problem with an ordered stitch of page-level crop boxes."""
     _index, problem = _find_problem(session, problem_id)
+    _check_manual_media_anchors(problem)
     raw_segments = segments if isinstance(segments, list) else []
     if not raw_segments:
         raise ValueError("segments is required")
@@ -6892,6 +7143,10 @@ def _mutate_stitch_crop(
                 cleaned_fragment.save(fragment_path)
             fragment_paths.append(fragment_path)
         source_crop_boxes: list[tuple[int, int, int, int]] = []
+        media_groups = [_manual_media_for_crop(problem, page_id, box)
+                        for page_id, box, _order, _column in normalized]
+        stitched_media: list[dict[str, Any]] = []
+        segment_placements: list[dict[str, int]] = []
         stitch_diagnostics: dict[str, Any] = {}
         _stitch_passage_image_files(
             fragment_paths,
@@ -6899,6 +7154,9 @@ def _mutate_stitch_crop(
             transparent=False,
             source_crop_boxes_output=source_crop_boxes,
             stitch_diagnostics_output=stitch_diagnostics,
+            source_region_groups=media_groups,
+            stitched_regions_output=stitched_media,
+            segment_placements_output=segment_placements,
         )
 
     effective_normalized: list[tuple[str, Box, int, int]] = []
@@ -6934,6 +7192,7 @@ def _mutate_stitch_crop(
             column_index,
         ))
 
+    _refresh_media_for_crop(problem, stitched_path, stitched_media)
     board_uri = stitched_path.resolve().as_uri()
     if _crop_refreshes_board_render(problem):
         board_path = crop_dir / _make_crop_filename(problem_id, "manual_stitch_board")
@@ -6957,6 +7216,13 @@ def _mutate_stitch_crop(
             "column_index": column_index,
             "bbox": bbox,
         })
+        if fragment_index <= len(segment_placements):
+            placement = segment_placements[fragment_index - 1]
+            source_segments[-1]["cropBbox"] = {
+                "left": placement["x"], "top": placement["y"],
+                "width": placement["crop_right"] - placement["crop_left"],
+                "height": placement["crop_bottom"] - placement["crop_top"],
+            }
 
     first_page_id, first_box, _first_order, _first_column = effective_normalized[0]
     first_source_path = page_cache[first_page_id][1]
@@ -6976,6 +7242,7 @@ def _mutate_stitch_crop(
     problem["bbox"] = first_bbox
     problem["sourceSegments"] = source_segments
     problem["source_segments"] = list(source_segments)
+    problem.pop("cropSourceOffset", None)
     problem["imagePath"] = stitched_path.resolve().as_uri()
     problem["boardRenderPath"] = board_uri
     problem["recordMode"] = "image-only"
@@ -7007,8 +7274,6 @@ def _mutate_stitch_crop(
         "bottomRatio": 0.0,
     }
     problem["manual_crop"] = dict(problem["manualCrop"])
-    problem["preserveMediaRegions"] = []
-    problem["preserve_media_regions"] = []
     problem["riskFlags"] = []
     problem["risk_flags"] = []
     problem["reviewStatus"] = "normal"
@@ -7018,6 +7283,8 @@ def _mutate_stitch_crop(
         "cropBaseImagePath",
         "cropBaseBoardRenderPath",
         "cropBasePreserveMediaRegions",
+        "cropBaseSourceOffset",
+        "cropBaseSourceSegments",
     ):
         problem.pop(key, None)
 
@@ -8537,9 +8804,12 @@ def _partial_retry_identity_problem(
     _crop_image_by_bbox(source_path, refined_box, raw_crop_path)
     raw_uri = raw_crop_path.resolve().as_uri()
     board_uri = raw_uri
+    render_problem = _clone_jsonish(source_problem)
+    _refresh_media_for_crop(render_problem, raw_crop_path,
+        _manual_media_for_crop(render_problem, str(source_page.get("id") or source_problem.get("sourcePageId") or ""), refined_box))
     if _crop_refreshes_board_render(source_problem):
         board_crop_path = retry_dir / _make_crop_filename(problem_id, "ai_partial_identity_board")
-        _render_board_crop_from_raw(raw_crop_path, board_crop_path, source_problem)
+        _render_board_crop_from_raw(raw_crop_path, board_crop_path, render_problem)
         board_uri = board_crop_path.resolve().as_uri()
 
     risk_flags = list(dict.fromkeys(
@@ -8552,7 +8822,7 @@ def _partial_retry_identity_problem(
         risk_flags.append("ai_partial_retry_multiple_candidates")
     risk_flags = list(dict.fromkeys(risk_flags))
 
-    preserved = dict(source_problem)
+    preserved = render_problem
     for key in (
         "manualCrop",
         "manual_crop",
@@ -8560,6 +8830,12 @@ def _partial_retry_identity_problem(
         "cropBaseImagePath",
         "cropBaseBoardRenderPath",
         "cropBasePreserveMediaRegions",
+        "cropBaseSourceOffset",
+        "cropBaseSourceSegments",
+        "sourceSegments",
+        "source_segments",
+        "manualStitch",
+        "manual_stitch",
     ):
         preserved.pop(key, None)
     preserved["id"] = problem_id
@@ -8577,9 +8853,9 @@ def _partial_retry_identity_problem(
     preserved["cropBaseBbox"] = dict(preserved["bbox"])
     preserved["cropBaseImagePath"] = raw_uri
     preserved["cropBaseBoardRenderPath"] = board_uri
-    preserved["cropBasePreserveMediaRegions"] = []
-    preserved["preserveMediaRegions"] = []
-    preserved["preserve_media_regions"] = []
+    preserved["cropSourceOffset"] = {"left": math.floor(refined_box.left), "top": math.floor(refined_box.top)}
+    preserved["cropBaseSourceOffset"] = dict(preserved["cropSourceOffset"])
+    preserved["cropBasePreserveMediaRegions"] = _clone_jsonish(preserved["preserveMediaRegions"])
     preserved["riskFlags"] = risk_flags
     preserved["risk_flags"] = list(risk_flags)
     preserved["reviewStatus"] = "check_needed" if risk_flags else "normal"
@@ -10489,6 +10765,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
                 segments = payload.get("segments")
                 new_session = _mutate_stitch_crop(session, problem_id, segments)
+            elif action == "preserve-media":
+                if "problemIds" in payload:
+                    new_session = _mutate_preserve_media_many(session, _coerce_problem_ids(payload["problemIds"]),
+                        str(payload.get("mode") or ""))
+                else:
+                    new_session = _mutate_preserve_media(session, str(payload.get("problemId") or ""),
+                        str(payload.get("mode") or ""), payload.get("regions"))
             elif action in {"bulk-crop", "bulk_crop"}:
                 page_id = str(payload.get("pageId") or payload.get("page_id") or "")
                 regions = payload.get("regions")
@@ -10532,7 +10815,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|bulk-crop|exclude|confirm|confirm-page|session-name|problem-number|classify|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|preserve-media|bulk-crop|exclude|confirm|confirm-page|session-name|problem-number|classify|retry-ai|enhance-image)"},
+
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return
@@ -11768,6 +12052,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     crop_format=crop_format,
                     input_intent=input_intent,
+                    preserve_media_mode=str(payload.get("preserveMediaMode") or "auto"),
                     page_tile_mode=str(
                         payload.get("pageTileMode")
                         or payload.get("page_tile_mode")
