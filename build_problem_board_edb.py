@@ -2520,6 +2520,7 @@ def _problem_asset_task_dedup_key(task: _ProblemAssetTask) -> tuple[Any, ...]:
         task.horizontal_safe_padding_px,
         task.text_priority,
         task.pad_edges,
+        task.trim_to_content,
         task.subject.value if isinstance(task.subject, Subject) else str(task.subject),
         task.detect_color_media,
         _source_hints_suggest_math(*task.source_hints),

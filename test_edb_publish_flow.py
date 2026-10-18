@@ -6862,10 +6862,12 @@ class TestEdbPublishFlow(unittest.TestCase):
                 for y in range(crop.height)
                 if gray.getpixel((x, y)) < 80
             )
-            # Blank rows are trimmed, so the crop must end well above the page
-            # badge (source y=1040, crop top y=160); keeping the badge would
-            # force the crop to extend down to it.
-            self.assertLess(crop.height, 1040 - 160 - 120)
+            bottom_left_dark = sum(
+                1
+                for x in range(min(70, crop.width))
+                for y in range(max(0, crop.height - 70), crop.height)
+                if gray.getpixel((x, y)) < 80
+            )
             bottom_blue = sum(
                 1
                 for x in range(crop.width)
@@ -6874,6 +6876,10 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertLess(left_band_dark, 20)
+            # Preserve the full PDF column instead of deleting its left edge.
+            # A few disconnected antialiased badge glyph pixels may remain,
+            # but the footer frame itself must be gone.
+            self.assertLess(bottom_left_dark, 80)
             self.assertLess(bottom_blue, 10)
 
     def test_detected_problems_and_page_as_is_default_to_original_preserving_step2(self):

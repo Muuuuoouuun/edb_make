@@ -10289,10 +10289,11 @@ function SidePanel({
           if (event.key !== 'Tab' || event.ctrlKey || event.metaKey || event.altKey) return;
           const controls = editorFocusableControls(event.currentTarget);
           const index = controls.indexOf(document.activeElement);
-          if (!controls.length || index < 0 || (event.shiftKey ? index === 0 : index === controls.length - 1)) {
-            event.preventDefault();
-            (controls[event.shiftKey ? controls.length - 1 : 0] || event.currentTarget).focus({ preventScroll: true });
-          }
+          event.preventDefault();
+          const nextIndex = index < 0
+            ? (event.shiftKey ? controls.length - 1 : 0)
+            : (index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length;
+          (controls[nextIndex] || event.currentTarget).focus({ preventScroll: true });
         }}
         onMouseDown={event => {
           if (event.target !== event.currentTarget) return;

@@ -165,6 +165,50 @@ def test_default_stage2_asset_restores_pdf_media(tmp_path: Path) -> None:
     assert len(task.rendered_media_regions) == 1
 
 
+
+def test_trimmed_stage2_asset_maps_pdf_media_after_vertical_trim(tmp_path: Path) -> None:
+    source = Image.new("RGB", (1100, 500), "white")
+    draw = ImageDraw.Draw(source)
+    draw.rectangle((300, 120, 699, 379), fill=(188, 52, 74))
+    draw.line((80, 60, 220, 60), fill="black", width=5)
+    task = _ProblemAssetTask(
+        source_image=source,
+        bounds=Box(left=0.0, top=0.0, width=1100.0, height=500.0),
+        crop_path=tmp_path / "crop.png",
+        board_render_path=tmp_path / "stage2.png",
+        chalk_color=(238, 238, 226),
+        trim_edge_guides=False,
+        pad_edges=False,
+        source_media_regions=(
+            {
+                "kind": "image",
+                "source": "pdf_image_block",
+                "confidence": 0.99,
+                "bbox": {
+                    "left": 300.0,
+                    "top": 120.0,
+                    "right": 700.0,
+                    "bottom": 380.0,
+                    "width": 400.0,
+                    "height": 260.0,
+                },
+            },
+        ),
+    )
+
+    from dataclasses import replace
+    from build_problem_board_edb import _render_problem_assets
+    untrimmed = replace(task, pad_edges=True, crop_path=tmp_path / "full.png", board_render_path=tmp_path / "full-stage2.png")
+    task.trim_to_content = True
+    task.pad_edges = True
+    assert _render_problem_assets([untrimmed, task]) == [(1100, 588), (1100, 422)]
+    assert task.rendered_media_regions[0]["bbox"]["top"] == 104.0
+    with Image.open(task.crop_path) as crop, Image.open(task.board_render_path) as rendered:
+        assert crop.convert("RGB").getpixel((500, 234)) == (188, 52, 74)
+        assert rendered.convert("RGBA").getpixel((500, 234)) == (188, 52, 74, 255)
+        assert rendered.convert("RGBA").getpixel((150, 44))[:3] == (238, 238, 226)
+
+
 def test_math_stage2_asset_keeps_figures_as_chalk_cutouts(tmp_path: Path) -> None:
     source = Image.new("RGB", (1100, 500), "white")
     draw = ImageDraw.Draw(source)

@@ -204,7 +204,9 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
     def test_board_uses_review_bulk_confirm_cache_bust(self) -> None:
         html = board_document()
 
-        self.assertIn("review_filters.js?v=review-mode-copy-20260818", html)
+        import hashlib
+        expected_digest = hashlib.sha256((PROJECT_ROOT / "ui_prototype" / "review_filters.js").read_bytes()).hexdigest()
+        self.assertIn(f"review_filters.js?v={expected_digest}", html)
         self.assertIn("app.bundle.js?v=frontend-bundle-", html)
         self.assertNotIn("app.js?v=", html)
 
