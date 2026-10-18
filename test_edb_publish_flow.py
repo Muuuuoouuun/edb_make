@@ -6862,12 +6862,10 @@ class TestEdbPublishFlow(unittest.TestCase):
                 for y in range(crop.height)
                 if gray.getpixel((x, y)) < 80
             )
-            bottom_left_dark = sum(
-                1
-                for x in range(min(70, crop.width))
-                for y in range(max(0, crop.height - 70), crop.height)
-                if gray.getpixel((x, y)) < 80
-            )
+            # Blank rows are trimmed, so the crop must end well above the page
+            # badge (source y=1040, crop top y=160); keeping the badge would
+            # force the crop to extend down to it.
+            self.assertLess(crop.height, 1040 - 160 - 120)
             bottom_blue = sum(
                 1
                 for x in range(crop.width)
@@ -6876,11 +6874,41 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertLess(left_band_dark, 20)
-            # Preserve the full PDF column instead of deleting its left edge.
-            # A few disconnected antialiased badge glyph pixels may remain,
-            # but the footer frame itself must be gone.
-            self.assertLess(bottom_left_dark, 80)
             self.assertLess(bottom_blue, 10)
+
+    def test_detected_problems_and_page_as_is_default_to_original_preserving_step2(self):
+        from structured_schema import ProblemUnit, Subject
+
+        detected = ProblemUnit(unit_id="p-1", subject=Subject.MATH, title="1.")
+        page_as_is = ProblemUnit(
+            unit_id="p-2", subject=Subject.MATH, title="page", metadata={"input_intent": "page-as-is"}
+        )
+        explicit_raw = ProblemUnit(
+            unit_id="p-3", subject=Subject.MATH, title="3.", metadata={"processing_step": "raw"}
+        )
+
+        self.assertEqual(problem_board.PROCESSING_STEP_CHALK, problem_board._default_processing_step_for_problem(detected))
+        self.assertEqual(problem_board.PROCESSING_STEP_CHALK, problem_board._default_processing_step_for_problem(page_as_is))
+        self.assertEqual(problem_board.PROCESSING_STEP_RAW, problem_board._default_processing_step_for_problem(explicit_raw))
+
+    def test_problem_crop_trim_removes_blank_rows_but_keeps_width_and_ink(self):
+        image = Image.new("RGB", (600, 500), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((40, 60), "5. stem", fill="black")
+        draw.line((20, 140, 580, 140), fill=(200, 200, 200), width=1)  # faint figure edge
+        draw.text((40, 200), "choices", fill="black")
+
+        trimmed = problem_board._trim_problem_crop_to_content(image)
+
+        self.assertEqual(600, trimmed.width)
+        self.assertLess(trimmed.height, 220)
+        ink_before = sum(1 for px in image.convert("L").getdata() if px < 232)
+        ink_after = sum(1 for px in trimmed.convert("L").getdata() if px < 232)
+        self.assertEqual(ink_before, ink_after)
+
+        tinted_scan = Image.new("RGB", (600, 500), (220, 218, 210))
+        ImageDraw.Draw(tinted_scan).text((40, 60), "5. stem", fill="black")
+        self.assertEqual((600, 500), problem_board._trim_problem_crop_to_content(tinted_scan).size)
 
     def test_recrop_problem_uses_full_page_chrome_trim(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -6910,12 +6938,10 @@ class TestEdbPublishFlow(unittest.TestCase):
                 for y in range(crop.height)
                 if gray.getpixel((x, y)) < 80
             )
-            bottom_left_dark = sum(
-                1
-                for x in range(min(70, crop.width))
-                for y in range(max(0, crop.height - 70), crop.height)
-                if gray.getpixel((x, y)) < 80
-            )
+            # Blank rows are trimmed, so the crop must end well above the page
+            # badge (source y=690, crop top y=54); keeping the badge would
+            # force the crop to extend down to it.
+            self.assertLess(crop.height, 690 - 54 - 120)
             bottom_blue = sum(
                 1
                 for x in range(crop.width)
@@ -6924,7 +6950,6 @@ class TestEdbPublishFlow(unittest.TestCase):
             )
 
             self.assertLess(left_band_dark, 20)
-            self.assertLess(bottom_left_dark, 20)
             self.assertLess(bottom_blue, 10)
 
     def test_problem_crops_use_same_column_boundary(self):

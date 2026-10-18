@@ -104,6 +104,14 @@ TEXT_PRIORITY_CROP_HORIZONTAL_SAFE_PADDING_PX = 16
 TEXT_PRIORITY_SOURCE_HORIZONTAL_RECOVERY_PX = 16
 TEXT_PRIORITY_SOURCE_EDGE_SCAN_DEPTH_PX = 3
 TEXT_PRIORITY_SOURCE_EDGE_MIN_ACTIVE_ROWS = 8
+# Detected problem regions usually run down to the next problem, so a large
+# part of each crop is blank paper. Trim the blank rows above and below the
+# inked content (the top/bottom safe padding above is added afterwards). Width
+# is kept: every problem is drawn at the same board width, so narrowing one
+# crop would enlarge its text relative to its neighbours.
+PROBLEM_CROP_CONTENT_INK_THRESHOLD = 232
+PROBLEM_CROP_CONTENT_MARGIN_Y_PX = 6
+PROBLEM_CROP_CONTENT_MIN_TRIM_RATIO = 0.04
 PROBLEM_EDGE_INK_SCAN_PX = 18
 PROBLEM_EDGE_INK_DARK_THRESHOLD = 236
 PROBLEM_EDGE_INK_MIN_DARK_PIXELS = 6
@@ -386,7 +394,8 @@ def _default_processing_step_for_problem(problem: ProblemUnit) -> str:
         return _normalize_processing_step(raw_step)
     if _is_page_as_is_problem(problem):
         return PROCESSING_STEP_CHALK
-    return PROCESSING_STEP_RAW
+    # Detected problems begin with original-preserving Stage 2.
+    return PROCESSING_STEP_CHALK
 
 
 def _is_page_as_is_problem(problem: ProblemUnit) -> bool:
@@ -1397,6 +1406,40 @@ def _trim_box_bottom_page_chrome(
     return Box.from_points(box.left, box.top, box.right, trimmed_bottom)
 
 
+def _trim_problem_crop_to_content(
+    image: Image.Image,
+    *,
+    ink_threshold: int = PROBLEM_CROP_CONTENT_INK_THRESHOLD,
+    margin_y_px: int = PROBLEM_CROP_CONTENT_MARGIN_Y_PX,
+    min_trim_ratio: float = PROBLEM_CROP_CONTENT_MIN_TRIM_RATIO,
+    offset_output: list[int] | None = None,
+) -> Image.Image:
+    """Drop blank rows above and below a problem without touching any ink.
+
+    Only whole rows lighter than ``ink_threshold`` are removed, so text,
+    choices and figure lines can never be clipped, and the crop width is left
+    as detected. A tinted or scanned page whose background is darker than the
+    threshold is left unchanged.
+    """
+    if image.width <= 0 or image.height <= 0:
+        return image
+    if "A" in image.getbands():
+        mask = image.getchannel("A").point(lambda px: 255 if px > 16 else 0, mode="L")
+    else:
+        mask = image.convert("L").point(lambda px: 255 if px < ink_threshold else 0, mode="L")
+    bbox = mask.getbbox()
+    if bbox is None:
+        return image
+    _left, top, _right, bottom = bbox
+    top = max(0, top - margin_y_px)
+    bottom = min(image.height, bottom + margin_y_px)
+    if image.height - (bottom - top) <= image.height * min_trim_ratio:
+        return image
+    if offset_output is not None:
+        offset_output.append(top)
+    return image.crop((0, top, image.width, bottom))
+
+
 def _pad_problem_crop_edges(
     image: Image.Image,
     *,
@@ -1909,6 +1952,7 @@ class _ProblemAssetTask:
     detect_color_media: bool = False
     render_board_asset: bool = True
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
+    trim_to_content: bool = False
 
 
 @dataclass(slots=True)
@@ -2355,6 +2399,10 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
                 segment = _erase_corner_page_badges(segment)
             if task.text_priority and not task.preserve_horizontal_bounds:
                 segment = _trim_text_priority_bottom_page_badge(segment)
+        vertical_trim: list[int] = []
+        if task.trim_to_content:
+            segment = _trim_problem_crop_to_content(segment, offset_output=vertical_trim)
+        vertical_trim_px = vertical_trim[0] if vertical_trim else 0
         left_padding_px = 0
         top_padding_px = 0
         if task.pad_edges:
@@ -2390,7 +2438,7 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             source_crop_rect=source_crop_rect,
             horizontal_trim_px=horizontal_trim_px,
             left_padding_px=left_padding_px,
-            top_padding_px=top_padding_px,
+            top_padding_px=top_padding_px - vertical_trim_px,
             output_size=flattened.size,
         )
         return flattened, mapped_regions
@@ -6413,6 +6461,11 @@ def build_problem_entries(
                         ),
                         detect_color_media=_problem_allows_selective_media_preservation(problem),
                         render_board_asset=render_board_assets,
+                        trim_to_content=(
+                            not preserve_page_as_is
+                            and not passage_fragment_problem
+                            and not stitched_segment_bounds
+                        ),
                     ),
                 )
             )
@@ -6847,6 +6900,7 @@ def recrop_problem(
         )
     )
     crop = _trim_source_page_chrome(crop)
+    crop = _trim_problem_crop_to_content(crop)
     crop = _pad_problem_crop_edges(crop)
     crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(crop_path)
