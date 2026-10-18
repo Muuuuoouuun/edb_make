@@ -163,7 +163,7 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
 
         self.assertIn("view !== 'review'", side_panel)
         self.assertIn("선택 1개에 적용", side_panel)
-        self.assertIn("수업 전체 ${items.length}개에 적용", side_panel)
+        self.assertIn("남은 확인 대상 ${remainingReviewItems.length}개에도 적용", side_panel)
         self.assertNotIn("<button className=\"btn\" disabled={!item}>건너뛰기</button>", side_panel)
         self.assertIn("합치고 다음 검수", box_editor)
 

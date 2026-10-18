@@ -1696,6 +1696,106 @@ function boxEditSegmentValidation(segments){
   };
 }
 
+// Original-page controls share the same pixel geometry as pointer and keyboard edits.
+function adjustOriginalBox(box, page, patch){
+  const next = { ...box, ...patch };
+  const width = Math.max(1, finiteNumber(page?.width, 1));
+  const height = Math.max(1, finiteNumber(page?.height, 1));
+  next.left = Math.round(Math.max(0, Math.min(width - (patch.width === undefined ? Math.max(1,Math.min(width,next.width)) : 1), finiteNumber(next.left, 0))));
+  next.top = Math.round(Math.max(0, Math.min(height - (patch.height === undefined ? Math.max(1,Math.min(height,next.height)) : 1), finiteNumber(next.top, 0))));
+  next.width = Math.round(Math.max(1, Math.min(width - next.left, finiteNumber(next.width, 1))));
+  next.height = Math.round(Math.max(1, Math.min(height - next.top, finiteNumber(next.height, 1))));
+  return next;
+}
+function originalMarginBox(box, page, margins){
+  const left = Math.max(0, box.left - box.width * margins.left / 100);
+  const top = Math.max(0, box.top - box.height * margins.top / 100);
+  const right = Math.min(page.width, box.left + box.width * (1 + margins.right / 100));
+  const bottom = Math.min(page.height, box.top + box.height * (1 + margins.bottom / 100));
+  return adjustOriginalBox(box, page, {left, top, width:Math.max(1,right-left), height:Math.max(1,bottom-top)});
+}
+function OriginalNumberInput({value,min,max,label,disabled,onChange}){
+  const [draft,setDraft]=useState(String(value));
+  const focused=useRef(false);
+  const discardBlur=useRef(false);
+  useEffect(()=>{if(!focused.current)setDraft(String(value));},[value]);
+  const commit=()=>{
+    focused.current=false;
+    if(discardBlur.current){discardBlur.current=false;setDraft(String(value));return;}
+    const parsed=Number(draft);
+    const next=Math.max(min,Math.min(max,draft.trim() && Number.isFinite(parsed)?parsed:value));
+    setDraft(String(next));onChange(next);
+  };
+  return <input type="number" aria-label={label} min={min} max={max} step="1" value={draft} disabled={disabled}
+    onFocus={event=>{focused.current=true;event.currentTarget.select();}}
+    onChange={event=>{const text=event.target.value;setDraft(text);const next=Number(text);if(text && Number.isFinite(next) && next>=min && next<=max)onChange(next);}}
+    onBlur={commit} onKeyDown={event=>{
+      if(event.key==='Enter'){event.preventDefault();event.stopPropagation();event.currentTarget.blur();}
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();discardBlur.current=true;event.currentTarget.blur();}
+      if(event.shiftKey && ['ArrowUp','ArrowDown'].includes(event.key)){event.preventDefault();event.stopPropagation();const next=Math.max(min,Math.min(max,(Number(draft)||value)+(event.key==='ArrowUp'?10:-10)));setDraft(String(next));onChange(next);}
+    }}/>
+}
+function useOriginalPanelBounds(panelRef,layout){
+  useLayoutEffect(()=>{
+    const panel=panelRef.current,wrap=panel?.closest('.review-wrap');
+    if(!panel || !wrap)return;
+    let frame=null;
+    const measure=()=>{frame=null;const available=Math.min(window.innerHeight,wrap.getBoundingClientRect().bottom)-panel.getBoundingClientRect().top-12;
+      panel.style.setProperty('--original-panel-available',`${Math.max(120,available)}px`);};
+    const schedule=()=>{if(frame===null)frame=requestAnimationFrame(measure);};
+    const observer=new ResizeObserver(schedule);observer.observe(wrap);observer.observe(panel);
+    wrap.addEventListener('scroll',schedule,{passive:true});window.addEventListener('resize',schedule);measure();
+    return()=>{observer.disconnect();wrap.removeEventListener('scroll',schedule);window.removeEventListener('resize',schedule);if(frame!==null)cancelAnimationFrame(frame);};
+  },[panelRef,layout]);
+}
+function OriginalGeometryControls({page, box, originalBox, onChange, disabled}){
+  if (!box) return null;
+  const base = originalBox || box;
+  const margins = {
+    top: (base.top - box.top) / base.height * 100,
+    bottom: (box.top + box.height - base.top - base.height) / base.height * 100,
+    left: (base.left - box.left) / base.width * 100,
+    right: (box.left + box.width - base.left - base.width) / base.width * 100,
+  };
+  return <section className="original-geometry" aria-label="선택 영역 크기와 여백">
+    <div className="original-section-label">빠른 선택</div>
+    <div className="original-presets">{[['여백 없음',0],['살짝',-2],['넉넉히',3],['주변 포함',8]].map(([label,value]) =>
+      <button type="button" className="btn" key={label} aria-pressed={Object.values(margins).every(margin=>Math.abs(margin-value)<0.6)} disabled={disabled} onClick={()=>onChange(originalMarginBox(base,page,{top:value,bottom:value,left:value,right:value}))}>{label}</button>)}</div>
+    <div className="original-section-label">여백 <small>− 잘라냄 · + 주변 포함</small></div>
+    <div className="original-margins">{[['top','위'],['bottom','아래'],['left','왼쪽'],['right','오른쪽']].map(([key,label]) =>
+      <div className="original-margin-field" key={key}><span>{label}</span><div><OriginalNumberInput label={`${label} 여백 (%)`} min={-100} max={100} value={Math.round(margins[key]*10)/10} disabled={disabled}
+        onChange={value=>onChange(originalMarginBox(base,page,{...margins,[key]:value}))}/><span>%</span>
+        {[-1,1].map(delta=><button type="button" key={delta} disabled={disabled} aria-label={`${label} 여백 ${delta>0?'늘리기':'줄이기'}`} title="1%씩 조절 · Shift와 함께 10%" onClick={event=>onChange(originalMarginBox(base,page,{...margins,[key]:Math.max(-100,Math.min(100,margins[key]+delta*(event.shiftKey?10:1)))}))}>{delta>0?'+':'−'}</button>)}</div></div>)}</div>
+    <details className="original-exact"><summary>위치·크기 직접 입력 (px)</summary><div className="original-dimensions">{[['left','X',page.width],['top','Y',page.height],['width','가로',page.width],['height','세로',page.height]].map(([key,label,max]) =>
+      <label key={key}>{label}<OriginalNumberInput label={`선택 영역 ${label} (px)`} min={key==='left'||key==='top'?0:1} max={max} value={Math.round(box[key])} disabled={disabled} onChange={value=>onChange(adjustOriginalBox(box,page,{[key]:value}))}/></label>)}</div></details>
+  </section>;
+}
+function OriginalCornerLoupe({page,box}){
+  if (!page?.sourceImageUri || !box) return null;
+  // Magnify the crop's lower-right corner at four CSS pixels per source pixel.
+  const x = box.left+box.width, y = box.top+box.height, scale=4;
+  return <div className="original-loupe" aria-label="오른쪽 아래 모서리 4배 확대">
+    <div className="original-loupe-window"><img src={page.sourceImageUri} loading="lazy" decoding="async" draggable={false} alt="선택 영역 모서리 확대" style={{width:page.width*scale,height:page.height*scale,left:60-x*scale,top:60-y*scale}}/><i/></div>
+    <small>오른쪽 아래 모서리 · 4배</small></div>;
+}
+function OriginalEditToolbar({mode,onModeChange,onCancel,layout,onLayoutChange,disabled,multi,sourceLabel}){
+  const toolbarRef=useRef(null);
+  useLayoutEffect(()=>{
+    const toolbar=toolbarRef.current,wrap=toolbar?.closest('.review-wrap');
+    if(!toolbar || !wrap)return;
+    const measure=()=>wrap.style.setProperty('--original-toolbar-height',`${toolbar.getBoundingClientRect().height}px`);
+    const observer=new ResizeObserver(measure);observer.observe(toolbar);measure();
+    return()=>{observer.disconnect();wrap.style.removeProperty('--original-toolbar-height');};
+  },[]);
+  return <div ref={toolbarRef} className="original-edit-toolbar">
+    <button type="button" className="btn" disabled={disabled} onClick={onCancel}>{Icon.arrowLeft} 검수로</button>
+    <div className="original-edit-title"><strong>원본 편집</strong><small title={sourceLabel}>{sourceLabel || (multi?'여러 영역을 한 지문으로':'원본에서 범위를 바로 조절하세요')}</small></div>
+    {!multi && <div className="original-mode-tabs" role="group" aria-label="원본 편집 작업">{[['crop','다시 자르기'],['split','수동 쪼개기']].map(([value,label])=><button type="button" key={value} aria-pressed={mode===value} disabled={disabled} onClick={()=>onModeChange(value)}>{label}</button>)}</div>}
+    <div className="original-layout-tabs" role="group" aria-label="원본 편집 도구 배치">{[['fixed','고정 패널'],['floating','플로팅']].map(([value,label])=><button type="button" key={value} aria-pressed={layout===value} onClick={()=>onLayoutChange(value)}>{label}</button>)}</div>
+    <small className="original-toolbar-help"><kbd>Esc</kbd> {mode==='split'?'선택·이동':'취소'} · <kbd>Enter</kbd> 적용 · Shift+방향키 10px</small>
+  </div>;
+}
+
 function BoxEditPreview({ label, page, box }){
   const pageWidth = Math.max(1, finiteNumber(page?.width, 1));
   const cropWidth = Math.max(1, finiteNumber(box?.width, 1));
@@ -1703,7 +1803,7 @@ function BoxEditPreview({ label, page, box }){
   return (
     <div className="box-edit-preview-item">
       {label && <span>{label}</span>}
-      <div className="box-edit-preview-viewport" style={{ aspectRatio: `${cropWidth} / ${cropHeight}` }}>
+      <div className="box-edit-preview-viewport" style={{ aspectRatio: `${cropWidth} / ${cropHeight}`, '--crop-aspect': cropWidth/cropHeight }}>
         {page?.sourceImageUri ? (
           <img
             src={filePreviewUrl(page.sourceImageUri)}
@@ -1773,8 +1873,12 @@ function BoxEditPanel({
   onReset,
   onCancel,
   onManualSplit,
+  onBoxChange,
+  layout,
   onApply,
 }){
+  const panelRef=useRef(null);
+  useOriginalPanelBounds(panelRef,layout);
   const segmentList = segments || [];
   const selectedSegment = segmentList.find(segment => segment.id === selectedSegmentId) || segmentList[0] || null;
   const selectedOriginalSegment = (originalSegments || []).find(segment => segment.id === selectedSegment?.id) || null;
@@ -1795,16 +1899,18 @@ function BoxEditPanel({
     || finiteNumber(selectedBox?.top, 0) + finiteNumber(selectedBox?.height, 0) > finiteNumber(selectedPage?.height, 1) - 4;
   const sourcePageCount = new Set(segmentList.map(segment => segment.pageId)).size;
   return (
-    <aside className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`} aria-label="영역 다시 잡기 확인 패널">
+    <aside ref={panelRef} className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`} aria-label="영역 다시 잡기 확인 패널">
       <div className="box-edit-panel-head">
         <div>
           <span>선택된 항목</span>
           <strong>{multi ? (problem?.title || '선택 지문') : displayNumber ? `${displayNumber}번 문항` : (problem?.title || '선택 문항')}</strong>
         </div>
-        <button className="icon-btn" type="button" aria-label="영역 편집 취소" onClick={onCancel} disabled={mutating}>
+        <button className="icon-btn" type="button" aria-label="영역 편집 취소" aria-keyshortcuts="Escape" onClick={onCancel} disabled={mutating}>
           {Icon.close}
         </button>
       </div>
+      {!multi && <div className="original-live-preview"><strong>칠판에 들어갈 모습</strong><div className="original-preview-board"><BoxEditPreview page={selectedPage} box={selectedBox}/></div><small>{manualSplitBoxSizeLabel(selectedBox)}</small></div>}
+      {!multi && <OriginalGeometryControls page={selectedPage} box={selectedBox} originalBox={selectedOriginalBox} onChange={onBoxChange} disabled={busy}/>}
       <div className="box-edit-panel-section">
         <h3>{multi ? '지문 여러 영역 이어붙이기' : '영역 다시 잡기'}</h3>
         <p>{multi
@@ -1846,7 +1952,8 @@ function BoxEditPanel({
           </div>
         </div>
       )}
-      <div className="box-edit-panel-section">
+      <details className="box-edit-panel-section original-before-after" open={multi || undefined}>
+        <summary>조정 전·후 비교</summary>
         <div className="box-edit-section-head">
           <h4>미리보기</h4>
           <button className="text-action" type="button" onClick={onReset} disabled={mutating || !changed}>원래 영역으로</button>
@@ -1857,7 +1964,7 @@ function BoxEditPanel({
         </div>
         {multi && <BoxEditStitchedPreview pages={pages} segments={segmentList} />}
         <p className="box-edit-keyboard-help">방향키 1px 이동 · Shift+방향키 10px 이동</p>
-      </div>
+      </details>
       {!multi && <div className="box-edit-panel-section">
         <h4>적용 방식</h4>
         <label className={`box-edit-mode ${recognizeMode ? '' : 'selected'}`}>
@@ -1921,7 +2028,7 @@ function BoxEditPanel({
         </strong>
       </div>
       <div className="box-edit-panel-footer">
-        <button className="btn" type="button" aria-keyshortcuts="Escape" onClick={onCancel} disabled={busy}>취소</button>
+        <button className="btn" type="button" onClick={onReset} disabled={busy || !changed}>초기화</button>
         <button
           className="btn primary"
           type="button"
@@ -2093,9 +2200,12 @@ function ManualSplitEditor({
   scopeSummary,
   onScopeChange,
   selectedScopeCount,
+  onRegionBoxChange,
+  layout = 'fixed',
 }){
   const canvasRef = useRef(null);
   const panelRef = useRef(null);
+  useOriginalPanelBounds(panelRef,`${layout}-${panelSide}`);
   useLayoutEffect(() => {
     const panel = panelRef.current;
     const wrap = panel?.closest('.review-wrap');
@@ -2105,7 +2215,7 @@ function ManualSplitEditor({
     const measure = () => {
       frame = null;
       const stickyTop = actionBar && getComputedStyle(actionBar).position === 'sticky'
-        ? actionBar.getBoundingClientRect().height + 12 : 12;
+        ? actionBar.getBoundingClientRect().height + (wrap.querySelector('.original-edit-toolbar')?.getBoundingClientRect().height || 0) + 12 : 12;
       panel.style.setProperty('--manual-panel-sticky-top', `${stickyTop}px`);
       const available = Math.min(window.innerHeight, wrap.getBoundingClientRect().bottom)
         - panel.getBoundingClientRect().top - 12;
@@ -2155,7 +2265,7 @@ function ManualSplitEditor({
   };
 
   return (
-    <div className={`manual-split-layout panel-${panelSide}`}>
+    <div className={`manual-split-layout panel-${panelSide} original-layout-${layout}`}>
       <div className="manual-split-canvas-shell">
         <ReviewCanvasZoomShell>
           <div
@@ -2222,8 +2332,11 @@ function ManualSplitEditor({
             <ManualSplitStampPreview canvasRef={canvasRef} page={page} stampBox={stampBox} enabled={activeMode === 'stamp' && !mutating} />
           </div>
         </ReviewCanvasZoomShell>
+        <OriginalCornerLoupe page={page} box={draftBox || selectedRegion?.bbox}/>
       </div>
       <aside ref={panelRef} className="manual-split-panel" aria-label="수동 자르기 영역 목록">
+        <div className="original-live-preview"><strong>칠판에 들어갈 모습</strong>{selectedRegion ? <><div className="original-preview-board"><BoxEditPreview page={page} box={selectedRegion.bbox}/></div><small>{manualSplitBoxSizeLabel(selectedRegion.bbox)}</small></> : <p>영역을 그리거나 클릭해 선택하세요.</p>}</div>
+        {selectedRegion && activeMode==='select' && <details className="manual-region-geometry"><summary>선택 영역 위치·크기·여백</summary><OriginalGeometryControls key={selectedRegion.id} page={page} box={selectedRegion.bbox} originalBox={selectedRegion.originalBox || selectedRegion.bbox} disabled={mutating} onChange={box=>onRegionBoxChange?.(selectedRegion.id,box)}/></details>}
         <div className="manual-split-scope">
           <label>적용 범위
             <select aria-label="자르기 적용 범위" value={scope} disabled={mutating} onChange={evt => onScopeChange?.(evt.target.value)}>
@@ -2713,9 +2826,27 @@ function usePreviewFocusIsolation(open, ownerRef){
         target?.focus({ preventScroll: true });
       }
     };
+    // Native PDF objects can move focus into their child window without a
+    // parent-document focusin event. Recover after that window blur as well.
+    let focusFrame = null;
+    const restoreEmbeddedFocus = () => {
+      const owner = ownerRef?.current;
+      if (!owner || !isEmbeddedPreviewFocus(document.activeElement)) return;
+      const target = owner.contains(lastFocus) ? lastFocus : editorFocusableControls(owner)[0] || owner;
+      target?.focus({ preventScroll: true });
+    };
+    const onWindowBlur = () => {
+      if (focusFrame !== null) return;
+      focusFrame = window.requestAnimationFrame(() => { focusFrame = null; restoreEmbeddedFocus(); });
+    };
     document.addEventListener?.('focusin', keepFocus, true);
+    window.addEventListener('blur', onWindowBlur);
+    window.addEventListener('focus', restoreEmbeddedFocus);
     return () => {
       document.removeEventListener?.('focusin', keepFocus, true);
+      window.removeEventListener('blur', onWindowBlur);
+      window.removeEventListener('focus', restoreEmbeddedFocus);
+      if (focusFrame !== null) window.cancelAnimationFrame(focusFrame);
       previews.forEach((preview, index) => { preview.inert = previous[index]; });
     };
   }, [open, ownerRef]);
@@ -2749,6 +2880,10 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
       ref={rootRef}
       onBlur={event => {
         if (isEmbeddedPreviewFocus(event.relatedTarget)) return;
+        // A PDF child window reports a null relatedTarget before activeElement
+        // becomes the object; pointer-outside, Tab and Escape still dismiss.
+        if (event.relatedTarget == null && typeof document !== 'undefined'
+          && document.querySelector?.('.pending-preview-pdf')) return;
         if (!event.currentTarget.contains(event.relatedTarget)) closeMenu();
       }}
     >
@@ -3281,6 +3416,9 @@ function ReviewStage({
   const reviewScrollTopRef = useRef(Number(reviewUi?.scrollTop) || 0);
   const [reviewPageNav, setReviewPageNav] = useState({ current: 1, total: pages.length });
   const reviewEditorActive = Boolean(boxEdit || manualSplit);
+  const [originalLayout, setOriginalLayout] = useStoredPreference('edb-original-editor-layout', 'fixed', value=>['fixed','floating'].includes(value));
+  const originalModeDrafts = useRef({ crop:null, split:null });
+  const openedOriginalRequest = useRef(null);
 
   const syncReviewPageNavigation = useCallback((wrap = reviewWrapRef.current) => {
     if (!wrap) return;
@@ -3665,7 +3803,11 @@ function ReviewStage({
     && selectedProblems.every(problem => problem.sourcePageId === selectedSourcePage.id)
   );
   const manualSplitPage = manualSplit ? reviewPageLookup.get(manualSplit.pageId)?.page : null;
-  const renderedReviewPages = useMemo(() => manualSplit ? (manualSplitPage ? [manualSplitPage] : []) : pages, [manualSplit?.pageId, manualSplitPage, pages]);
+  const renderedReviewPages = useMemo(() => {
+    if (manualSplit) return manualSplitPage ? [manualSplitPage] : [];
+    if (boxEdit && !boxEdit.multi) return pages.filter(page=>page.id===boxEdit.pageId);
+    return pages;
+  }, [manualSplit?.pageId, manualSplitPage, boxEdit?.pageId, boxEdit?.multi, pages]);
   const manualSplitScope = useMemo(() => manualSplitPage ? {
     ...manualSplitScopeSummary(manualSplitPage, items, manualSplit.replaceProblemIds, manualSplit.scope),
     pageLabel: sourcePageHeading(manualSplitPage, reviewPageLookup.get(manualSplitPage.id)?.index || 0),
@@ -3782,8 +3924,8 @@ function ReviewStage({
       scope: options.scope || (replacementIds.length ? 'selection' : 'append'),
       mode: 'draw',
       stampBox: options.initialBox ? { width: options.initialBox.width, height: options.initialBox.height } : stampBox,
-      regions: options.initialBox ? [{ id: `draft-region-${manualSplitSeqRef.current++}`, pageId: page.id, bbox: { ...options.initialBox }, title: manualSplitTitle(0), order: 1 }] : [],
-      selectedRegionIds: [],
+      regions: options.initialBox ? [{ id: `draft-region-${manualSplitSeqRef.current++}`, pageId: page.id, bbox: { ...options.initialBox }, originalBox: { ...options.initialBox }, title: manualSplitTitle(0), order: 1 }] : [],
+      selectedRegionIds: options.initialBox ? [`draft-region-${manualSplitSeqRef.current-1}`] : [],
       guided: !!options.guided,
     });
   };
@@ -4275,6 +4417,7 @@ function ReviewStage({
   };
 
   const beginBoxEdit = () => {
+    originalModeDrafts.current = {crop:null,split:null};
     if (!selectedCanBoxEdit || !selectedSingleProblem || !selectedSinglePage) return;
     setManualSplit(null);
     setManualSplitDraftBox(null);
@@ -4306,6 +4449,41 @@ function ReviewStage({
       addingSegment: false,
       mode: 'crop',
     });
+  };
+  useEffect(() => {
+    const id = reviewFocus?.editProblemId;
+    if (!id || openedOriginalRequest.current === reviewFocus || selectedSingleProblem?.id !== id) return;
+    openedOriginalRequest.current = reviewFocus;
+    beginBoxEdit();
+  }, [reviewFocus, selectedSingleProblem?.id]);
+  const updateOriginalBox = (box) => setBoxEdit(prev=>{
+    if (!prev) return prev;
+    const nextBox=adjustOriginalBox(prev.box,pages.find(page=>page.id===prev.pageId),box);
+    return {...prev,box:nextBox,segments:(prev.segments||[]).map(segment=>segment.id===prev.selectedSegmentId?{...segment,bbox:nextBox}:segment)};
+  });
+  const switchOriginalMode = (mode) => {
+    if (mutating) return;
+    if (mode === 'split' && boxEdit && !boxEdit.multi) {
+      originalModeDrafts.current.crop = boxEdit;
+      const cached=originalModeDrafts.current.split;
+      if (cached?.pageId===boxEdit.pageId && cached.selectionProblemIds.includes(boxEdit.problemId)) {
+        setManualSplit(cached);setBoxEdit(null);
+      } else beginManualPageSplit(pages.find(page=>page.id===boxEdit.pageId),[boxEdit.problemId],{initialBox:boxEdit.box});
+    } else if (mode === 'crop' && manualSplit) {
+      originalModeDrafts.current.split=manualSplit;
+      const cached=originalModeDrafts.current.crop;
+      const problem=(session?.problems||[]).find(p=>p.id===manualSplit.selectionProblemIds[0]);
+      const region=manualSplit.regions.find(r=>manualSplit.selectedRegionIds.includes(r.id)) || manualSplit.regions[0];
+      if (cached?.pageId===manualSplit.pageId && cached.problemId===problem?.id) {
+        setBoxEdit(cached);setManualSplit(null);
+      } else if (problem) {
+        const box=region?.bbox || problem.bbox;
+        const segment={id:'single-box',pageId:manualSplit.pageId,bbox:box,order:1};
+        setBoxEdit({problemId:problem.id,pageId:manualSplit.pageId,originalBox:problem.bbox,box,originalSegments:[{...segment,bbox:problem.bbox}],segments:[segment],selectedSegmentId:segment.id,multi:false,mode:'crop'});
+        setManualSplit(null);
+      }
+    }
+    setManualSplitDraftBox(null);
   };
   const cancelBoxEdit = () => {
     boxEditDragRef.current = null;
@@ -5096,6 +5274,8 @@ function ReviewStage({
     || showBulkRetry
   );
 
+  useEffect(()=>{ if (!reviewEditorActive) originalModeDrafts.current={crop:null,split:null}; },[reviewEditorActive]);
+  const originalToolbar = reviewEditorActive ? <OriginalEditToolbar mode={manualSplit?'split':'crop'} onModeChange={switchOriginalMode} onCancel={manualSplit?cancelManualPageSplit:cancelBoxEdit} layout={originalLayout} onLayoutChange={setOriginalLayout} disabled={mutating} sourceLabel={(() => { const page=manualSplitPage || pages.find(p=>p.id===boxEdit?.pageId); return page ? sourcePageHeading(page,reviewPageLookup.get(page.id)?.index || 0) : ''; })()} multi={boxEdit?.multi || (manualSplit && manualSplit.selectionProblemIds.length!==1)}/> : null;
   const actionBar = boxEdit ? (
     <div className="review-actionbar box-edit-actionbar">
       <span className="count-chip">{boxEdit.multi ? '지문 영역 합치기' : '영역 다시 잡기'}</span>
@@ -5474,7 +5654,14 @@ function ReviewStage({
           ref={reviewWrapRef}
           aria-busy={mutating || Boolean(pendingReviewNavigation)}
         >
-          {actionBar}
+          {originalToolbar}
+        {reviewEditorActive && <div className={`original-bottom-tools layout-${originalLayout}`} role="toolbar" aria-label={originalLayout==='floating'?'플로팅 원본 편집 도구':'원본 편집 배율'}>
+          {manualSplit && originalLayout==='floating' && [['select','선택·이동'],['draw','드래그'],['stamp','스탬프']].map(([value,label])=><button type="button" key={value} aria-pressed={manualSplit.mode===value} onClick={()=>setManualSplitMode(value)}>{label}</button>)}
+          <button type="button" aria-label="원본 축소" onClick={()=>adjustReviewZoom(-REVIEW_ZOOM_STEP)} disabled={reviewZoom<=REVIEW_ZOOM_MIN}>{Icon.zoomOut}</button>
+          <button type="button" onClick={resetReviewZoom}>100%</button>
+          <button type="button" aria-label="원본 확대" onClick={()=>adjustReviewZoom(REVIEW_ZOOM_STEP)} disabled={reviewZoom>=REVIEW_ZOOM_MAX}>{Icon.zoomIn}</button>
+        </div>}
+        {actionBar}
           {!reviewEditorActive && <div className="review-summary-strip">
             <div className="review-summary-overview">
               <span className="review-summary-title">검수 현황</span>
@@ -5784,6 +5971,8 @@ function ReviewStage({
                 {manualSplit?.pageId === page.id ? (
                   <ManualSplitEditor
                     page={page}
+                    layout={originalLayout}
+                    onRegionBoxChange={(id,box)=>setManualSplit(prev=>prev?{...prev,regions:prev.regions.map(region=>region.id===id?{...region,originalBox:region.originalBox || region.bbox,bbox:adjustOriginalBox(region.bbox,page,box)}:region)}:prev)}
                     regions={manualSplit.regions || []}
                     draftBox={manualSplitDraftBox}
                     mode={manualSplit.mode || 'draw'}
@@ -5812,7 +6001,7 @@ function ReviewStage({
                     onScopeChange={changeManualSplitScope}
                   />
                 ) : (
-                  <div className={`box-edit-layout ${boxEdit?.pageId === page.id ? 'is-open' : ''}`}>
+                  <div className={`box-edit-layout original-layout-${originalLayout} ${boxEdit?.pageId === page.id ? 'is-open' : ''}`}>
                     <ReviewCanvasZoomShell>
                       <div
                         className={`review-page-canvas ${boxEdit?.multi && boxEdit.addingSegment ? 'adding-passage-segment' : ''}`}
@@ -5952,6 +6141,7 @@ function ReviewStage({
                     )}
                       </div>
                     </ReviewCanvasZoomShell>
+                    {boxEdit?.pageId === page.id && <OriginalCornerLoupe page={page} box={boxEdit.box}/>}
                     {boxEdit?.pageId === page.id && (
                       <BoxEditPanel
                         page={page}
@@ -5970,6 +6160,8 @@ function ReviewStage({
                         aiAvailable={aiAvailable}
                         aiBusy={aiBusy}
                         onModeChange={setBoxEditMode}
+                        onBoxChange={updateOriginalBox}
+                        layout={originalLayout}
                         onToggleAddSegment={toggleBoxEditAddSegment}
                         onSelectSegment={selectBoxEditSegment}
                         onDeleteSegment={deleteBoxEditSegment}
@@ -9700,6 +9892,7 @@ function SidePanel({
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
+  onEditOriginal, onDownloadItemImage, onRemoveItem,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
   focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
@@ -9742,6 +9935,7 @@ function SidePanel({
   }, [settingsRequest, setTab]);
   const settingsDialogOpen = tab === 'board';
   const closeSettingsDialog = () => setTab('item');
+  usePreviewFocusIsolation(settingsDialogOpen, settingsDialogRef);
   useEffect(() => {
     if (!settingsDialogOpen) return undefined;
     const dialog = settingsDialogRef.current;
@@ -10012,6 +10206,8 @@ function SidePanel({
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
+  const remainingReviewItems = items.filter(candidate=>candidate.id!==item?.id && ['check_needed','failed'].includes(candidate.reviewStatus));
+  const remainingApplyIds = item ? [item.id,...remainingReviewItems.map(candidate=>candidate.id)] : [];
   const showItemConfirmBar = view !== 'review' && !!item && (bulk || item.step !== 'raw');
   const manualGapCount = items.filter(target => (
     normalizePlacementGapAfterPages(
@@ -10508,7 +10704,10 @@ function SidePanel({
           >{Icon.chevronDown}</button>
         </div>
       )}
-      <div className="inspector-heading"><strong>{multiSelectionCount ? `${multiSelectionCount}개 선택` : item ? '선택한 자료' : '수업'}</strong></div>
+      <div className="inspector-pill-tabs" role="group" aria-label="검수와 설정">
+        <button type="button" aria-pressed={tab!=='board'} onClick={()=>setTab('item')}>검수 {remainingReviewItems.length>0 && <span>{remainingReviewItems.length+(itemNeedsCheck?1:0)}</span>}</button>
+        <button type="button" aria-haspopup="dialog" aria-expanded={settingsDialogOpen} onClick={()=>setTab('board')}>설정</button>
+      </div>
 
       {tab !== 'placement' && (panelBusy || panelSaveState.dirty) && <div className={`panel-session-state ${panelSaveState.dirty ? 'is-dirty' : ''} ${panelBusy ? 'is-busy' : ''}`} role="status" aria-live="polite" aria-atomic="true">
         <strong>{panelBusy ? '수업 변경 처리 중…' : panelSaveState.label}</strong>
@@ -10526,7 +10725,7 @@ function SidePanel({
         publishDownloadBusy={publishDownloadBusy}
       />
 
-      <section className="side-tab-panel" id="side-panel-item" role="region" aria-label="선택한 자료" aria-keyshortcuts="Alt+1" hidden={false} tabIndex={0}>
+      <section className="side-tab-panel" id="side-panel-item" role="region" aria-label="선택한 자료" aria-keyshortcuts="Alt+1" hidden={tab === 'placement'} tabIndex={0}>
       {(
         <>
           <div className="tab-body">
@@ -10585,6 +10784,12 @@ function SidePanel({
                   </div>
                 </div>
 
+                <div className="inspector-preview-pair" aria-label="원본과 칠판용 미리보기">
+                  {['raw','chalk'].map(value=><button type="button" key={value} aria-label={value==='raw'?'원본':'칠판용'} className={previewMode===value?'on':''} aria-pressed={previewMode===value} onClick={()=>setPreviewMode(value)}>
+                    <div style={{background:value==='chalk'?boardColor:undefined}}><TileImage item={item} forceMode={value} previewMaxDimension={384}/></div><span>{value==='raw'?'원본':'칠판용'}</span>
+                  </button>)}
+                  <button type="button" className="icon-btn" aria-label="미리보기 크게 보기" aria-expanded={previewExpanded} onClick={()=>setPreviewExpanded(open=>!open)}>{Icon.zoomIn}</button>
+                </div>
                 {itemNeedsCheck && (
                   <section className="inspector-check-card" role="status" aria-label="확인 필요">
                     <strong>{item.statusLabel || '확인 필요'}</strong>
@@ -10659,15 +10864,17 @@ function SidePanel({
                 </p>
 
                 <div className="inspector-quick-actions" role="group" aria-label="선택 자료 빠른 편집">
-                  <button className="btn" type="button" disabled={panelBusy} onClick={focusManualCrop}>
-                    {Icon.crop} 여백 자르기
+                  <button className="btn" type="button" disabled={panelBusy || !session} onClick={()=>onEditOriginal?.(item.id)}>
+                    {Icon.crop} 다시 자르기
                   </button>
+                  <button className="btn" type="button" disabled={panelBusy || !session} onClick={()=>onDownloadItemImage?.(item)}>{Icon.download} PNG</button>
+                  <button className="icon-btn danger" type="button" aria-label="선택 자료 삭제" disabled={panelBusy} onClick={()=>onRemoveItem?.(item.id)}>{Icon.trash}</button>
                   <button className="btn" type="button" onClick={() => { setTab('placement'); document.getElementById('side-panel-placement')?.focus(); }}>
                     {Icon.align} 크기·간격
                   </button>
                 </div>
 
-                <div className={`item-preview ${previewExpanded ? 'is-expanded' : 'is-collapsed'}`} ref={wrapRef}>
+                <div className={`item-preview ${previewExpanded ? 'is-expanded' : 'is-collapsed'}`} ref={wrapRef} hidden={!previewExpanded}>
                   <button
                     type="button"
                     className="item-preview-toggle"
@@ -10956,10 +11163,10 @@ function SidePanel({
 
           {showItemConfirmBar && (
           <div className="tab-foot">
-            <label className="check">
-              <input type="checkbox" checked={bulk} disabled={panelBusy} onChange={e => setBulk(e.target.checked)} aria-label={`처리 방식을 수업 전체 ${items.length}개에 적용`} />
-              수업 전체 {items.length}개
-            </label>
+            {remainingReviewItems.length>0 ? <label className={`inspector-remaining-card ${bulk?'on':''}`}>
+              <span className="inspector-remaining-icon">{Icon.check}</span><span><strong>남은 {remainingReviewItems.length}개에도 적용</strong><small>‘{stepLabel(item.step)}’ 방식으로 함께 확인</small></span>
+              <input type="checkbox" role="switch" checked={bulk} disabled={panelBusy} onChange={e=>setBulk(e.target.checked)} aria-label={`남은 확인 대상 ${remainingReviewItems.length}개에도 적용`}/>
+            </label> : <div className="inspector-remaining-done">남은 검수가 없습니다</div>}
             <div className="spacer" />
             <button
               className="btn"
@@ -10974,10 +11181,10 @@ function SidePanel({
               title="처리 방식을 적용하고 현재 수업의 미저장 변경을 함께 저장"
               onClick={() => {
                 if (!item) return;
-                onConfirm(item.id, { bulk, processingStep: item.step });
+                onConfirm(item.id, { bulk, problemIds: bulk ? remainingApplyIds : [item.id], processingStep: item.step });
               }}
             >
-              {Icon.check} {mutating ? '적용 중…' : bulk ? `전체 ${items.length}개에 적용` : '선택 1개에 적용'}
+              {Icon.check} {mutating ? '적용 중…' : bulk && remainingReviewItems.length ? `${remainingApplyIds.length}개 확인·적용` : '선택 1개에 적용'}
             </button>
           </div>
           )}
@@ -10985,8 +11192,8 @@ function SidePanel({
       )}
       </section>
 
-      <section className="side-tab-panel inspector-placement" id="side-panel-placement" role="region" aria-label="크기·배치" aria-keyshortcuts="Alt+2" hidden={!item} tabIndex={-1}>
-      {item && <div className="panel-section-hd inspector-placement-hd">크기·배치 <span className="line" /></div>}
+      <section className="side-tab-panel inspector-placement" id="side-panel-placement" role="region" aria-label="크기·배치" aria-keyshortcuts="Alt+2" hidden={!item || tab !== 'placement'} tabIndex={-1}>
+      {item && <div className="panel-section-hd inspector-placement-hd"><button className="btn" type="button" onClick={()=>setTab('item')}>{Icon.arrowLeft} 검수로</button>크기·배치 <span className="line" /></div>}
       {item && (
         <>
           <div className="tab-body placement-tab-body">
@@ -19390,6 +19597,13 @@ function App(){
           darkMode={t.dark}
           onToggleDarkMode={v => { setTweak('dark', v); writeStoredPreference(DARK_MODE_KEY, v); }}
           onConfirm={onConfirm}
+          onEditOriginal={id=>{
+            setSelectedProblemIds(new Set([id]));setActiveId(id);setMobilePane('stage');
+            setReviewFocus({filter:'all',problemIds:[id],editProblemId:id,source:'inspector-original-edit'});
+            requestViewChange('review');
+          }}
+          onDownloadItemImage={downloadItemImage}
+          onRemoveItem={removeItem}
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}
           lastOperationError={lastOperationError}

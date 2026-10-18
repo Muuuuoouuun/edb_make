@@ -39,14 +39,17 @@ class TestManualSplitPerformance(unittest.TestCase):
         run_node(NODE_SETUP + r"""
         const pages=Array.from({length:500},(_,index)=>({id:`p${index}`}));
         const reviewPageLookup=new Map(pages.map((page,index)=>[page.id,{page,index}]));
-        const renderPages=manualSplit=>vm.runInNewContext(
+        const renderPages=(manualSplit,boxEdit=null)=>vm.runInNewContext(
           section('  const manualSplitPage =', '  const manualSplitScope =')+'\nrenderedReviewPages;',
-          {pages,reviewPageLookup,manualSplit,useMemo:fn=>fn()});
+          {pages,reviewPageLookup,manualSplit,boxEdit,useMemo:fn=>fn()});
         assert.equal(renderPages(null),pages);
         const selected=renderPages({pageId:'p499'});
         assert.equal(selected.length,1);assert.equal(selected[0],pages[499]);
         assert.equal(reviewPageLookup.get(selected[0].id).index,499);
         assert.equal(renderPages({pageId:'removed-page'}).length,0);
+        const crop=renderPages(null,{pageId:'p499',multi:false});
+        assert.equal(crop.length,1);assert.equal(crop[0],pages[499]);
+        assert.equal(renderPages(null,{pageId:'p499',multi:true}),pages,'passage stitching still visits all source pages');
         """)
 
     def test_overlap_matches_pairwise_reference_for_random_boxes_and_edge_contacts(self):

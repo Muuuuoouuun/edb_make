@@ -111,22 +111,25 @@ class TestInspectorReorganization(unittest.TestCase):
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
-    def test_quick_actions_open_existing_crop_controls_or_placement_without_mutation(self) -> None:
+    def test_quick_actions_open_original_editor_download_or_placement_without_mutation(self) -> None:
         run_node(INSPECTOR_SETUP + r"""
         const quick = findElement(node => attrText(node,'aria-label') === '선택 자료 빠른 편집');
         const sandbox = renderSandbox(), calls = [];
-        Object.assign(sandbox, {panelBusy:false,
+        Object.assign(sandbox, {panelBusy:false,session:{},item:{id:'p1'},onEditOriginal:id=>calls.push(['crop',id]),onDownloadItemImage:item=>calls.push(['png',item.id]),onRemoveItem:id=>calls.push(['remove',id]),
           focusManualCrop:()=>calls.push('crop'),setTab:tab=>calls.push(tab),
           document:{getElementById:id=>({focus:()=>calls.push(['focus',id])})}});
         compile(sandbox,'globalThis.quick = () => ('+snippet(quick.node)+');');
         const buttons = walk(sandbox.quick()).filter(node=>node.type==='button');
-        const crop = buttons.find(node=>text(node).includes('여백 자르기'));
+        const crop = buttons.find(node=>text(node).includes('다시 자르기'));
         const placement = buttons.find(node=>text(node).includes('크기·간격'));
         assert.ok(crop && placement);
         crop.props.onClick(); placement.props.onClick();
-        assert.deepEqual(calls,['crop','placement',['focus','side-panel-placement']]);
+        assert.deepEqual(calls,[['crop','p1'],'placement',['focus','side-panel-placement']]);
+        buttons.find(node=>text(node).includes('PNG')).props.onClick();
+        buttons.find(node=>node.props['aria-label']==='선택 자료 삭제').props.onClick();
+        assert.deepEqual(calls.slice(-2),[['png','p1'],['remove','p1']]);
         sandbox.panelBusy=true;
-        assert.equal(walk(sandbox.quick()).find(node=>node.type==='button' && text(node).includes('여백 자르기')).props.disabled,true);
+        assert.equal(walk(sandbox.quick()).find(node=>node.type==='button' && text(node).includes('다시 자르기')).props.disabled,true);
 
         let scheduled;
         Object.assign(sandbox, {setAdvancedSettingsOpen:value=>{sandbox.advanced=value;},
