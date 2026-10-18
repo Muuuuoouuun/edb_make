@@ -2826,9 +2826,27 @@ function usePreviewFocusIsolation(open, ownerRef){
         target?.focus({ preventScroll: true });
       }
     };
+    // Native PDF objects can move focus into their child window without a
+    // parent-document focusin event. Recover after that window blur as well.
+    let focusFrame = null;
+    const restoreEmbeddedFocus = () => {
+      const owner = ownerRef?.current;
+      if (!owner || !isEmbeddedPreviewFocus(document.activeElement)) return;
+      const target = owner.contains(lastFocus) ? lastFocus : editorFocusableControls(owner)[0] || owner;
+      target?.focus({ preventScroll: true });
+    };
+    const onWindowBlur = () => {
+      if (focusFrame !== null) return;
+      focusFrame = window.requestAnimationFrame(() => { focusFrame = null; restoreEmbeddedFocus(); });
+    };
     document.addEventListener?.('focusin', keepFocus, true);
+    window.addEventListener('blur', onWindowBlur);
+    window.addEventListener('focus', restoreEmbeddedFocus);
     return () => {
       document.removeEventListener?.('focusin', keepFocus, true);
+      window.removeEventListener('blur', onWindowBlur);
+      window.removeEventListener('focus', restoreEmbeddedFocus);
+      if (focusFrame !== null) window.cancelAnimationFrame(focusFrame);
       previews.forEach((preview, index) => { preview.inert = previous[index]; });
     };
   }, [open, ownerRef]);
@@ -2862,6 +2880,10 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
       ref={rootRef}
       onBlur={event => {
         if (isEmbeddedPreviewFocus(event.relatedTarget)) return;
+        // A PDF child window reports a null relatedTarget before activeElement
+        // becomes the object; pointer-outside, Tab and Escape still dismiss.
+        if (event.relatedTarget == null && typeof document !== 'undefined'
+          && document.querySelector?.('.pending-preview-pdf')) return;
         if (!event.currentTarget.contains(event.relatedTarget)) closeMenu();
       }}
     >
@@ -9913,6 +9935,7 @@ function SidePanel({
   }, [settingsRequest, setTab]);
   const settingsDialogOpen = tab === 'board';
   const closeSettingsDialog = () => setTab('item');
+  usePreviewFocusIsolation(settingsDialogOpen, settingsDialogRef);
   useEffect(() => {
     if (!settingsDialogOpen) return undefined;
     const dialog = settingsDialogRef.current;

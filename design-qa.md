@@ -27,7 +27,8 @@ final result: passed
 3. **Blocked — P2:** 기존 검수 상단바·페이지 헤더가 중복되어 원본 캔버스를 줄였다. 편집 중에는 원본 전용 헤더와 아래 배율 도구로 통합했다. 수동 작업의 전체 선택·복제·자동 정렬·삭제는 유지한다.
 4. **Blocked — P2:** 여백 ± 버튼과 활성 preset 표시가 없었다. 실제 픽셀 geometry와 연결한 버튼·직접 입력을 추가했다. Shift+클릭으로 10% 조절, 입력 중 Enter가 전체 crop을 적용하지 않도록 처리했다.
 5. **Blocked — P2:** preview max-height가 긴 crop의 아래쪽을 가릴 수 있었다. 제한 높이에 맞춰 preview 너비도 함께 계산하여 전체 crop 비율을 보존한다. 4배 loupe는 원본 이미지를 사용한다.
-6. **Passed:** 위 수정 후 동일 viewport/state에서 재캡처·full/focused 비교. 아래 기능 검사와 narrow viewport 검사에서 남은 P0/P1/P2가 없다. 원본의 기능 실험 중 이번 범위에 넣지 않은 항목은 위 scope에 명시했다.
+6. **Blocked — P1:** 대기 PDF의 child window가 parent `focusin` 없이 포커스를 가져가 메뉴가 닫히거나 설정 포커스가 벗어났다. shared focus isolation이 window blur/focus에서도 복원하도록 보완하고, native PDF로 인한 null-relatedTarget blur를 실제 바깥 클릭·Tab 이동과 구분했다. 설정 native modal에도 같은 격리를 연결했다.
+7. **Passed:** 위 수정 후 동일 viewport/state에서 재캡처·full/focused 비교. 아래 기능 검사와 narrow viewport 검사에서 남은 P0/P1/P2가 없다. 원본의 기능 실험 중 이번 범위에 넣지 않은 항목은 위 scope에 명시했다.
 
 ## Required fidelity surfaces
 
@@ -48,6 +49,7 @@ final result: passed
 - 실제 backend 저장 3개: 취소 시 무변경, crop의 ID/번호/순서 유지와 선택 외 geometry 보존, batch split의 선택 문항만 교체.
 - 추가 실제 동작 3개: 남은 대상만 처리 방식을 변경, PNG 다운로드, 빈 홈의 inspector 미마운트.
 - 세부 3개: ± 버튼과 preset 상태, preview aspect ratio, P 패널 좌우 전환이 양쪽 layout에서 usable canvas 폭을 보존.
+- 기존 좌측 파일·수업 이름·설정·반응형 23개 전체 재검사: passed, JS errors/warnings 0. Native PDF focus 복원 unit 및 관련 검사 30개도 통과했다.
 - 기존 500문항 browser 회귀 9개: Shift/Ctrl 범위, preview 이전/다음과 1024px 이미지, virtual tile mount, keyboard selection, 먼 항목 이동, drag/undo, narrow linkage.
 - 프런트 deterministic bundle/cache와 Windows/macOS packaging asset manifest를 검증한다. 이 보고서는 공개 배포/서명/공증 완료를 뜻하지 않는다.
 
