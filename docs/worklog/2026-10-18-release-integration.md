@@ -21,3 +21,9 @@ Keep the approved left original-file picker, full lesson-name editor, state-driv
 ## Packaging
 
 Build internal version 0.2.6 from the merged master commit on native Windows and both macOS architectures. Verify uploaded release evidence against that exact commit, version, artifact size and SHA-256. Internal packages do not publish the updater feed or attest public distribution signing, notarization, licensing approval or private-corpus evidence.
+
+## Intel macOS dependency build correction
+
+The initial 0.2.6 run on master `f51cdb6` passed Windows and Apple Silicon packaging, but Intel failed while preparing `cryptography==49.0.0`: upstream publishes no compatible Intel wheel, and the no-isolation installer lacked `maturin`. A PyPI wheel audit found no other missing native Intel wheel in the current release closure (`pyhwp` is an existing setuptools source build).
+
+Keep cryptography 49 and its reviewed source SHA-256. Install exact hashed maturin/cffi/pycparser build tools into a temporary directory only for Intel macOS, use Cargo's lock and statically link runner OpenSSL 3, then remove the tools and reconcile the complete hashed runtime lock without PYTHONPATH. Check that maturin is absent from the release environment. Windows and Apple Silicon retain their existing wheel path. Native packages must be rebuilt from the corrected merged master before completing this task.
