@@ -6,11 +6,11 @@ from test_ui_placement_details import NODE_SETUP, run_node
 
 
 QUEUE_SETUP = NODE_SETUP + r"""
-async function runQueue(mode, selectedIntent) {
+async function runQueue(mode, selectedIntent, keepAttachedFigures = true) {
   const sandbox = placementSandbox();
   const requests = [], failures = [];
   Object.assign(sandbox, {
-    useCallback: fn => fn, initialSessionLoaded: true, operationRecovery: null,
+    useCallback: fn => fn, initialSessionLoaded: true, operationRecovery: null, keepAttachedFigures,
     listUnique: values => [...new Set(values)],
     pendingFiles: [{ name: '수학.pdf', size: 10, lastModified: 1 }],
     inputIntent: selectedIntent, aiEnabled: false, userSettings: {}, session: null, usingMock: false,
@@ -56,6 +56,18 @@ async function runQueue(mode, selectedIntent) {
 
 
 class TestUiUploadIntent(unittest.TestCase):
+    def test_attachment_toggle_reaches_recognition_and_registration_requests(self) -> None:
+        run_node(QUEUE_SETUP + r"""
+        (async () => {
+          for (const mode of ['recognize', 'register', 'manual-split']) {
+            for (const keep of [true, false]) {
+              const {request} = await runQueue(mode, 'multi-problem', keep);
+              assert.equal(request.options.preserveMediaMode, keep ? 'auto' : 'grayscale');
+            }
+          }
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
     def test_register_ignores_legacy_single_problem_intent_and_keeps_full_page(self) -> None:
         run_node(QUEUE_SETUP + r"""
         (async () => {

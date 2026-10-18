@@ -98,7 +98,7 @@ let expectedBoardHtml = boardHtml
 
 // Editor modes and the home screen ship separately from the shared stylesheet.
 // Hash every linked surface so an in-place update cannot keep an old design.
-for (const stylesheet of ["editor-layout", "editor-focus", "home-redesign"]) {
+for (const stylesheet of ["editor-layout", "editor-focus", "home-redesign", "original-editor"]) {
   const filename = `${stylesheet}.css`;
   const digest = crypto.createHash("sha256").update(await fs.readFile(path.join(uiRoot, filename))).digest("hex");
   const pattern = new RegExp(`${stylesheet}\\.css\\?v=[A-Za-z0-9._-]+`, "g");

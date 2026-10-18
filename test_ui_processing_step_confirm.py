@@ -88,12 +88,13 @@ function controller() {
       + 'globalThis.applySelected = applySelectedStep; })()', sandbox);
   }
   function clickFooter(bulk) {
-    const call = source.indexOf('onConfirm(item.id, { bulk, processingStep: item.step });');
+    const call = source.indexOf('onConfirm(item.id, { bulk, problemIds: bulk ? remainingApplyIds : [item.id], processingStep: item.step });');
     const start = source.lastIndexOf('onClick={() => {', call) + 'onClick={() => {'.length;
     const end = source.indexOf('\n              }}', call);
     assert.ok(call >= 0 && end > start, 'processing confirmation click handler is missing');
     sandbox.footerBulk = bulk;
     vm.runInContext('(() => { const item = globalThis.items.find(item => item.id === globalThis.activeId);'
+      + 'const items=globalThis.items;' + section('  const remainingReviewItems =', '  const showItemConfirmBar =')
       + 'const bulk = globalThis.footerBulk; const onConfirm = (...args) => {'
       + 'globalThis.pendingConfirm = globalThis.confirm(...args); };'
       + source.slice(start, end) + '})()', sandbox);
@@ -116,6 +117,17 @@ function assertEditorStatePreserved(before, after) {
 
 
 class TestUiProcessingStepConfirm(unittest.TestCase):
+    def test_remaining_bulk_leaves_already_reviewed_processing_unchanged(self) -> None:
+        run_node(CONFIRM_SETUP + r"""
+        (async () => {
+          const {sandbox,state,clickFooter}=controller();
+          sandbox.items[0].reviewStatus='normal';
+          await clickFooter(true);
+          assert.equal(steps(state.restores[0]),'s2,s1');
+          assert.deepEqual(Array.from(state.mutations[0].args.problemIds),['p2']);
+        })().catch(error=>{console.error(error);process.exitCode=1;});
+        """)
+
     def test_same_click_bulk_processing_restores_chosen_step_and_keeps_prechange_undo(self) -> None:
         run_node(CONFIRM_SETUP + r"""
         (async () => {

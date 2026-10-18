@@ -3463,30 +3463,16 @@
     box-shadow: var(--shadow-2);
   }
   .app-update-dialog::backdrop{ background: rgba(15, 23, 42, .38); }
-  .media-preservation-control{ display: grid; gap: 8px; }
-  .media-preservation-control p, .media-preservation-control small{ margin: 0; color: var(--muted); font-size: var(--text-xs); line-height: 1.5; }
-  .media-preservation-control .btn{ white-space: normal; }
-  .media-preservation-dialog{ width: min(1000px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-sizing: border-box; overflow: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); padding: 20px; }
-  .media-preservation-dialog::backdrop{ background: rgba(15, 23, 42, .5); }
-  .media-preservation-dialog header, .media-preservation-dialog footer{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .media-preservation-dialog footer{ justify-content: flex-end; flex-wrap: wrap; margin-top: 16px; }
-  .media-preservation-dialog p{ font-size: var(--text-sm); line-height: 1.5; }
-  .media-editor-layout{ display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: 16px; }
-  .media-editor-image-scroll{ max-height: 60dvh; overflow: auto; background: #e2e8f0; padding: 8px; }
-  .media-editor-canvas{ position: relative; user-select: none; cursor: crosshair; }
-  .media-editor-canvas img{ display: block; width: 100%; height: auto; }
-  .media-editor-canvas svg{ position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-  .media-editor-canvas rect{ fill: rgba(14, 165, 233, .12); stroke: #0369a1; stroke-width: 2; }
-  .media-editor-canvas rect.selected{ fill: rgba(234, 179, 8, .2); stroke: #92400e; stroke-width: 3; }
-  .media-editor-canvas text{ fill: #111827; stroke: #fff; stroke-width: 3px; paint-order: stroke; font-weight: 700; }
-  .media-editor-fields{ display: flex; flex-direction: column; gap: 10px; }
-  .media-editor-fields label{ display: grid; gap: 4px; font-size: var(--text-xs); }
-  .media-editor-fields input, .media-editor-fields select{ box-sizing: border-box; width: 100%; min-height: 36px; padding: 6px; }
-  @media(max-width: 640px){
-    .media-editor-layout{ grid-template-columns: minmax(0, 1fr); }
-    .media-editor-fields{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .media-editor-image-scroll{ max-height: 45dvh; }
-  }
+  .figure-color-toggle{ display: flex; width: 100%; box-sizing: border-box; align-items: center; justify-content: space-between; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: var(--control-radius); background: var(--surface); cursor: pointer; }
+  .figure-color-toggle > span{ min-width: 0; display: grid; gap: 4px; }
+  .figure-color-toggle strong{ font-size: var(--text-sm); }
+  .figure-color-toggle small{ font-size: var(--text-xs); color: var(--muted); line-height: 1.5; }
+  .figure-color-toggle input{ appearance: none; position: relative; flex: 0 0 auto; width: 38px; height: 22px; margin: 0; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--line-strong); cursor: pointer; }
+  .figure-color-toggle input::before{ content: ''; position: absolute; width: 16px; height: 16px; top: 2px; left: 2px; border-radius: 50%; background: var(--surface); transition: transform var(--motion-fast); }
+  .figure-color-toggle input:checked{ background: var(--accent-ink); border-color: var(--accent-ink); }
+  .figure-color-toggle input:checked::before{ transform: translateX(16px); }
+  .figure-color-toggle input:focus-visible{ outline: 2px solid var(--accent-ink); outline-offset: 3px; }
+  .figure-color-toggle:has(input:disabled){ cursor: default; opacity: .65; }
   .app-update-dialog > header{
     display: flex;
     align-items: center;

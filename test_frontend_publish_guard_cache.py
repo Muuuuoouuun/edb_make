@@ -23,7 +23,7 @@ class TestPublishGuardCacheInvalidation(unittest.TestCase):
             for filename in ("art.jsx", "tweaks-panel.jsx", "app.jsx"):
                 (ui / filename).write_text("const fixture = <div />;\n", encoding="utf-8")
             (ui / "board.css").write_text("body { margin: 0; }\n", encoding="utf-8")
-            surfaces = ("editor-layout", "editor-focus", "home-redesign")
+            surfaces = ("editor-layout", "editor-focus", "home-redesign", "original-editor")
             for name in surfaces:
                 (ui / f"{name}.css").write_text(".surface { display: block; }\n", encoding="utf-8")
             guard = ui / "publish_guard.js"

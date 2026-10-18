@@ -243,3 +243,61 @@ def test_content_trim_and_padding_offset_anchor_manual_regions_to_the_original_p
     assert problem["preserveMediaSourceRegions"][0]["bbox"] == {"left": 400, "top": 210, "width": 160, "height": 160}
     app_server._mutate_crop(media_session, "p7", {"cropBox": {"left": 100, "top": 60, "width": 950, "height": 600}})
     assert pixel(problem, (380, 220)) == (210, 65, 75, 255)
+
+
+def test_grayscale_toggle_keeps_shading_through_crop_reload_and_final_export(media_session):
+    updated = app_server._mutate_preserve_media_many(media_session, ["p7"], "grayscale")
+    problem = updated["problems"][0]
+    red = pixel(problem, (480, 280))
+    blue = pixel(problem, (360, 175))
+    assert red[0] == red[1] == red[2] and 100 < red[0] < 120 and red[3] == 255
+    assert blue[0] == blue[1] == blue[2] and blue != red
+    assert pixel(problem, (480, 280), board=False) == (210, 65, 75, 255)
+    assert_encoded_pixel(updated, (480, 280), red)
+    updated = json.loads(json.dumps(updated))
+    app_server._mutate_crop(updated, "p7", {"cropBox": {"left": 100, "top": 60, "width": 950, "height": 600}})
+    assert pixel(updated["problems"][0], (380, 220)) == red
+    assert_encoded_pixel(updated, (380, 220), red)
+    restored = app_server._mutate_preserve_media_many(updated, ["p7"], "auto")
+    assert pixel(restored["problems"][0], (380, 220)) == (210, 65, 75, 255)
+
+
+def test_bulk_figure_toggle_updates_all_targets_and_is_atomic_on_failure(media_session, tmp_path):
+    second = copy.deepcopy(media_session["problems"][0])
+    second["id"] = "p8"
+    media_session["problems"].append(second)
+    original = copy.deepcopy(media_session)
+    result = app_server._mutate_preserve_media_many(media_session, ["p7", "p8", "p7"], "grayscale")
+    assert media_session == original
+    assert all(problem["preserveMediaMode"] == "grayscale" for problem in result["problems"])
+    broken = copy.deepcopy(media_session)
+    broken["problems"][1]["imagePath"] = (tmp_path / "missing.png").as_uri()
+    before = copy.deepcopy(broken)
+    with pytest.raises(FileNotFoundError):
+        app_server._mutate_preserve_media_many(broken, ["p7", "p8"], "grayscale")
+    assert broken == before
+
+
+def test_figure_preference_for_raw_items_does_not_replace_their_preview(media_session):
+    media_session["problems"][0]["step"] = "s1"
+    original_path = media_session["problems"][0]["boardRenderPath"]
+    updated = app_server._mutate_preserve_media_many(media_session, ["p7"], "grayscale")
+    assert updated["problems"][0]["boardRenderPath"] == original_path
+    assert updated["problems"][0]["preserveMediaMode"] == "grayscale"
+
+
+def test_attachment_grayscale_option_is_applied_during_recognition_and_saved(tmp_path):
+    source = tmp_path / "math.png"
+    color_worksheet().save(source)
+    result = run_problem_export(source, output_dir=tmp_path / "output", subject_name="math",
+        ocr="none", ai_fallback="off", input_intent="single-problem", processing_step="s2",
+        preserve_media_mode="grayscale", skip_deskew=True, skip_crop=True, export_edb=False, sync_ui=False)
+    session = json.loads(result["ui_session_path"].read_text())
+    problem = session["problems"][0]
+    assert problem["preserveMediaMode"] == "grayscale"
+    assert problem["preserveMediaRegions"][0]["renderMode"] == "grayscale"
+    offset = problem["cropSourceOffset"]
+    point = (480 - offset["left"], 280 - offset["top"])
+    value = pixel(problem, point)
+    assert value[0] == value[1] == value[2] and 100 < value[0] < 120
+    assert_encoded_pixel(session, point, value)

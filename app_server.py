@@ -5128,6 +5128,7 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                     )
                     if isinstance(region, dict)
                 ],
+                preserve_media_mode=_media_mode(problem),
                 source_segments=_clone_jsonish(problem.get("sourceSegments") or problem.get("source_segments") or []),
             )
         )
@@ -5482,7 +5483,7 @@ def _crop_refreshes_board_render(problem: dict[str, Any]) -> bool:
 
 def _media_mode(problem: dict[str, Any]) -> str:
     mode = problem.get("preserveMediaMode", problem.get("preserve_media_mode", "auto"))
-    return mode if mode in {"auto", "manual", "off"} else "auto"
+    return mode if mode in {"auto", "manual", "off", "grayscale"} else "auto"
 
 
 def _set_media_regions(problem: dict[str, Any], regions: list[dict[str, Any]]) -> None:
@@ -5614,9 +5615,11 @@ def _refresh_media_for_crop(problem: dict[str, Any], path: Path, manual_regions:
     mode = _media_mode(problem)
     role = problem.get("passageRole") or problem.get("passage_role") or (problem.get("metadata") or {}).get("passage_role")
     with Image.open(path) as image:
-        regions = ([] if mode == "off" or (mode == "auto" and role == "child_question")
+        regions = ([] if mode == "off" or (mode in {"auto", "grayscale"} and role == "child_question")
                    else (manual_regions or []) if mode == "manual"
                    else _lazy_call("raster_media", "detect_color_media_regions", image))
+    if mode == "grayscale":
+        regions = [{**region, "renderMode": "grayscale"} for region in regions]
     _set_media_regions(problem, regions)
 
 
@@ -5657,10 +5660,11 @@ def _mutate_preserve_media(session: dict[str, Any], problem_id: str, mode: str, 
     from PIL import Image
 
     _index, problem = _find_problem(session, problem_id)
-    if _normalize_processing_step(problem.get("step") or problem.get("processingStep")) != "s2":
+    step = _normalize_processing_step(problem.get("step") or problem.get("processingStep"))
+    if mode == "manual" and step != "s2":
         raise ValueError("그림 원본 보존은 2단계 분필 변환에서 설정할 수 있습니다.")
-    if mode not in {"auto", "manual", "off"}:
-        raise ValueError("mode must be auto, manual or off")
+    if mode not in {"auto", "manual", "off", "grayscale"}:
+        raise ValueError("mode must be auto, manual, off or grayscale")
     path = _resolve_session_path(problem.get("imagePath"))
     if path is None or not path.exists():
         raise FileNotFoundError("problem image missing")
@@ -5683,12 +5687,30 @@ def _mutate_preserve_media(session: dict[str, Any], problem_id: str, mode: str, 
     _set_media_regions(updated, regions)
     updated["preserveMediaSourceRegions"] = _manual_media_source_regions(updated, size) if mode == "manual" else []
     _refresh_media_for_crop(updated, path, regions)
-    board_path = _crop_dir_for_session(session) / _make_crop_filename(problem_id, "media_board")
-    _render_board_crop_from_raw(path, board_path, updated)
-    updated["boardRenderPath"] = board_path.resolve().as_uri()
+    pdf_regions = [dict(region) for region in (problem.get("preserveMediaRegions") or [])
+                   if str(region.get("source") or "").startswith("pdf_")]
+    if mode in {"auto", "grayscale"} and pdf_regions:
+        for region in pdf_regions:
+            region.pop("renderMode", None)
+            if mode == "grayscale":
+                region["renderMode"] = "grayscale"
+        _set_media_regions(updated, pdf_regions)
+    if step == "s2":
+        board_path = _crop_dir_for_session(session) / _make_crop_filename(problem_id, "media_board")
+        _render_board_crop_from_raw(path, board_path, updated)
+        updated["boardRenderPath"] = board_path.resolve().as_uri()
     problem.update(updated)
     _refresh_mutated_crop_layout(problem, path)
     return session
+
+
+def _mutate_preserve_media_many(session: dict[str, Any], problem_ids: list[str], mode: str) -> dict[str, Any]:
+    if mode not in {"auto", "grayscale"} or not problem_ids:
+        raise ValueError("그림 색상 설정과 적용할 자료를 선택해 주세요.")
+    updated = _clone_jsonish(session)
+    for problem_id in dict.fromkeys(problem_ids):
+        _mutate_preserve_media(updated, problem_id, mode, [])
+    return updated
 
 
 def _problem_skeleton_from_parent(parent: dict[str, Any]) -> dict[str, Any]:
@@ -10744,8 +10766,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 segments = payload.get("segments")
                 new_session = _mutate_stitch_crop(session, problem_id, segments)
             elif action == "preserve-media":
-                new_session = _mutate_preserve_media(session, str(payload.get("problemId") or ""),
-                    str(payload.get("mode") or ""), payload.get("regions"))
+                if "problemIds" in payload:
+                    new_session = _mutate_preserve_media_many(session, _coerce_problem_ids(payload["problemIds"]),
+                        str(payload.get("mode") or ""))
+                else:
+                    new_session = _mutate_preserve_media(session, str(payload.get("problemId") or ""),
+                        str(payload.get("mode") or ""), payload.get("regions"))
             elif action in {"bulk-crop", "bulk_crop"}:
                 page_id = str(payload.get("pageId") or payload.get("page_id") or "")
                 regions = payload.get("regions")
@@ -12026,6 +12052,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     crop_format=crop_format,
                     input_intent=input_intent,
+                    preserve_media_mode=str(payload.get("preserveMediaMode") or "auto"),
                     page_tile_mode=str(
                         payload.get("pageTileMode")
                         or payload.get("page_tile_mode")

@@ -1924,6 +1924,7 @@ class ProblemEntry:
     input_intent: str | None = None
     force_full_page_bounds: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
+    preserve_media_mode: str = "auto"
     crop_source_offset: dict[str, int] | None = None
     source_segments: list[dict[str, Any]] = field(default_factory=list)
     board_render_preprocessed: bool = False
@@ -1951,6 +1952,7 @@ class _ProblemAssetTask:
     source_hints: tuple[str, ...] = ()
     source_media_regions: tuple[dict[str, Any], ...] = ()
     detect_color_media: bool = False
+    preserve_media_mode: str = "auto"
     render_board_asset: bool = True
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
     rendered_source_offset: dict[str, int] | None = None
@@ -2271,6 +2273,10 @@ def _apply_selective_media_preservation(
         if target_size[0] <= 0 or target_size[1] <= 0:
             continue
         patch = source.crop(source_box)
+        if region.get("renderMode") == "grayscale":
+            alpha = patch.getchannel("A")
+            patch = ImageOps.grayscale(patch).convert("RGBA")
+            patch.putalpha(alpha)
         if patch.size != target_size:
             patch = patch.resize(target_size, Image.Resampling.LANCZOS)
         output.paste(patch, (target_box[0], target_box[1]))
@@ -2483,6 +2489,8 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
         )
     if task.detect_color_media and not task.rendered_media_regions:
         task.rendered_media_regions = detect_color_media_regions(crop)
+    if task.preserve_media_mode == "grayscale":
+        task.rendered_media_regions = [{**region, "renderMode": "grayscale"} for region in task.rendered_media_regions]
     task.crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(
         task.crop_path,
@@ -2530,6 +2538,7 @@ def _problem_asset_task_dedup_key(task: _ProblemAssetTask) -> tuple[Any, ...]:
         task.trim_to_content,
         task.subject.value if isinstance(task.subject, Subject) else str(task.subject),
         task.detect_color_media,
+        task.preserve_media_mode,
         _source_hints_suggest_math(*task.source_hints),
         media_key,
     )
@@ -6136,8 +6145,11 @@ def build_problem_entries(
     board_theme: str = DEFAULT_BOARD_THEME,
     content_target: str = "all",
     render_board_assets: bool = True,
+    preserve_media_mode: str = "auto",
     timings: dict[str, int] | None = None,
 ) -> list[ProblemEntry]:
+    if preserve_media_mode not in {"auto", "grayscale"}:
+        raise ValueError("preserve_media_mode must be auto or grayscale")
     entries_started_at = time.perf_counter()
     crop_dir = output_dir / "problem_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
@@ -6472,6 +6484,7 @@ def build_problem_entries(
                             else ()
                         ),
                         detect_color_media=_problem_allows_selective_media_preservation(problem),
+                        preserve_media_mode=preserve_media_mode,
                         render_board_asset=render_board_assets,
                         trim_to_content=(
                             not preserve_page_as_is
@@ -6535,6 +6548,7 @@ def build_problem_entries(
                 input_intent=draft.input_intent,
                 force_full_page_bounds=draft.force_full_page_bounds,
                 preserve_media_regions=list(draft.preserve_media_regions),
+                preserve_media_mode=preserve_media_mode,
                 crop_source_offset=(draft.asset_task.rendered_source_offset if draft.asset_task and not draft.source_segments else None),
                 source_segments=list(draft.source_segments),
                 board_render_preprocessed=draft.asset_task is not None,
@@ -9485,6 +9499,7 @@ def build_ui_session(
                 "sourceFileName": source_path.name,
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
                 "preserveMediaRegions": list(placement.get("preserve_media_regions") or []),
+                "preserveMediaMode": placement.get("preserve_media_mode") or "auto",
                 "preserve_media_regions": list(placement.get("preserve_media_regions") or []),
                 "cropSourceOffset": placement.get("crop_source_offset"),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
@@ -10105,6 +10120,7 @@ def placement_inputs(
                 "crop_path": str(entry.crop_path),
                 "board_render_path": str(entry.board_render_path),
                 "preserve_media_regions": list(entry.preserve_media_regions),
+                "preserve_media_mode": entry.preserve_media_mode,
                 "crop_source_offset": entry.crop_source_offset,
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
@@ -11107,6 +11123,7 @@ def build_image_only_records(
                 "crop_path": str(image_payload.crop_path),
                 "board_render_path": str(image_payload.board_render_path),
                 "preserve_media_regions": list(entry.preserve_media_regions),
+                "preserve_media_mode": entry.preserve_media_mode,
                 "crop_source_offset": entry.crop_source_offset,
                 "source_page_id": placement.metadata["source_page_id"],
                 "source_path": placement.metadata["source_path"],
@@ -11296,6 +11313,7 @@ def build_mixed_records(
                 "crop_path": str(entry.crop_path),
                 "board_render_path": str(entry.board_render_path),
                 "preserve_media_regions": list(entry.preserve_media_regions),
+                "preserve_media_mode": entry.preserve_media_mode,
                 "crop_source_offset": entry.crop_source_offset,
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
@@ -11763,6 +11781,7 @@ def run_problem_export(
     content_target: str = "all",
     input_notes: str | None = None,
     processing_step: str | None = None,
+    preserve_media_mode: str = "auto",
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
     ai_fallback_provider: str = "gemini",
@@ -11889,6 +11908,7 @@ def run_problem_export(
         template,
         board_theme=resolved_board_theme,
         content_target=resolved_content_target,
+        preserve_media_mode=preserve_media_mode,
     )
     if not problem_entries and resolved_content_target == "shared-passages":
         raise ValueError("여러 문항이 함께 쓰는 공통 지문을 찾지 못했습니다")
