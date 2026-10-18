@@ -1881,6 +1881,7 @@ class ProblemEntry:
     input_intent: str | None = None
     force_full_page_bounds: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
+    crop_source_offset: dict[str, int] | None = None
     source_segments: list[dict[str, Any]] = field(default_factory=list)
     board_render_preprocessed: bool = False
     placement_extra_slots: int = 0
@@ -1909,6 +1910,7 @@ class _ProblemAssetTask:
     detect_color_media: bool = False
     render_board_asset: bool = True
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
+    rendered_source_offset: dict[str, int] | None = None
 
 
 @dataclass(slots=True)
@@ -2385,6 +2387,11 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             ):
                 segment = _erase_text_priority_unpaired_outer_vertical_guide(segment)
         flattened = _flatten_passage_segment_on_white(segment)
+        if not task.segment_bounds:
+            task.rendered_source_offset = {
+                "left": source_crop_rect[0] + horizontal_trim_px - left_padding_px,
+                "top": source_crop_rect[1] - top_padding_px,
+            }
         mapped_regions = _map_source_media_regions_to_crop(
             task.source_media_regions,
             source_crop_rect=source_crop_rect,
@@ -2520,6 +2527,7 @@ def _render_problem_assets(tasks: list[_ProblemAssetTask]) -> list[tuple[int, in
             dict(region)
             for region in canonical.rendered_media_regions
         ]
+        task.rendered_source_offset = dict(canonical.rendered_source_offset) if canonical.rendered_source_offset else None
     return [canonical_sizes[index] for index in canonical_index_by_task]
 
 
@@ -5722,6 +5730,7 @@ def _stitch_passage_image_files(
     stitched_regions_output: list[dict[str, Any]] | None = None,
     stitch_diagnostics_output: dict[str, Any] | None = None,
     source_crop_boxes_output: list[tuple[int, int, int, int]] | None = None,
+    segment_placements_output: list[dict[str, int]] | None = None,
 ) -> tuple[int, int]:
     images: list[Image.Image] = []
     for path in paths:
@@ -5739,6 +5748,8 @@ def _stitch_passage_image_files(
         transparent=transparent,
         placements_output=placements,
     )
+    if segment_placements_output is not None:
+        segment_placements_output[:] = [dict(placement) for placement in placements]
     if source_crop_boxes_output is not None:
         source_crop_boxes_output.clear()
         source_crop_boxes_output.extend(
@@ -6431,6 +6442,7 @@ def build_problem_entries(
                 input_intent=draft.input_intent,
                 force_full_page_bounds=draft.force_full_page_bounds,
                 preserve_media_regions=list(draft.preserve_media_regions),
+                crop_source_offset=(draft.asset_task.rendered_source_offset if draft.asset_task and not draft.source_segments else None),
                 source_segments=list(draft.source_segments),
                 board_render_preprocessed=draft.asset_task is not None,
             )
@@ -9380,6 +9392,7 @@ def build_ui_session(
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
                 "preserveMediaRegions": list(placement.get("preserve_media_regions") or []),
                 "preserve_media_regions": list(placement.get("preserve_media_regions") or []),
+                "cropSourceOffset": placement.get("crop_source_offset"),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
                 **({"imageRecordGeometry": image_record_geometry, "image_record_geometry": image_record_geometry}
                    if image_record_geometry is not None else {}),
@@ -9998,6 +10011,7 @@ def placement_inputs(
                 "crop_path": str(entry.crop_path),
                 "board_render_path": str(entry.board_render_path),
                 "preserve_media_regions": list(entry.preserve_media_regions),
+                "crop_source_offset": entry.crop_source_offset,
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
                 "bbox": {
@@ -10999,6 +11013,7 @@ def build_image_only_records(
                 "crop_path": str(image_payload.crop_path),
                 "board_render_path": str(image_payload.board_render_path),
                 "preserve_media_regions": list(entry.preserve_media_regions),
+                "crop_source_offset": entry.crop_source_offset,
                 "source_page_id": placement.metadata["source_page_id"],
                 "source_path": placement.metadata["source_path"],
                 "start_y_pages": round(start_y_pages, 6),
@@ -11187,6 +11202,7 @@ def build_mixed_records(
                 "crop_path": str(entry.crop_path),
                 "board_render_path": str(entry.board_render_path),
                 "preserve_media_regions": list(entry.preserve_media_regions),
+                "crop_source_offset": entry.crop_source_offset,
                 "source_page_id": entry.source_page_id,
                 "source_path": entry.source_path,
                 "start_y_pages": placement.start_y_pages,

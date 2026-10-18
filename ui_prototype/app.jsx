@@ -10303,6 +10303,11 @@ function SidePanel({
                       </div>
 
                       <div className="panel-section-hd">
+                        그림 원본 보존 <span className="line" />
+                      </div>
+                      <MediaPreservationEditor key={item.id} item={item} busy={panelBusy || !session} onSave={mutateSession} />
+
+                      <div className="panel-section-hd">
                         추가 업스케일 <span className="line" />
                       </div>
                       <button
@@ -10847,6 +10852,132 @@ function SidePanel({
     </div>
     </>
   );
+}
+
+function MediaPreservationEditor({ item, busy, onSave }){
+  const [open, setOpen] = useState(false);
+  const [size, setSize] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [regions, setRegions] = useState([]);
+  const [selected, setSelected] = useState(0);
+  const [draft, setDraft] = useState(null);
+  const dialogRef = useRef(null);
+  const dragRef = useRef(null);
+  const active = regions[selected];
+  const enabled = item.step === 's2';
+  const modeLabel = item.preserveMediaMode === 'off' ? '보존 끔'
+    : item.preserveMediaMode === 'manual' ? '직접 지정' : '자동 감지';
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const previousFocus = document.activeElement;
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => { dialog?.close(); previousFocus?.focus?.({ preventScroll: true }); };
+  }, [open]);
+  const begin = () => {
+    setRegions((item.preserveMediaRegions || []).map(region => ({
+      left: Math.round(region.bbox.left), top: Math.round(region.bbox.top),
+      width: Math.round(region.bbox.width ?? (region.bbox.right - region.bbox.left)),
+      height: Math.round(region.bbox.height ?? (region.bbox.bottom - region.bbox.top)),
+    })));
+    setSelected(0); setSize(null); setFailed(false); setDraft(null); setOpen(true);
+  };
+  const save = async mode => {
+    const next = await onSave?.('preserve-media', { problemId: item.id, mode,
+      regions: mode === 'manual' ? regions : [] });
+    if (next) setOpen(false);
+  };
+  const point = event => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return { x: Math.round(Math.max(0, Math.min(size.width, (event.clientX - rect.left) * size.width / rect.width))),
+      y: Math.round(Math.max(0, Math.min(size.height, (event.clientY - rect.top) * size.height / rect.height))) };
+  };
+  const rectangle = (start, end) => ({ left: Math.min(start.x, end.x), top: Math.min(start.y, end.y),
+    width: Math.abs(start.x - end.x), height: Math.abs(start.y - end.y) });
+  const updateBox = (field, value) => {
+    if (!active || !size || !Number.isFinite(value)) return;
+    const next = { ...active, [field]: Math.round(value) };
+    next.left = Math.max(0, Math.min(size.width - 2, next.left));
+    next.top = Math.max(0, Math.min(size.height - 2, next.top));
+    next.width = Math.max(2, Math.min(size.width - next.left, next.width));
+    next.height = Math.max(2, Math.min(size.height - next.top, next.height));
+    setRegions(previous => previous.map((region, index) => index === selected ? next : region));
+  };
+  const displayBoxes = draft ? [...regions, draft] : regions;
+  return <>
+    <div className="media-preservation-control">
+      <p>글자·수식은 분필로 바꾸고, 선택한 그림은 원본 색상과 배경을 유지합니다.</p>
+      <button className="btn" type="button" onClick={begin} disabled={busy || !enabled || !item.imageUrl} aria-haspopup="dialog">
+        그림 원본 보존 · {modeLabel} ({item.preserveMediaRegions?.length || 0}개)
+      </button>
+      {!enabled ? <small>2단계 분필 변환에서 설정할 수 있어요.</small> : null}
+    </div>
+    {open ? ReactDOM.createPortal(<dialog ref={dialogRef} className="media-preservation-dialog" aria-labelledby="media-editor-title"
+      aria-describedby="media-editor-help" aria-modal="true"
+      onCancel={event => { event.preventDefault(); if (!busy) setOpen(false); }}
+      onKeyDown={event => event.stopPropagation()}>
+      <header><strong id="media-editor-title">그림 원본 보존 영역</strong>
+        <button type="button" className="btn" disabled={busy} onClick={() => setOpen(false)}>닫기</button></header>
+      <p id="media-editor-help">원본에서 그림을 드래그해 추가하세요. 영역을 선택하면 숫자로 위치와 크기를 조정할 수 있어요. 최대 16개.</p>
+      <div className="media-editor-layout">
+        <div className="media-editor-image-scroll">
+          {failed ? <p role="alert">원본 이미지를 불러오지 못했어요. 창을 닫고 다시 시도해 주세요.</p> : null}
+          <div className="media-editor-canvas" style={{ touchAction: 'none' }}
+            onPointerDown={event => {
+              if (!size || busy || regions.length >= 16 || event.button !== 0) return;
+              event.preventDefault(); event.currentTarget.setPointerCapture(event.pointerId);
+              dragRef.current = point(event); setDraft(null);
+            }}
+            onPointerMove={event => { if (dragRef.current && size) setDraft(rectangle(dragRef.current, point(event))); }}
+            onPointerUp={event => {
+              if (!dragRef.current || !size) return;
+              const box = rectangle(dragRef.current, point(event));
+              dragRef.current = null; setDraft(null);
+              if (box.width >= 2 && box.height >= 2) { setSelected(regions.length); setRegions(previous => [...previous, box]); }
+            }}
+            onPointerCancel={() => { dragRef.current = null; setDraft(null); }}>
+            <img src={item.imageUrl} alt={`${item.name} 원본, 그림 보존 영역 선택`} draggable={false}
+              onLoad={event => setSize({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+              onError={() => { setFailed(true); setSize(null); }} />
+            {size ? <svg viewBox={`0 0 ${size.width} ${size.height}`} aria-hidden="true">
+              {displayBoxes.map((box, index) => <g key={index}>
+                <rect x={box.left} y={box.top} width={box.width} height={box.height}
+                  className={index === selected ? 'selected' : ''} vectorEffect="non-scaling-stroke" />
+                <text x={box.left + 4} y={box.top + 18} fontSize={Math.max(18, size.width / 48)}>{index + 1}</text>
+              </g>)}
+            </svg> : null}
+          </div>
+        </div>
+        <div className="media-editor-fields">
+          <button type="button" className="btn" disabled={busy || !size || regions.length >= 16} onClick={() => {
+            setSelected(regions.length);
+            setRegions(previous => [...previous, { left: Math.floor(size.width / 4), top: Math.floor(size.height / 4),
+              width: Math.max(2, Math.floor(size.width / 2)), height: Math.max(2, Math.floor(size.height / 2)) }]);
+          }}>영역 추가</button>
+          <label>선택 영역<select aria-label="선택 영역" value={selected} disabled={busy || !regions.length}
+            onChange={event => setSelected(Number(event.target.value))}>
+            {regions.length ? regions.map((_region, index) => <option key={index} value={index}>그림 {index + 1}</option>) : <option value={0}>지정한 영역 없음</option>}
+          </select></label>
+          {active && size ? <>
+            {[["left", "왼쪽"], ["top", "위쪽"], ["width", "너비"], ["height", "높이"]].map(([field, label]) =>
+              <label key={field}>{label} (px)<input type="number" value={active[field]} disabled={busy}
+                min={field === 'width' || field === 'height' ? 2 : 0}
+                max={field === 'left' || field === 'width' ? size.width : size.height}
+                onChange={event => updateBox(field, event.target.valueAsNumber)} /></label>)}
+            <button type="button" className="btn" disabled={busy} onClick={() => {
+              setRegions(previous => previous.filter((_region, index) => index !== selected)); setSelected(0);
+            }}>선택 영역 삭제</button>
+          </> : null}
+          <p role="status">{regions.length}개 영역 · 직접 지정하면 흑백 그림도 보존합니다.</p>
+        </div>
+      </div>
+      <footer>
+        <button type="button" className="btn" disabled={busy || !size} onClick={() => save('auto')}>자동 다시 감지</button>
+        <button type="button" className="btn" disabled={busy} onClick={() => save('off')}>보존 끄기</button>
+        <button type="button" className="btn primary" disabled={busy || !size || Boolean(draft)} onClick={() => save('manual')}>지정 영역 저장</button>
+      </footer>
+    </dialog>, document.body) : null}
+  </>;
 }
 
 function HomeUpdateDialog({ open, onClose, busy, versionLine, statusLabel, children }){
@@ -12651,6 +12782,8 @@ function mapProblemToItem(problem, idx, rawSession = null){
       ? Number(problem.boardRowHeightPages ?? problem.board_row_height_pages)
       : null,
     manualCrop,
+    preserveMediaMode: problem.preserveMediaMode || problem.preserve_media_mode || 'auto',
+    preserveMediaRegions: problem.preserveMediaRegions || problem.preserve_media_regions || [],
   };
 }
 
@@ -16545,6 +16678,7 @@ function App(){
         : action === 'merge' ? '문제를 합치는 중…'
         : action === 'crop' ? '이미지를 자르는 중…'
         : action === 'stitch-crop' ? '지문 영역을 이어붙이는 중…'
+        : action === 'preserve-media' ? '그림 보존 영역을 적용하는 중…'
         : action === 'bulk-crop' ? '수동 자르기를 적용하는 중…'
         : action === 'exclude' ? '문제를 제외하는 중…'
         : action === 'confirm' ? '확인 상태를 저장하는 중…'
@@ -16569,6 +16703,7 @@ function App(){
         : action === 'merge' ? '문제를 합쳤어요'
         : action === 'crop' ? '자르기를 적용했어요'
         : action === 'stitch-crop' ? '선택 영역을 한 지문으로 합쳤어요'
+        : action === 'preserve-media' ? '그림 원본 보존 설정을 저장했어요'
         : action === 'bulk-crop' ? '수동 자르기를 적용했어요'
         : action === 'confirm' ? '확인 상태를 저장했어요'
         : action === 'confirm-page' ? '지문 없음으로 확인했어요'

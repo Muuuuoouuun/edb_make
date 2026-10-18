@@ -327,7 +327,7 @@ jobs:
       - name: Run image-pipeline regression in isolated test tools
         run: |
           .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --no-deps --target "$RUNNER_TEMP/edb-image-test-tools" -r requirements-ci.lock
-          PYTHONPATH="$RUNNER_TEMP/edb-image-test-tools" .venv/bin/python -m pytest -q test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
+          PYTHONPATH="$RUNNER_TEMP/edb-image-test-tools" .venv/bin/python -m pytest -q test_app_server_media_preservation.py test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
 
       - name: Import macOS signing certificate
         env:
@@ -540,7 +540,7 @@ jobs:
           $previousPythonPath = $env:PYTHONPATH
           try {
             $env:PYTHONPATH = "$env:RUNNER_TEMP/edb-image-test-tools"
-            .\.venv\Scripts\python.exe -m pytest -q test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
+            .\.venv\Scripts\python.exe -m pytest -q test_app_server_media_preservation.py test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
             if ($LASTEXITCODE -ne 0) { throw "Image pipeline regression failed." }
           } finally {
             $env:PYTHONPATH = $previousPythonPath
