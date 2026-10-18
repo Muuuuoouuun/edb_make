@@ -38,6 +38,9 @@ class TestUiSourceFiles(unittest.TestCase):
         assert.equal(result[0].name,filename); assert.deepEqual(result[0].problemIds,['q']);
         assert.deepEqual(result[1].problemIds,[]);
         assert.equal(sandbox.sourceReferenceParts('/source/real_0123456789.pdf').name,'real_0123456789.pdf');
+        const named = entries({input_files:[`/uploads/${digest}_${filename}`,'/uploads/다른.pdf'],
+          pages:[{id:'p',source_file_name:filename}]},[{id:'q',sourcePageId:'p'}]);
+        assert.deepEqual(named[0].problemIds,['q'],'legacy original filename also resolves uniquely');
         """)
 
     def test_legacy_pages_without_input_files_remain_separate_sources(self):

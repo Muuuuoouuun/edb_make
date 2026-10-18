@@ -6118,6 +6118,7 @@ function sourceFileNavigationEntries(session, items, pendingFiles = []){
     let matches = entries.filter(entry => references.some(reference => reference.path === entry.path));
     if (!matches.length) matches = entries.filter(entry => entry.digest && references.some(reference => reference.digest === entry.digest));
     if (!matches.length) matches = entries.filter(entry => references.some(reference => reference.basename === entry.basename));
+    if (!matches.length) matches = entries.filter(entry => entry.name && references.some(reference => reference.name === entry.name));
     let entry = matches.length === 1 ? matches[0] : null;
     if (!entry && !matches.length && !hasDeclaredInputs && explicit[0]) entry = register(explicit[0]);
     if (!entry && hasDeclaredInputs && entries.length === 1 && matches.length === 0) entry = entries[0];
