@@ -9004,6 +9004,17 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
     return session
 
 
+def _mutate_session_name(session: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Rename lesson metadata without touching source files or image/layout state."""
+    if not isinstance(value, str):
+        raise ValueError("수업 이름을 문자열로 입력해 주세요.")
+    name = value.strip()
+    if not name or len(name) > 160 or re.search(r"[\x00-\x1f\x7f]", name):
+        raise ValueError("수업 이름을 1~160자로 입력해 주세요. 줄바꿈은 사용할 수 없습니다.")
+    session["session_name"] = name
+    return session
+
+
 def _mutate_problem_number(session: dict[str, Any], problem_id: str, value: Any) -> dict[str, Any]:
     """Update label metadata only; never rerun OCR or change layout/image assets."""
     text = str(value).strip() if value is not None else ""
@@ -10687,7 +10698,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json(response)
 
     # ── /api/session/mutate ──────────────────────────────────────────────
-    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "confirm" | "confirm-page" | "problem-number" | "classify", ...args }
+    # Body: { "action": "split" | "merge" | "crop" | "stitch-crop" | "bulk-crop" | "exclude" | "confirm" | "confirm-page" | "session-name" | "problem-number" | "classify", ...args }
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session, current_revision = self._current_session_state()
@@ -10758,6 +10769,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     ids_raw = [payload.get("pageId", payload.get("page_id"))]
                 decision = str(payload.get("decision") or "no_passage")
                 new_session = _mutate_confirm_pages(session, ids_raw, decision=decision)
+            elif action == "session-name":
+                new_session = _mutate_session_name(session, payload.get("sessionName"))
             elif action == "problem-number":
                 if "problemNumber" not in payload:
                     raise ValueError("problemNumber is required")
@@ -10776,7 +10789,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 new_session = _mutate_enhance_image(session, payload)
             else:
                 self._send_json(
-                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|preserve-media|bulk-crop|exclude|confirm|confirm-page|problem-number|classify|retry-ai|enhance-image)"},
+                    {"ok": False, "error": f"unknown action: {action!r} (expected split|merge|crop|stitch-crop|preserve-media|bulk-crop|exclude|confirm|confirm-page|session-name|problem-number|classify|retry-ai|enhance-image)"},
+
                     status=HTTPStatus.BAD_REQUEST,
                 )
                 return

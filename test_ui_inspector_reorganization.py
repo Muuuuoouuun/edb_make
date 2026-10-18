@@ -116,14 +116,15 @@ class TestInspectorReorganization(unittest.TestCase):
         const quick = findElement(node => attrText(node,'aria-label') === '선택 자료 빠른 편집');
         const sandbox = renderSandbox(), calls = [];
         Object.assign(sandbox, {panelBusy:false,
-          focusManualCrop:()=>calls.push('crop'),setTab:tab=>calls.push(tab)});
+          focusManualCrop:()=>calls.push('crop'),setTab:tab=>calls.push(tab),
+          document:{getElementById:id=>({focus:()=>calls.push(['focus',id])})}});
         compile(sandbox,'globalThis.quick = () => ('+snippet(quick.node)+');');
         const buttons = walk(sandbox.quick()).filter(node=>node.type==='button');
         const crop = buttons.find(node=>text(node).includes('여백 자르기'));
         const placement = buttons.find(node=>text(node).includes('크기·간격'));
         assert.ok(crop && placement);
         crop.props.onClick(); placement.props.onClick();
-        assert.deepEqual(calls,['crop','placement']);
+        assert.deepEqual(calls,['crop','placement',['focus','side-panel-placement']]);
         sandbox.panelBusy=true;
         assert.equal(walk(sandbox.quick()).find(node=>node.type==='button' && text(node).includes('여백 자르기')).props.disabled,true);
 

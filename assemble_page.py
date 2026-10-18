@@ -346,6 +346,9 @@ def sort_blocks_for_reading_order(blocks: list[ContentBlock]) -> list[ContentBlo
             key=lambda block: (
                 int(block.metadata.get("column_index", 0)),
                 int(block.metadata.get("question_band_index", block.reading_order)),
+                # Recovered leftovers inherit their predecessor's band; keep
+                # them after it even when they sit higher (next column top).
+                1 if block.metadata.get("recovered_uncovered_region") else 0,
                 round(block.bbox.top, 4),
                 round(block.bbox.left, 4),
             ),

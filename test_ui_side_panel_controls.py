@@ -1,6 +1,8 @@
 """Interaction checks for panel navigation and explicit setting/save states."""
 from __future__ import annotations
 
+from pathlib import Path
+
 import unittest
 
 from test_ui_sidebar_hierarchy import RENDER_SETUP, NODE_SETUP, run_node
@@ -33,60 +35,23 @@ class TestSidePanelControls(unittest.TestCase):
         assert.equal(sandbox.tab, 'board');
         """)
 
-    def test_rendered_tabs_have_one_tab_stop_and_control_the_matching_hidden_panel(self) -> None:
-        run_node(RENDER_SETUP + r"""
-        const sandbox = renderSandbox();
-        Object.assign(sandbox, { tab: 'item', itemPosLabel: '01 / 02', panelTabRefs: { current: {} },
-          setTab: tab => { sandbox.tab = tab; }, handlePanelTabKeyDown() {},
-          panelSaveState: { dirty: true, label: '미저장 변경' }, panelBusy: false, session: {},
-          ALTERNATE_MODIFIER_LABEL: 'Alt',
-        });
-        const bar = section('      <div className="tab-bar" role="tablist"', '      <PublishResultPanel');
-        const openings = source.match(/<section className="side-tab-panel"[^\n]+>/g);
-        assert.equal(openings.length, 3);
-        compile(sandbox, 'globalThis.renderNavigation = () => (<>' + bar
-          + openings.map(opening => opening + '</section>').join('') + '</>);');
-        for (const selected of ['item', 'placement', 'board']) {
-          sandbox.tab = selected;
-          const tree = sandbox.renderNavigation();
-          const tabs = walk(tree).filter(node => node.props.role === 'tab');
-          const panels = walk(tree).filter(node => node.props.role === 'tabpanel');
-          assert.equal(tabs.filter(node => node.props.tabIndex === 0).length, 1);
-          tabs.forEach((tab, index) => {
-            assert.ok(tab.props['data-tooltip'].includes(`Alt+${index + 1}`));
-          });
-          for (const tab of tabs) {
-            const panel = panels.find(node => node.props.id === tab.props['aria-controls']);
-            assert.ok(panel, 'every tab must reference a mounted panel');
-            assert.equal(panel.props['aria-labelledby'], tab.props.id);
-            assert.equal(panel.props.hidden, !tab.props['aria-selected']);
-            assert.equal(tab.props.tabIndex, tab.props['aria-selected'] ? 0 : -1);
-          }
-          if (selected === 'placement') {
-            assert.equal(findClass(tree, 'panel-session-state'), undefined,
-              'placement uses its existing save footer instead of duplicating the state');
-          } else {
-            assert.ok(text(findClass(tree, 'panel-session-state')).includes('미저장 변경'),
-              'switching to app settings cannot hide unsaved lesson edits');
-          }
-          assert.equal(findClass(tabs.find(node => node.props.id === 'side-tab-item'), 'badge'), undefined,
-            'tab label must not repeat the selection counter');
-          tabs.find(node => node.props.id === 'side-tab-board').props.onClick();
-          assert.equal(sandbox.tab, 'board');
-        }
-        sandbox.panelSaveState = { dirty: false, label: '샘플 미리보기 · 저장 안 됨' };
-        sandbox.session = null;
-        assert.equal(findClass(sandbox.renderNavigation(), 'panel-session-state'), undefined,
-          'idle saved/preview state must not occupy an extra row');
-        for (const selected of ['item', 'board']) {
-          sandbox.tab = selected; sandbox.panelBusy = true;
-          const state = findClass(sandbox.renderNavigation(), 'panel-session-state');
-          assert.equal(state.props.role, 'status');
-          assert.ok(text(state).includes('처리 중'));
-        }
-        sandbox.tab = 'placement';
-        assert.equal(findClass(sandbox.renderNavigation(), 'panel-session-state'), undefined);
-        """)
+    def test_inspector_sections_follow_selection_and_settings_open_as_dialog(self) -> None:
+        source = Path(__file__).with_name("ui_prototype").joinpath("app.jsx").read_text(encoding="utf-8")
+        panel = source.split("function SidePanel(", 1)[1].split("\nfunction ", 1)[0]
+        # No tab strip: the item and placement sections are both part of the inspector.
+        self.assertNotIn('role="tablist"', panel)
+        self.assertIn('id="side-panel-item" role="region" aria-label="선택한 자료" aria-keyshortcuts="Alt+1" hidden={false}', panel)
+        self.assertIn('id="side-panel-placement" role="region" aria-label="크기·배치" aria-keyshortcuts="Alt+2" hidden={!item}', panel)
+        # App settings are a modal dialog opened from the top-bar menu.
+        self.assertIn('id="side-panel-board" role="dialog" aria-modal="true"', panel)
+        self.assertIn("const settingsDialogOpen = tab === 'board';", panel)
+        self.assertIn("aria-label=\"설정 닫기\" onClick={closeSettingsDialog}", panel)
+        self.assertIn("{ id: 'settings', icon: Icon.rows3, label: '설정'", source)
+        # Multi-selection and needs-check states have their own blocks.
+        self.assertIn('className="inspector-multi"', panel)
+        self.assertIn('className="inspector-check-card"', panel)
+        # Split runs only from the left queue.
+        self.assertIn("showActions={false}", panel)
 
     def test_ai_preference_and_key_readiness_are_separate_and_named(self) -> None:
         run_node(RENDER_SETUP + r"""

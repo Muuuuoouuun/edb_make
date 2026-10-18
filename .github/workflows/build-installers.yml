@@ -296,8 +296,24 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install --disable-pip-version-check --require-hashes -r requirements-release-bootstrap.lock
+          if [[ "$(uname -m)" == "x86_64" ]]; then
+            # cryptography 49 no longer publishes Intel macOS wheels. Keep
+            # its locked sdist/hash and compile with isolated, hashed tools.
+            crypto_tools="$(mktemp -d "$RUNNER_TEMP/edb-crypto-tools.XXXXXX")"
+            trap 'rm -rf "$crypto_tools"' EXIT
+            .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: --no-deps --target "$crypto_tools" -r requirements-crypto-build.lock
+            PYTHONPATH="$crypto_tools" PATH="$crypto_tools/bin:$PATH" \
+              OPENSSL_DIR="$(brew --prefix openssl@3)" OPENSSL_STATIC=1 \
+              MATURIN_PEP517_ARGS="--locked" \
+              .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r requirements-release.lock
+            rm -rf "$crypto_tools"
+            trap - EXIT
+          fi
+          # Reconcile without PYTHONPATH so temporary build dependencies
+          # cannot satisfy (and hide missing) runtime dependencies.
           .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --no-build-isolation -r requirements-release.lock
           .venv/bin/python -m pip check
+          .venv/bin/python -c "import importlib.util; assert importlib.util.find_spec('maturin') is None, 'Isolated crypto build tools leaked into the release environment'"
 
       - name: Record reproducible build provenance
         run: |
@@ -327,7 +343,8 @@ jobs:
       - name: Run image-pipeline regression in isolated test tools
         run: |
           .venv/bin/python -m pip install --disable-pip-version-check --require-hashes --no-deps --target "$RUNNER_TEMP/edb-image-test-tools" -r requirements-ci.lock
-          PYTHONPATH="$RUNNER_TEMP/edb-image-test-tools" .venv/bin/python -m pytest -q test_app_server_media_preservation.py test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
+          PYTHONPATH="$RUNNER_TEMP/edb-image-test-tools" .venv/bin/python -m pytest -q test_app_server_media_preservation.py test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_scan_layout_regressions.py test_edb_publish_flow.py
+
 
       - name: Import macOS signing certificate
         env:
@@ -540,7 +557,8 @@ jobs:
           $previousPythonPath = $env:PYTHONPATH
           try {
             $env:PYTHONPATH = "$env:RUNNER_TEMP/edb-image-test-tools"
-            .\.venv\Scripts\python.exe -m pytest -q test_app_server_media_preservation.py test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_edb_publish_flow.py
+            .\.venv\Scripts\python.exe -m pytest -q test_app_server_media_preservation.py test_raster_media_preservation.py test_selective_media_preservation.py test_image_question_boundaries.py test_document_grid_segmentation.py test_pdf_text_marker_segmentation.py test_image_preprocess_cache.py test_pdf_preprocess_cache.py test_recognition_speed_quality.py test_segment.py test_scan_layout_regressions.py test_edb_publish_flow.py
+
             if ($LASTEXITCODE -ne 0) { throw "Image pipeline regression failed." }
           } finally {
             $env:PYTHONPATH = $previousPythonPath

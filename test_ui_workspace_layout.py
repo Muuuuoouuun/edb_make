@@ -70,8 +70,10 @@ class TestWorkspaceLayout(unittest.TestCase):
     def test_alt_digit_reveals_the_panel_and_preserves_form_shortcuts(self) -> None:
         run_node(NODE_SETUP + r"""
         let handler, cleanup, prevented = 0, revealed = 0;
+        const focused = [];
         const sandbox = { RIGHT_PANEL_TAB_SHORTCUTS: { Digit1: 'item', Digit2: 'placement', Digit3: 'board' },
-          window: { addEventListener: (_, fn) => { handler = fn; }, removeEventListener: (_, fn) => {
+          document: {getElementById:id=>({focus:()=>focused.push(id)})},
+          window: { requestAnimationFrame:fn=>fn(), addEventListener: (_, fn) => { handler = fn; }, removeEventListener: (_, fn) => {
             assert.equal(fn, handler); handler = null;
           } },
           setTab: tab => { sandbox.tab = tab; }, onRevealPanel: () => revealed++,
@@ -86,6 +88,7 @@ class TestWorkspaceLayout(unittest.TestCase):
           press(code); assert.equal(sandbox.tab, tab);
         }
         assert.equal(revealed, 3); assert.equal(prevented, 3);
+        assert.deepEqual(focused,['side-panel-item','side-panel-placement']);
         for (const target of [{ tagName: 'INPUT' }, { tagName: 'TEXTAREA' }, { tagName: 'SELECT' },
           { tagName: 'DIV', isContentEditable: true }]) press('Digit1', { target });
         for (const extra of [{ altKey: false }, { metaKey: true }, { ctrlKey: true }, { shiftKey: true }])

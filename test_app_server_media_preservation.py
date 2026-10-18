@@ -9,8 +9,9 @@ import pytest
 from PIL import Image, ImageDraw
 
 import app_server
-from build_problem_board_edb import _build_image_only_record_image, run_problem_export
+from build_problem_board_edb import _ProblemAssetTask, _build_image_only_record_image, _render_problem_asset, run_problem_export
 from edb_builder import CROP_FORMAT_V1
+from structured_schema import Box, Subject
 from test_raster_media_preservation import color_worksheet
 
 
@@ -224,3 +225,21 @@ def test_preserve_media_http_action_uses_revision_checked_session_commit(media_s
     assert commits[0][0] == media_session
     assert commits[0][1]["problems"][0]["preserveMediaMode"] == "off"
     assert commits[0][2] == {"expected_revision": 5}
+
+
+def test_content_trim_and_padding_offset_anchor_manual_regions_to_the_original_page(media_session, tmp_path):
+    image = color_worksheet()
+    task = _ProblemAssetTask(source_image=image, bounds=Box(left=0, top=0, width=1100, height=700),
+        crop_path=tmp_path / "trimmed.png", board_render_path=tmp_path / "trimmed-board.png",
+        chalk_color=(238, 238, 226), subject=Subject.MATH, trim_to_content=True, pad_edges=True)
+    _render_problem_asset(task)
+    assert task.rendered_source_offset["top"] > -36
+    problem = media_session["problems"][0]
+    problem.update(imagePath=task.crop_path.as_uri(), boardRenderPath=task.board_render_path.as_uri(),
+        cropSourceOffset=task.rendered_source_offset)
+    offset = task.rendered_source_offset
+    app_server._mutate_preserve_media(media_session, "p7", "manual", [{
+        "left": 400 - offset["left"], "top": 210 - offset["top"], "width": 160, "height": 160}])
+    assert problem["preserveMediaSourceRegions"][0]["bbox"] == {"left": 400, "top": 210, "width": 160, "height": 160}
+    app_server._mutate_crop(media_session, "p7", {"cropBox": {"left": 100, "top": 60, "width": 950, "height": 600}})
+    assert pixel(problem, (380, 220)) == (210, 65, 75, 255)
