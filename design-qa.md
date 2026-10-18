@@ -1,3 +1,65 @@
+# Design QA — 우측 검수 패널과 통합 원본 편집 (2026-10-18)
+
+final result: passed
+
+## Scope and visual truth
+
+- 사용자 첨부 `홈 UI 개선 논의 (1).zip`의 `Right Panel.dc.html`: 7a 검수 패널, 최신 통합 원본 편집 10a/10b. 원본은 `/workspace/edb-panel-design-20261018/reference/`에 격리했다.
+- 시안의 핵심 구성인 알약 탭, 원본·칠판용 썸네일, 남은 검수 대상 카드, 다시 자르기·수동 쪼개기 전환, 고정·플로팅 배치, 선택 범위·크기·여백 조절과 확대 도구를 실제 세션 동작에 연결했다.
+- 사용자 요구에 따라 기존 좌측 원본 파일·문항 목록과 상단 수업 이름 편집을 유지한다. 별도 페이지 필름스트립으로 좌측을 교체하지 않는다. 단일 문항 편집은 해당 원본 페이지만 렌더링하며 지문 이어붙이기는 여러 페이지를 유지한다.
+- 시안의 회전 예시, 8b 밝기/대비/선명도 실험은 이 변경의 이미지 처리 기능에 포함하지 않는다. 기존 crop/stitch/recognition 저장 계약을 유지하며, 회전을 적용한 것처럼 보이는 비동작 버튼을 만들지 않았다. PR #17 수동 그림 영역 편집도 포함하지 않는다.
+
+## Evidence and normalization
+
+- Browser plugin not available. 설치된 Playwright와 Chromium, deviceScaleFactor=1 사용. 외부 AI 및 사용자 원본 문서는 사용하지 않았다.
+- 원본 캡처: `reference-7a.png` 340×861; `reference-10a.png`, `reference-10b.png` 각각 1440×901. 모두 위 reference 경로의 HTML을 실제 렌더링했다.
+- 구현 CSS viewport / pixels: desktop 1440×1000, narrow 1024×960 / 700×960 / 390×960, density 1. 패널은 기존 desktop inspector 폭 300px을 유지한다. 원본 패널은 340px이다. 전체 프레임은 기존 앱 상단·좌측을 포함하므로 픽셀 일치를 주장하지 않는다.
+- 상태: 베이지 테마, 합성 자료 12개·원본 3개, 첫 문항 crop 및 selected-only manual split. 원본 시안의 3/4 문항·가짜 선 그림은 실제 fixture 문항과 카운트로 대체된다. 대기 상태는 별도의 `inspector.png`에서 실제 3개 확인 대상으로 검증했다.
+- 구현: [검수 패널](docs/qa/original-editor-20261018/inspector.png), [고정 자르기](docs/qa/original-editor-20261018/crop-fixed.png), [플로팅 자르기](docs/qa/original-editor-20261018/crop-floating.png), [스탬프](docs/qa/original-editor-20261018/stamp-fixed.png), [좁은 창](docs/qa/original-editor-20261018/narrow.png).
+- Full-view comparison: [source + implementation](docs/qa/original-editor-20261018/comparison-fixed.png), 1464×2040, 동일한 1440px 원본과 구현을 한 입력에 배치했다. 확대/축소하지 않았다.
+- Focused comparison: [원본·구현 자르기 패널](docs/qa/original-editor-20261018/comparison-crop-panel.png), 760×1100, 양쪽 320px 영역. 전체와 focused 비교 이미지를 실제로 함께 열어 확인했다.
+- 추가 비교 `comparison-inspector.png`, `comparison-floating.png`와 초기/중간 증거, 브라우저 결과 JSON은 `/workspace/edb-panel-design-20261018/`에 저장했다.
+
+## Comparison history
+
+1. **Blocked — P1/P2:** 기존 placement와 검수 패널이 동시에 공간을 나누어 처리 방식이 가려졌다. 검수/배치 화면을 분리하고 복귀 버튼을 제공했다.
+2. **Blocked — P1/P2:** crop footer가 창 아래에 숨고, layout 전환 직후 floating panel 높이가 맞지 않았다. ResizeObserver·스크롤·layout 변경에 맞춰 실제 가용 높이를 계산하고 sticky footer를 유지했다.
+3. **Blocked — P2:** 기존 검수 상단바·페이지 헤더가 중복되어 원본 캔버스를 줄였다. 편집 중에는 원본 전용 헤더와 아래 배율 도구로 통합했다. 수동 작업의 전체 선택·복제·자동 정렬·삭제는 유지한다.
+4. **Blocked — P2:** 여백 ± 버튼과 활성 preset 표시가 없었다. 실제 픽셀 geometry와 연결한 버튼·직접 입력을 추가했다. Shift+클릭으로 10% 조절, 입력 중 Enter가 전체 crop을 적용하지 않도록 처리했다.
+5. **Blocked — P2:** preview max-height가 긴 crop의 아래쪽을 가릴 수 있었다. 제한 높이에 맞춰 preview 너비도 함께 계산하여 전체 crop 비율을 보존한다. 4배 loupe는 원본 이미지를 사용한다.
+6. **Passed:** 위 수정 후 동일 viewport/state에서 재캡처·full/focused 비교. 아래 기능 검사와 narrow viewport 검사에서 남은 P0/P1/P2가 없다. 원본의 기능 실험 중 이번 범위에 넣지 않은 항목은 위 scope에 명시했다.
+
+## Required fidelity surfaces
+
+| Surface | Verification |
+| --- | --- |
+| Fonts / typography | 기존 offline Pretendard를 유지한다. 선택 문항 제목 20px, 처리 방식 14px, 설명 12px. 실제 원문 번호와 출처·상태를 표시하며 문자열 줄바꿈·생략을 유지한다. |
+| Spacing / layout | 999px 알약 탭, 18–26px 카드, 2열 margin 입력, 원본 편집 전용 canvas+panel. Inspector 폭 300px은 기존 앱 제약, narrow는 세로 배치와 독립 스크롤로 전환한다. 모든 apply footer가 접근 가능하다. |
+| Colors / tokens | 기존 베이지·크림·주황·칠판 토큰 사용. 주황 표면의 작은 텍스트는 흰색(3.30:1) 대신 진한 잉크(4.60:1)를 사용한다. Dark mode는 밝은 텍스트를 복원한다. |
+| Image quality | 가짜 문제 도형을 복사하지 않고 실제 source image와 TileImage를 사용한다. 썸네일 384px, 확대 preview 1024px, 모서리 loupe는 원본. 원본 crop 비율·전체 내용이 preview에서 보존된다. |
+| Copy / content | 남은 확인 대상 N개·선택된 1개 및 합계가 실제 ID 범위와 일치한다. 번호·순서 보존, selected-only 기본 범위, 전체 페이지/추가 scope를 구분한다. 처리 시간은 보장할 수 없는 시안의 고정 초 숫자 대신 실제 기능 설명을 유지한다. |
+| Accessibility | 실 button/input/switch, 명시적 label, aria-pressed, focus-visible, native settings dialog 사용. ±와 키보드 조절, Esc·G·S·V·P, 입력 중 Enter 소유권, reduced motion 유지. |
+
+## Functional verification
+
+- Local full suite: **2084 passed, 38 skipped, 381 subtests**. 기존 Pillow deprecation warning 2개.
+- 최종 원본 페이지만 렌더링하는 변경 후 관련 performance/geometry/confirmation/package 검사를 다시 수행한다. 원격 CI는 커밋한 최종 소스 전체를 재검사한다.
+- 브라우저 12개: 실제 썸네일/설정, 배치 화면 복귀, crop/footer bounds, 음수 여백·좌표 입력, crop→split initial selection, 고정/플로팅 전환, 연속 stamp·Esc, 양쪽 초안 복원, 스크롤, 1024/700/390px. JS errors 0.
+- 실제 backend 저장 3개: 취소 시 무변경, crop의 ID/번호/순서 유지와 선택 외 geometry 보존, batch split의 선택 문항만 교체.
+- 추가 실제 동작 3개: 남은 대상만 처리 방식을 변경, PNG 다운로드, 빈 홈의 inspector 미마운트.
+- 세부 3개: ± 버튼과 preset 상태, preview aspect ratio, P 패널 좌우 전환이 양쪽 layout에서 usable canvas 폭을 보존.
+- 기존 500문항 browser 회귀 9개: Shift/Ctrl 범위, preview 이전/다음과 1024px 이미지, virtual tile mount, keyboard selection, 먼 항목 이동, drag/undo, narrow linkage.
+- 프런트 deterministic bundle/cache와 Windows/macOS packaging asset manifest를 검증한다. 이 보고서는 공개 배포/서명/공증 완료를 뜻하지 않는다.
+
+## Remaining polish
+
+- P3: inspector 폭과 title scale은 기존 desktop shell에 맞춘다. 앱 chrome과 실제 문항 이미지에 따른 밀도 차이는 의도된 적응이다.
+- 상기 범위 밖 이미지 처리 실험을 새 기능으로 제공할 때는 backend·export 저장 의미까지 별도 검증한다.
+
+final result: passed
+
+---
+
 # Design QA — 원본 파일 탐색과 수업 이름 편집 (2026-10-18)
 
 final result: passed

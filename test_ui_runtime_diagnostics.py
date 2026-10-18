@@ -229,7 +229,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         # State-driven inspector: no tab strip; app settings open as a dialog.
         self.assertNotIn('role="tablist"', side_panel)
         self.assertEqual(side_panel.count('role="tab"'), 0)
-        self.assertIn('className="inspector-heading"', side_panel)
+        self.assertIn('className="inspector-pill-tabs"', side_panel)
         self.assertIn('role="dialog" aria-modal="true" aria-label="설정"', side_panel)
         self.assertIn("hidden={!settingsDialogOpen}", side_panel)
         rules = side_panel.split('className="placement-section placement-rules"', 1)[1]

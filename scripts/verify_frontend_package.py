@@ -14,6 +14,7 @@ EXTRA_UI_STYLESHEETS = (
     "editor-layout.css",
     "editor-focus.css",
     "home-redesign.css",
+    "original-editor.css",
 )
 
 REQUIRED_UI_FILES = (

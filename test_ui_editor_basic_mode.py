@@ -53,7 +53,7 @@ class TestEditorBasicMode(unittest.TestCase):
           problemDisplayName: () => '7번 문제', onToggleFocusPanel: () => toggles++ });
         compile(sandbox, 'globalThis.heading = () => (<>'
           + section('      {focusMode && (',
-            '      <div className="inspector-heading">') + '</>);');
+            '      <div className="inspector-pill-tabs"') + '</>);');
         let tree = sandbox.heading();
         assert.ok(text(tree).includes('편집 도구'));
         assert.ok(!text(tree).includes('7번 문제'), 'the item metadata owns the selected title');

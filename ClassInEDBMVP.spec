@@ -89,6 +89,7 @@ UI_DATAS = [
     ("ui_prototype/editor-layout.css", "ui_prototype"),
     ("ui_prototype/editor-focus.css", "ui_prototype"),
     ("ui_prototype/home-redesign.css", "ui_prototype"),
+    ("ui_prototype/original-editor.css", "ui_prototype"),
     ("ui_prototype/favicon.png", "ui_prototype"),
     ("ui_prototype/reorder.js", "ui_prototype"),
     ("ui_prototype/review_filters.js", "ui_prototype"),
