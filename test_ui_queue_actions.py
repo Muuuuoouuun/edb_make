@@ -235,13 +235,22 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("const [reviewEditorActive, setReviewEditorActive] = useState(false);", source)
         self.assertIn('className={`unified-source-editor ${reviewEditorActive ? \'is-editing\' : \'\'}`}', source)
         self.assertIn("onEditorModeChange={handleSourceEditorMode}", source)
-        self.assertIn(".main.review-editor-focus", html)
-        self.assertIn(".main.review-editor-focus > .col.right", html)
+        self.assertIn(".main.side-panel-hidden", html)
+        self.assertIn(".main.side-panel-hidden > .col.right", html)
         # Editor-only chrome follows the unified source editor while it edits.
         original_editor = (PROJECT_ROOT / "ui_prototype" / "original-editor.css").read_text(encoding="utf-8")
         self.assertIn(".unified-source-editor.is-editing .manual-split-actionbar", original_editor)
         self.assertIn(".unified-source-editor.is-editing .review-stage-toolbar{display:none", html)
         self.assertNotIn(".unified-source-editor .review-stage-toolbar{display:none", html)
+
+    def test_side_panel_stays_hidden_until_the_first_material_reaches_the_board(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        layout = (PROJECT_ROOT / "ui_prototype" / "editor-layout.css").read_text(encoding="utf-8")
+        self.assertIn("emptyHome={view === 'board' && !items.length}", source)
+        self.assertIn("${view === 'board' && !items.length && pendingFiles.length ? 'side-panel-hidden' : ''}", source)
+        self.assertIn(".filter(([pane]) => pane !== 'panel' || items.length > 0)", source)
+        # An explicit settings request still opens the panel during the first upload.
+        self.assertIn(".main.editor-basic-mode.side-panel-hidden > .col.right.home-settings", layout)
 
     def test_manual_split_panel_stays_accessible_above_canvas_in_narrow_windows(self) -> None:
         responsive_block = media_rules(board_document(), "max-width: 700px")

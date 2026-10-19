@@ -19404,7 +19404,7 @@ function App(){
         }}
       />
       <div
-        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed && !reviewEditorActive ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? 'home-mode' : ''}`}
+        className={`main editor-basic-mode ${focusEditorActive ? 'editor-focus-mode' : ''} ${focusEditorActive && focusPanelCollapsed ? 'focus-panel-collapsed' : ''} ${effectiveRailCollapsed && !reviewEditorActive ? 'left-collapsed' : ''} ${view === 'board' && !items.length && !pendingFiles.length ? 'home-mode' : ''} ${view === 'board' && !items.length && pendingFiles.length ? 'side-panel-hidden' : ''}`}
         style={{ '--focus-board-color': t.boardColor }}
         data-mobile-pane={mobilePane}
         inert={hasPendingSessionConflict ? '' : undefined}
@@ -19415,7 +19415,7 @@ function App(){
               ['rail', `자료 목록 ${items.length + pendingFiles.length}`],
               ['stage', view === 'review' ? '검수 화면' : '칠판 화면'],
               ['panel', '편집·설정'],
-            ].map(([pane, label]) => (
+            ].filter(([pane]) => pane !== 'panel' || items.length > 0).map(([pane, label]) => (
               <button
                 key={pane}
                 className={mobilePane === pane ? 'on' : ''}
@@ -19567,7 +19567,9 @@ function App(){
           onRevealPanel={revealSidePanel}
           focusMode={focusEditorActive}
           onToggleFocusPanel={() => { setFocusPanelCollapsed(true); setMobilePane('stage'); window.requestAnimationFrame(() => focusPanelReopenRef.current?.focus()); }}
-          emptyHome={view === 'board' && !items.length && !pendingFiles.length}
+          // Until the first material lands on the board there is nothing to edit;
+          // the panel stays hidden unless settings are opened explicitly.
+          emptyHome={view === 'board' && !items.length}
           homeUpdateOpen={homeUpdateOpen}
           onCloseHomeUpdate={() => setHomeUpdateOpen(false)}
           item={active}

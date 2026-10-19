@@ -83,7 +83,7 @@ class TestEditorBasicMode(unittest.TestCase):
         focus_style = (ROOT / 'ui_prototype' / 'editor-focus.css').read_text(encoding='utf-8')
         self.assertIn('.main.editor-basic-mode:not(.editor-focus-mode) .focus-panel-heading', focus_style)
         self.assertIn('grid-template-columns: 220px minmax(0, 1fr) 300px', STYLE)
-        self.assertIn('.main.editor-basic-mode.review-editor-focus', STYLE)
+        self.assertIn('.main.editor-basic-mode.side-panel-hidden', STYLE)
         self.assertIn('.main.editor-basic-mode.left-collapsed', STYLE)
         self.assertIn('.main.editor-basic-mode.home-mode > .col.right', STYLE)
         self.assertNotIn('home-settings-open', STYLE)

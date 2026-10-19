@@ -566,7 +566,7 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   border-color: var(--accent-hover);
 }
 
-.main.editor-basic-mode.left-collapsed:not(.editor-focus-mode):not(.home-mode):not(.review-editor-focus):not(.recognition-page-review-mode) {
+.main.editor-basic-mode.left-collapsed:not(.editor-focus-mode):not(.home-mode):not(.side-panel-hidden):not(.recognition-page-review-mode) {
   grid-template-columns: 72px minmax(0, 1fr) 300px;
 }
 
@@ -574,8 +574,25 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   padding-inline: 6px;
 }
 
-.main.editor-basic-mode.review-editor-focus {
+.main.editor-basic-mode.side-panel-hidden {
   grid-template-columns: 220px minmax(0, 1fr) 0;
+}
+
+.main.editor-basic-mode.left-collapsed.side-panel-hidden {
+  grid-template-columns: 72px minmax(0, 1fr) 0;
+}
+
+/* Settings opened while the first upload is processing. */
+.main.editor-basic-mode.side-panel-hidden:has(> .col.right.home-settings) {
+  grid-template-columns: 220px minmax(0, 1fr) clamp(300px, 25vw, 360px);
+}
+
+.main.editor-basic-mode.side-panel-hidden > .col.right.home-settings {
+  display: flex;
+  width: auto;
+  overflow: hidden;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .main.editor-basic-mode.home-mode {
@@ -606,8 +623,8 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   border-bottom: 1px solid var(--line);
 }
 
-/* Home has no selected item, so only the settings tab applies. */
-.main.editor-basic-mode.home-mode > .col.right.home-settings .inspector-pill-tabs {
+/* Before the first material lands there is no item, so only settings applies. */
+.main.editor-basic-mode > .col.right.home-settings .inspector-pill-tabs {
   display: none;
 }
 
@@ -626,7 +643,7 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
     padding: 10px 14px 14px;
   }
 
-  .main.editor-basic-mode.review-editor-focus {
+  .main.editor-basic-mode.side-panel-hidden {
     grid-template-columns: 208px minmax(0, 1fr) 0;
   }
 
