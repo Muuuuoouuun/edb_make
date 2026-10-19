@@ -321,6 +321,7 @@ class TestUiHomeFlows(unittest.TestCase):
           Icon: new Proxy({}, { get: (_object, key) => key }),
           useState: initial => [initial, () => {}],
           ALTERNATE_MODIFIER_LABEL: 'Alt',
+          PRIMARY_MODIFIER_LABEL: 'Ctrl',
         };
         vm.createContext(sandbox);
         const components = section('function HomeDashboard({', 'async function downloadPublishSummary(')

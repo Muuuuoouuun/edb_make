@@ -1740,6 +1740,88 @@ function originalMarginBox(box, page, margins){
   const bottom = Math.min(page.height, box.top + box.height * (1 + margins.bottom / 100));
   return adjustOriginalBox(box, page, {left, top, width:Math.max(1,right-left), height:Math.max(1,bottom-top)});
 }
+// Same rule as the server's automatic crop trim (PROBLEM_CROP_CONTENT_* in
+// build_problem_board_edb.py): only blank rows above and below the ink go,
+// never ink, and the width stays as drawn so every problem keeps the same
+// text size on the board. A tinted scan has no blank rows and stays as is.
+const INK_TRIM_THRESHOLD = 232;
+const INK_TRIM_MARGIN_PX = 6;
+const INK_TRIM_MIN_RATIO = 0.04;
+const INK_MASK_MAX_DIMENSION = 2048;
+const INK_MASK_CACHE_LIMIT = 6;
+const inkMaskCache = new Map();
+const MANUAL_SPLIT_TRIM_TO_INK_KEY = 'edb.manualSplitTrimToInk';
+function sameOriginalBox(a, b){
+  return Boolean(a && b) && ['left', 'top', 'width', 'height'].every(key => Math.abs(finiteNumber(a[key], 0) - finiteNumber(b[key], 0)) < 0.5);
+}
+// mask = { width, height, dark } where dark[y * width + x] is 1 for ink.
+function inkTrimmedBoxRows(mask, box, page){
+  if (!mask?.dark || !box || !(box.width > 0) || !(box.height > 0)) return box;
+  const scaleX = mask.width / Math.max(1, finiteNumber(page?.width, mask.width));
+  const scaleY = mask.height / Math.max(1, finiteNumber(page?.height, mask.height));
+  const x0 = Math.max(0, Math.floor(box.left * scaleX));
+  const x1 = Math.min(mask.width, Math.ceil((box.left + box.width) * scaleX));
+  const y0 = Math.max(0, Math.floor(box.top * scaleY));
+  const y1 = Math.min(mask.height, Math.ceil((box.top + box.height) * scaleY));
+  const rowHasInk = y => {
+    const start = y * mask.width;
+    for (let x = x0; x < x1; x += 1) if (mask.dark[start + x]) return true;
+    return false;
+  };
+  let first = y0;
+  while (first < y1 && !rowHasInk(first)) first += 1;
+  if (first >= y1) return box;
+  let last = y1 - 1;
+  while (last > first && !rowHasInk(last)) last -= 1;
+  const top = Math.max(box.top, Math.floor(first / scaleY - INK_TRIM_MARGIN_PX));
+  const bottom = Math.min(box.top + box.height, Math.ceil((last + 1) / scaleY + INK_TRIM_MARGIN_PX));
+  if (box.height - (bottom - top) <= box.height * INK_TRIM_MIN_RATIO) return box;
+  return adjustOriginalBox(box, page, { top, height: bottom - top });
+}
+function inkMaskFromImageData(data, width, height){
+  const dark = new Uint8Array(width * height);
+  for (let index = 0, pixel = 0; pixel < dark.length; index += 4, pixel += 1) {
+    const luminance = Math.floor((data[index] * 299 + data[index + 1] * 587 + data[index + 2] * 114) / 1000);
+    dark[pixel] = luminance < INK_TRIM_THRESHOLD ? 1 : 0;
+  }
+  return { width, height, dark };
+}
+function loadPageInkMask(page){
+  const uri = page?.sourceImageUri;
+  if (!uri || typeof document === 'undefined' || typeof Image === 'undefined') return Promise.resolve(null);
+  const url = filePreviewUrl(uri, INK_MASK_MAX_DIMENSION);
+  if (inkMaskCache.has(url)) return inkMaskCache.get(url);
+  const pending = new Promise(resolve => {
+    const image = new Image();
+    image.decoding = 'async';
+    image.onload = () => {
+      try {
+        const scale = Math.min(1, INK_MASK_MAX_DIMENSION / Math.max(1, image.naturalWidth, image.naturalHeight));
+        const width = Math.max(1, Math.round(image.naturalWidth * scale));
+        const height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d', { willReadFrequently: true });
+        // Transparent pixels count as paper, like the white page behind them.
+        context.fillStyle = '#fff';
+        context.fillRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+        resolve(inkMaskFromImageData(context.getImageData(0, 0, width, height).data, width, height));
+      } catch { resolve(null); }
+    };
+    image.onerror = () => resolve(null);
+    image.src = url;
+  });
+  inkMaskCache.set(url, pending);
+  if (inkMaskCache.size > INK_MASK_CACHE_LIMIT) inkMaskCache.delete(inkMaskCache.keys().next().value);
+  pending.then(mask => { if (!mask && inkMaskCache.get(url) === pending) inkMaskCache.delete(url); });
+  return pending;
+}
+async function fitBoxRowsToInk(page, box){
+  const mask = await loadPageInkMask(page);
+  return mask ? inkTrimmedBoxRows(mask, box, page) : null;
+}
 function OriginalNumberInput({value,min,max,label,disabled,onChange}){
   const [draft,setDraft]=useState(String(value));
   const focused=useRef(false);
@@ -1775,6 +1857,10 @@ function useOriginalPanelBounds(panelRef,layout){
   },[panelRef,layout]);
 }
 function OriginalGeometryControls({page, box, originalBox, onChange, disabled}){
+  const [fitStatus, setFitStatus] = useState('');
+  const latestBoxRef = useRef(box);
+  latestBoxRef.current = box;
+  useEffect(() => { setFitStatus(''); }, [box?.left, box?.top, box?.width, box?.height]);
   if (!box) return null;
   const base = originalBox || box;
   const margins = {
@@ -1783,10 +1869,24 @@ function OriginalGeometryControls({page, box, originalBox, onChange, disabled}){
     left: (base.left - box.left) / base.width * 100,
     right: (box.left + box.width - base.left - base.width) / base.width * 100,
   };
+  const fitToInk = async () => {
+    const start = box;
+    setFitStatus('busy');
+    const fitted = await fitBoxRowsToInk(page, start);
+    if (latestBoxRef.current !== start) return;
+    if (!fitted) { setFitStatus('unavailable'); return; }
+    if (fitted === start) { setFitStatus('same'); return; }
+    onChange(fitted);
+  };
   return <section className="original-geometry" aria-label="선택 영역 크기와 여백">
     <div className="original-section-label">빠른 선택</div>
-    <div className="original-presets">{[['여백 없음',0],['살짝',-2],['넉넉히',3],['주변 포함',8]].map(([label,value]) =>
+    <div className="original-presets">
+      <button type="button" className="btn original-fit-ink" disabled={disabled || fitStatus === 'busy'}
+        title="위아래 빈 줄을 글자에 맞춰 자릅니다 · 좌우 폭은 그대로" onClick={() => { void fitToInk(); }}>글자에 맞춤</button>
+      {[['원래 영역',0],['살짝',-2],['넉넉히',3],['주변 포함',8]].map(([label,value]) =>
       <button type="button" className="btn" key={label} aria-pressed={Object.values(margins).every(margin=>Math.abs(margin-value)<0.6)} disabled={disabled} onClick={()=>onChange(originalMarginBox(base,page,{top:value,bottom:value,left:value,right:value}))}>{label}</button>)}</div>
+    {(fitStatus === 'same' || fitStatus === 'unavailable') && <small className="original-fit-status" role="status">
+      {fitStatus === 'same' ? '이미 글자에 맞춰져 있어요' : '원본 이미지를 읽지 못해 맞추지 못했어요'}</small>}
     <div className="original-section-label">여백 <small>− 잘라냄 · + 주변 포함</small></div>
     <div className="original-margins">{[['top','위'],['bottom','아래'],['left','왼쪽'],['right','오른쪽']].map(([key,label]) =>
       <div className="original-margin-field" key={key}><span>{label}</span><div><OriginalNumberInput label={`${label} 여백 (%)`} min={-100} max={100} value={Math.round(margins[key]*10)/10} disabled={disabled}
@@ -2200,6 +2300,8 @@ function manualSplitScopeSummary(page, items, replaceProblemIds, scope){
 
 function ManualSplitEditor({
   page,
+  trimToInk = true,
+  onTrimToInkChange,
   regions,
   draftBox,
   mode,
@@ -2426,6 +2528,11 @@ function ManualSplitEditor({
             : activeMode === 'draw' ? '드래그마다 새 영역 · 기존 영역 클릭으로 수정'
             : '영역을 클릭해 이동·크기 조절 · G/S로 연속 생성'}
         </div>
+        <label className="manual-split-trim-toggle" title="새로 그리거나 찍은 영역의 위아래 빈 줄을 글자에 맞춰 자릅니다. 좌우 폭은 그대로입니다.">
+          <input type="checkbox" checked={trimToInk} disabled={mutating}
+            onChange={event => onTrimToInkChange?.(event.target.checked)} />
+          위아래 빈 공간 자동 제거
+        </label>
         {activeMode === 'stamp' ? (
           <div className="manual-stamp-card">
             <div className="manual-stamp-card-head">
@@ -3431,6 +3538,9 @@ function ReviewStage({
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
   const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
+  const [manualSplitTrimToInk, setManualSplitTrimToInk] = useStoredPreference(MANUAL_SPLIT_TRIM_TO_INK_KEY, true, isStoredBoolean);
+  const manualSplitTrimToInkRef = useRef(manualSplitTrimToInk);
+  manualSplitTrimToInkRef.current = manualSplitTrimToInk;
   const [reviewDiagnosticsOpen, setReviewDiagnosticsOpen] = useState(false);
   const [focusedPageReviewTargetId, setFocusedPageReviewTargetId] = useState('');
   const [pendingReviewNavigation, setPendingReviewNavigation] = useState(null);
@@ -4342,6 +4452,30 @@ function ReviewStage({
     }
   }, [manualSplit, mutateSession, guidedSplitPageIds, onManualSplitFlowDone]);
 
+  // A new drawn or stamped region drops the blank rows above and below its
+  // ink, as automatic recognition does. Later handle edits are left alone.
+  const trimNewManualSplitRegion = (page, id, drawnBox) => {
+    if (!manualSplitTrimToInkRef.current) return;
+    void fitBoxRowsToInk(page, drawnBox).then(fitted => {
+      if (!fitted || fitted === drawnBox) return;
+      setManualSplit(prev => {
+        if (!prev || prev.pageId !== page.id) return prev;
+        let changed = false;
+        const regions = (prev.regions || []).map(region => {
+          if (region.id !== id || !sameOriginalBox(region.bbox, drawnBox)) return region;
+          changed = true;
+          return { ...region, bbox: fitted, originalBox: region.originalBox || drawnBox };
+        });
+        return changed ? { ...prev, regions } : prev;
+      });
+    });
+  };
+  const trimNewManualSplitRegionRef = useRef(trimNewManualSplitRegion);
+  trimNewManualSplitRegionRef.current = trimNewManualSplitRegion;
+  useEffect(() => {
+    if (manualSplitPage && manualSplitTrimToInk) void loadPageInkMask(manualSplitPage);
+  }, [manualSplitPage?.id, manualSplitPage?.sourceImageUri, manualSplitTrimToInk]);
+
   const stampManualSplitRegion = (evt, page) => {
     if (!manualSplit || manualSplit.pageId !== page?.id || evt.button !== 0) return;
     if (!evt.currentTarget?.getBoundingClientRect) return;
@@ -4362,6 +4496,7 @@ function ReviewStage({
         selectedRegionIds: [id],
       };
     });
+    trimNewManualSplitRegion(page, id, box);
   };
 
   const beginManualSplitCanvasAction = (evt, page) => {
@@ -5185,6 +5320,7 @@ function ReviewStage({
               selectedRegionIds: [id],
             };
           });
+          trimNewManualSplitRegionRef.current?.(drag.page, id, box);
         }
       }
       manualSplitDragRef.current = null;
@@ -6047,6 +6183,8 @@ function ReviewStage({
                 {manualSplit?.pageId === page.id ? (
                   <ManualSplitEditor
                     page={page}
+                    trimToInk={manualSplitTrimToInk}
+                    onTrimToInkChange={setManualSplitTrimToInk}
                     layout={originalLayout}
                     onRegionBoxChange={(id,box)=>setManualSplit(prev=>prev?{...prev,regions:prev.regions.map(region=>region.id===id?{...region,originalBox:region.originalBox || region.bbox,bbox:adjustOriginalBox(region.bbox,page,box)}:region)}:prev)}
                     regions={manualSplit.regions || []}
@@ -7387,6 +7525,7 @@ function ItemsRail({
           type="button"
           className={`drop-zone ${hasSessionItems ? 'is-compact' : ''} ${dropZoneActive ? 'is-active' : ''}`}
           aria-label="파일 추가"
+          title={`파일 추가 · 끌어다 놓기 · ${PRIMARY_MODIFIER_LABEL}+V 붙여넣기`}
           onClick={addSample}
           onDragEnter={e => {
             if (!e.dataTransfer?.types?.includes('Files')) return;
@@ -7982,6 +8121,8 @@ function BoardStage({
   const [manualPreviewZoom, setPreviewZoom] = useState(1);
   const [previewFitActive, setPreviewFitActive] = useState(false);
   const [estimateDetailsOpen, setEstimateDetailsOpen] = useState(false);
+  const [fileDropActive, setFileDropActive] = useState(false);
+  const acceptsFileDrag = event => Boolean(handleFiles && event.dataTransfer?.types?.includes('Files'));
   const estimateToggleRef = useRef(null);
   const estimateDetailsRef = useRef(null);
   const closeEstimateDetails = () => {
@@ -9066,7 +9207,23 @@ function BoardStage({
             )}
           </div>
         <div className="stage-wrap">
-          <div className="stage-board" style={{ background: boardColor }}>
+          <div className="stage-board" style={{ background: boardColor }}
+            onDragEnter={event => { if (!acceptsFileDrag(event)) return; event.preventDefault(); setFileDropActive(true); }}
+            onDragOver={event => {
+              if (!acceptsFileDrag(event)) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'copy';
+              if (!fileDropActive) setFileDropActive(true);
+            }}
+            onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setFileDropActive(false); }}
+            onDrop={event => {
+              if (!acceptsFileDrag(event)) return;
+              event.preventDefault();
+              setFileDropActive(false);
+              const files = Array.from(event.dataTransfer?.files || []);
+              if (files.length) handleFiles(files);
+            }}>
+            {fileDropActive && <div className="stage-file-drop-hint" aria-hidden="true">{Icon.folderPlus}<strong>놓으면 자료에 추가돼요</strong></div>}
             <span className="sr-only" id="smart-move-help">누른 채 이동 · 문제 위: 순서 변경 · 문제 옆: 뒤 여백 당기기 · {ALTERNATE_MODIFIER_LABEL}+드래그: 순서 이동 · Esc: 취소</span>
             {smartMove && boardDropTarget && <div className="stage-drag-feedback" role="status" aria-live="polite">
               {boardDropTarget.mode === 'gap'
@@ -9485,7 +9642,7 @@ function HomeDashboard({
           </span>
         </button>
         <p id="home-upload-help" className="home-upload-help">
-          방식을 고르고 파일을 놓으세요. 바로 처리해 칠판에 배치합니다.
+          방식을 고르고 파일을 놓거나 {PRIMARY_MODIFIER_LABEL}+V로 붙여넣으세요. 바로 처리해 칠판에 배치합니다.
         </p>
 
         <div className="home-methods" aria-labelledby="home-methods-title">
@@ -12540,6 +12697,38 @@ function assertExportPayloadFits(files){
 
 function fileQueueKey(file){
   return [file?.name || 'file', file?.size || 0, file?.lastModified || 0].join('::');
+}
+
+// Clipboard paste uses the same file types as the upload button. A pasted
+// screenshot arrives as a generic "image.png", so it gets a readable,
+// time-stamped name that also keeps repeated pastes apart in the queue.
+const UPLOAD_FILE_EXTENSION_PATTERN = /\.(pdf|hwpx?|png|jpe?g|webp|bmp|tiff?)$/i;
+const CLIPBOARD_IMAGE_EXTENSIONS = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/tiff': 'tif',
+};
+function clipboardUploadFiles(clipboardData, now = new Date()){
+  const fromItems = Array.from(clipboardData?.items || [])
+    .filter(item => item?.kind === 'file')
+    .map(item => item.getAsFile?.())
+    .filter(Boolean);
+  const files = fromItems.length ? fromItems : Array.from(clipboardData?.files || []);
+  const pad = value => String(value).padStart(2, '0');
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const accepted = [];
+  let rejected = 0;
+  files.forEach(file => {
+    const name = String(file?.name || '');
+    const imageExtension = CLIPBOARD_IMAGE_EXTENSIONS[String(file?.type || '').toLowerCase()];
+    if (!UPLOAD_FILE_EXTENSION_PATTERN.test(name) && !imageExtension) { rejected += 1; return; }
+    const generic = !name || /^image\.[a-z0-9]+$/i.test(name) || !UPLOAD_FILE_EXTENSION_PATTERN.test(name);
+    if (!generic) { accepted.push(file); return; }
+    const extension = imageExtension || name.split('.').pop().toLowerCase();
+    const suffix = accepted.length ? `-${accepted.length + 1}` : '';
+    accepted.push(new File([file], `붙여넣은 이미지 ${stamp}${suffix}.${extension}`, {
+      type: file.type, lastModified: file.lastModified || now.getTime(),
+    }));
+  });
+  return { files: accepted, rejected };
 }
 
 function appendUniquePendingFiles(currentFiles, incomingFiles){
@@ -18116,16 +18305,17 @@ function App(){
 
   const handleFiles = (fileList) => {
     const files = Array.from(fileList || []);
-    if (!files.length) return;
+    if (!files.length) return 0;
     const addition = appendUniquePendingFiles(pendingFilesRef.current, files);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (!addition.addedFiles.length) {
       showToast('이미 대기열에 있는 파일입니다');
-      return;
+      return 0;
     }
     addition.addedFiles.forEach(file => autoProcessKeysRef.current.add(fileQueueKey(file)));
     setPendingFilesTracked(addition.files);
     if (!items.length) selectPendingFile(fileQueueKey(addition.addedFiles[0]));
+    return addition.addedFiles.length;
   };
 
   const requestPendingFileReplacement = key => {
@@ -18176,6 +18366,30 @@ function App(){
     }
     showToast('업로드 대기열을 비웠어요');
   }, [operationRecovery, setPendingFilesTracked, clearOperationRecovery, showToast]);
+
+  const handleFilesRef = useRef(handleFiles);
+  handleFilesRef.current = handleFiles;
+
+  // Ctrl/Cmd+V adds a copied screenshot or file to the upload queue, the same
+  // as dropping it. Text fields keep their own paste.
+  useEffect(() => {
+    const onPaste = event => {
+      if (event.defaultPrevented || isEditableKeyboardTarget(event.target)
+        || isEditableKeyboardTarget(document.activeElement)
+        || document.querySelector('dialog[open], [aria-modal="true"]:not([hidden])')) return;
+      const { files, rejected } = clipboardUploadFiles(event.clipboardData);
+      if (!files.length && !rejected) return;
+      event.preventDefault();
+      if (!files.length) {
+        showToast('이미지, PDF, HWP 파일만 붙여넣을 수 있어요');
+        return;
+      }
+      const added = handleFilesRef.current(files);
+      if (added) showToast(added === 1 ? '붙여넣은 파일을 추가했어요' : `붙여넣은 파일 ${added}개를 추가했어요`);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, [showToast]);
 
   useEffect(() => {
     if (recognitionReview?.kind !== 'queue-recognition') return;

@@ -700,6 +700,26 @@
       radial-gradient(circle at 1px 1px, rgba(15,20,30,.06) 1px, transparent 0) 0 0 / 24px 24px,
       var(--bg);
   }
+  .stage-file-drop-hint{
+    position: absolute;
+    inset: 8px;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 2px dashed var(--accent-ink);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--surface) 82%, transparent);
+    color: var(--accent-ink);
+    font-size: var(--text-md);
+    pointer-events: none;
+  }
+  .stage-file-drop-hint > .ic{
+    width: 28px;
+    height: 28px;
+  }
   body.dark .stage-wrap{
     background:
       radial-gradient(circle at 1px 1px, rgba(255,255,255,.05) 1px, transparent 0) 0 0 / 24px 24px,
@@ -9309,6 +9329,9 @@
 
 /* Precise stamp sizing keeps controls within the existing side panel. */
 .manual-stamp-ratio { display: flex; align-items: center; gap: 6px; font-size: var(--text-xs); cursor: pointer; }
+.manual-split-trim-toggle { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: var(--text-xs); color: var(--ink-2); cursor: pointer; }
+.manual-split-trim-toggle input { accent-color: var(--accent-ink); }
+.original-fit-status { display: block; margin-top: 4px; color: var(--muted); font-size: var(--text-xs); }
 .manual-stamp-dimension { min-width: 0; }
 .manual-stamp-slider { appearance: none; display: block; width: 100%; height: 28px; margin: 4px 0 0; padding: 0; background: transparent; cursor: ew-resize; touch-action: pan-y; }
 .manual-stamp-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(to right, var(--accent) var(--stamp-fill), var(--line-strong) var(--stamp-fill)); }

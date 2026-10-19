@@ -13,6 +13,7 @@ const sandbox = {
   Icon: new Proxy({}, { get: (_object, key) => key }),
   useState: initial => [initial, () => {}],
   ALTERNATE_MODIFIER_LABEL: 'Alt',
+  PRIMARY_MODIFIER_LABEL: 'Ctrl',
   recentSessionCountLabel: entry => `${entry.problemCount ?? entry.problem_count ?? 0}개 문항`,
   formatPublishTime: value => `시간 ${value}`,
 };
