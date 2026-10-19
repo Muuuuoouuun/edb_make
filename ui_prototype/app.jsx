@@ -3111,12 +3111,15 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
     event?.preventDefault();
     if (savingRef.current || cancelledRef.current || disabled) return;
     const name = draft.trim();
+    const leaving = event?.type === 'blur';
     if (!name || name.length > 160 || /[\u0000-\u001f\u007f]/.test(name)) {
+      // Clicking away from an invalid draft cancels it instead of pulling focus back.
+      if (leaving) { close(false); return; }
       setError('수업 이름을 1~160자로 입력해 주세요. 줄바꿈은 사용할 수 없습니다.');
       inputRef.current?.focus();
       return;
     }
-    if (name === fileName) { close(event?.type !== 'blur'); return; }
+    if (name === fileName) { close(!leaving); return; }
     savingRef.current = true;
     setSaving(true);
     setError('');
@@ -3126,10 +3129,10 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
         if (result === false) throw new Error('이름을 저장하지 못했습니다. 다시 시도해 주세요.');
       } else setFileName?.(name);
       setOpen(false);
-      if (event?.type !== 'blur') window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
+      if (!leaving) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
     } catch (failure) {
       setError(failure?.message || '이름을 저장하지 못했습니다. 다시 시도해 주세요.');
-      inputRef.current?.focus();
+      if (!leaving) inputRef.current?.focus();
     } finally { savingRef.current = false; setSaving(false); }
   };
   return <div className="lesson-name-control">

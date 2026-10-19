@@ -293,6 +293,39 @@ class TestUiToolbarControls(unittest.TestCase):
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
+    def test_inline_rename_blur_with_invalid_draft_cancels_without_pulling_focus_back(self) -> None:
+        run_node(r"""
+        sandbox.window.requestAnimationFrame = callback => callback();
+        let inputFocus = 0, requests = [];
+        const props = { fileName: '원래 이름', onRename: async name => { requests.push(name); return true; } };
+        function render() {
+          hooks.index = 0; hooks.effects = [];
+          const tree = sandbox.LessonNameEditor(props);
+          const input = walk(tree).find(node => node.type === 'input');
+          const trigger = walk(tree).find(node => node.props.className === 'lesson-name-trigger');
+          if (input) input.props.ref.current = { focus() { inputFocus++; }, select() {} };
+          if (trigger) trigger.props.ref.current = { focus() {} };
+          return { tree, input, trigger, form: walk(tree).find(node => node.type === 'form') };
+        }
+        (async () => {
+          let view = render(); view.trigger.props.onClick(); view = render();
+          view.input.props.onChange({ target: { value: '   ' } }); view = render();
+          await view.input.props.onBlur({ type: 'blur', preventDefault() {} });
+          view = render();
+          assert.ok(view.trigger, 'clicking away from an empty name closes the editor');
+          assert.equal(inputFocus, 0, 'blur must not trap focus in the textbox');
+          assert.deepEqual(requests, []);
+          assert.ok(text(view.trigger).includes('원래 이름'));
+          view.trigger.props.onClick(); view = render();
+          view.input.props.onChange({ target: { value: '' } }); view = render();
+          await view.form.props.onSubmit({ type: 'submit', preventDefault() {} });
+          view = render();
+          assert.ok(view.input, 'Enter on an empty name keeps the editor open with an error');
+          assert.equal(view.input.props['aria-invalid'], true);
+          assert.equal(inputFocus, 1);
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
 
 if __name__ == "__main__":
     unittest.main()
