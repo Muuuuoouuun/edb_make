@@ -3542,6 +3542,82 @@ def _parse_file_preview_max_dimension(query: dict[str, list[str]]) -> int | None
 
 
 @lru_cache(maxsize=32)
+def _build_guarded_board_payload(
+    board_path: str,
+    board_modified_ns: int,
+    board_size: int,
+    source_path: str,
+    source_modified_ns: int,
+    source_size: int,
+    render_options: str,
+    max_dimension: int | None,
+) -> bytes | None:
+    """Repair a clipped derived preview in memory, leaving source files intact."""
+    del board_modified_ns, board_size, source_modified_ns, source_size
+    from PIL import Image
+
+    with Image.open(source_path) as loaded, Image.open(board_path) as rendered:
+        if not _lazy_call("image_reconstruction_backend", "board_render_has_missing_tail", loaded, rendered):
+            return None
+        source = loaded.copy()
+
+    options = json.loads(render_options)
+    regions = options["regions"]
+    if options["mode"] == "off":
+        regions = []
+    elif options["mode"] in {"auto", "grayscale"} and not regions and options["role"] != "child_question":
+        regions = _lazy_call("raster_media", "detect_color_media_regions", source)
+    if options["mode"] == "grayscale":
+        regions = [{**region, "renderMode": "grayscale"} for region in regions]
+    task = _lazy_attr("build_problem_board_edb", "_ProblemAssetTask")(
+        source_image=source,
+        bounds=Box(left=0, top=0, width=source.width, height=source.height),
+        crop_path=Path(source_path), board_render_path=Path(board_path),
+        chalk_color=_lazy_call("build_problem_board_edb", "_resolve_chalk_color", options["theme"]),
+        subject=resolve_subject(options["subject"]),
+        source_hints=(options["sourceName"],),
+        text_priority=_problem_prefers_text_preservation(options["subject"], options["sourceName"]),
+        rendered_media_regions=regions,
+    )
+    image = _lazy_call("build_problem_board_edb", "_build_problem_board_asset", source, task)
+    if max_dimension is not None:
+        image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS, reducing_gap=3.0)
+    output = BytesIO()
+    image.save(output, format="PNG", compress_level=6, optimize=False)
+    return output.getvalue()
+
+
+def _guarded_board_payload(
+    problem: dict[str, Any], board_path: Path, *, max_dimension: int | None = None,
+    board_theme: str = DEFAULT_BOARD_THEME,
+) -> bytes | None:
+    if _session_problem_processing_step(problem) not in {"raw", "s2"}:
+        return None
+    source = decode_file_reference(problem.get("imagePath"))
+    if source is None or source.resolve() == board_path.resolve():
+        return None
+    options = {
+        "subject": str(problem.get("subject") or "unknown"),
+        "sourceName": str(problem.get("sourceFileName") or ""),
+        "mode": _media_mode(problem),
+        "role": problem.get("passageRole") or problem.get("passage_role") or (problem.get("metadata") or {}).get("passage_role"),
+        "regions": problem.get("preserveMediaRegions") or problem.get("preserve_media_regions") or [],
+        "theme": board_theme,
+    }
+    try:
+        board_stat, source_stat = board_path.stat(), source.stat()
+        return _build_guarded_board_payload(
+            str(board_path.resolve()), board_stat.st_mtime_ns, board_stat.st_size,
+            str(source.resolve()), source_stat.st_mtime_ns, source_stat.st_size,
+            json.dumps(options, sort_keys=True), max_dimension,
+        )
+    except (OSError, ValueError):
+        # An unavailable legacy source must not prevent the remaining session
+        # from opening. Normal file/download error handling still applies.
+        return None
+
+
+@lru_cache(maxsize=32)
 def _build_file_preview_payload(
     path_value: str,
     modified_ns: int,
@@ -7582,6 +7658,11 @@ def _session_problem_s3_board_png_payload(problem: dict[str, Any], *, board_them
 
 
 def _session_problem_board_png_payload(problem: dict[str, Any], *, board_theme: str) -> bytes | None:
+    board_path = _existing_session_image_path(problem.get("boardRenderPath"))
+    if board_path is not None:
+        repaired = _guarded_board_payload(problem, board_path, board_theme=board_theme)
+        if repaired is not None:
+            return repaired
     step = _session_problem_processing_step(problem)
     if step == "s3":
         return _session_problem_s3_board_png_payload(problem, board_theme=board_theme)
@@ -9434,6 +9515,22 @@ class AppHTTPServer(ThreadingHTTPServer):
     def session_snapshot(self) -> dict[str, Any] | None:
         with self._state_lock:
             return _clone_jsonish(self.latest_session) if self.latest_session is not None else None
+
+    def board_file_context(self, path: str) -> tuple[dict[str, Any], str] | None:
+        # Build once per session revision. Image requests should not deep-copy
+        # a large session or repeat path resolution for every thumbnail.
+        with self._state_lock:
+            if getattr(self, "_board_file_index_revision", None) != self._session_revision:
+                session = self.latest_session or {}
+                theme = str(session.get("board_theme") or session.get("boardTheme") or DEFAULT_BOARD_THEME)
+                self._board_file_index: dict[str, tuple[dict[str, Any], str]] = {}
+                for problem in session.get("problems", []):
+                    board = decode_file_reference(problem.get("boardRenderPath"))
+                    source = decode_file_reference(problem.get("imagePath"))
+                    if board is not None and source is not None and board.resolve() != source.resolve():
+                        self._board_file_index.setdefault(str(board.resolve()), (_clone_jsonish(problem), theme))
+                self._board_file_index_revision = self._session_revision
+            return self._board_file_index.get(path)
 
     def session_snapshot_with_revision(self) -> tuple[dict[str, Any] | None, int]:
         with self._state_lock:
@@ -11744,6 +11841,23 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         file_stat = path.stat()
         file_size = file_stat.st_size
         preview_max_dimension = _parse_file_preview_max_dimension(query)
+        if str(mime_type or "").startswith("image/"):
+            lookup = getattr(self.app_server, "board_file_context", None)
+            context = lookup(normalized) if callable(lookup) else None
+            if context is not None:
+                problem, theme = context
+                source = decode_file_reference(problem.get("imagePath"))
+                repaired = None if source is None or not self._file_is_allowed(str(source.resolve())) else _guarded_board_payload(
+                    problem, path, max_dimension=preview_max_dimension,
+                    board_theme=theme,
+                )
+                if repaired is not None:
+                    self.send_response(HTTPStatus.OK)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(repaired)))
+                    self.end_headers()
+                    self.wfile.write(repaired)
+                    return
         if preview_max_dimension is not None and str(mime_type or "").startswith("image/"):
             try:
                 preview_payload = _build_file_preview_payload(

@@ -545,6 +545,58 @@ def analyze_reconstruction_content_preservation(
     }
 
 
+def board_render_has_missing_tail(source: Any, rendered: Any) -> bool:
+    """Detect truncated derived renders without OCR or provider calls.
+
+    Stage-2 assets share the source crop's geometry. A shorter canvas or a
+    transparent tail where the source still has a wide text/choice row must
+    not silently replace that crop. Ignore narrow corner/page-number marks,
+    and normalize to a small mask so checking a large scan stays bounded.
+    """
+    if min(*source.size, *rendered.size) <= 0:
+        return False
+    source_ratio = source.width / source.height
+    rendered_ratio = rendered.width / rendered.height
+    # Allow rounding when an otherwise complete render was downscaled.
+    tolerance = max(0.03, 2 / min(*source.size, *rendered.size))
+    if abs(rendered_ratio / source_ratio - 1) > tolerance:
+        return True
+    if np is None:
+        return False
+
+    from PIL import Image
+
+    def small_mask(image: Any) -> Any:
+        reduced = image.copy()
+        reduced.thumbnail((768, 768), Image.Resampling.BOX)
+        return _normalized_content_ink_mask(reduced)
+
+    source_mask = small_mask(source)
+    rendered_mask = small_mask(rendered)
+    height, width = source_mask.shape
+    inset = max(1, round(width * 0.08))
+    source_ink = source_mask[:, inset:width - inset]
+    rendered_ink = rendered_mask[:, inset:width - inset]
+    source_rows = np.flatnonzero(source_ink.sum(axis=1) >= 3)
+    rendered_rows = np.flatnonzero(rendered_ink.sum(axis=1) >= 3)
+    if source_rows.size == 0:
+        return False
+    rendered_bottom = int(rendered_rows[-1]) + 1 if rendered_rows.size else 0
+    source_bottom = int(source_rows[-1]) + 1
+    if source_bottom - rendered_bottom < max(6, round(height * 0.03)):
+        return False
+
+    missing = source_ink[min(height, rendered_bottom + 2):source_bottom]
+    if missing.size == 0:
+        return False
+    active_rows = np.flatnonzero(missing.sum(axis=1) >= 3)
+    if active_rows.size < 3:
+        return False
+    xs = np.flatnonzero(missing.any(axis=0))
+    # A footer number or a corner badge is deliberately removed elsewhere.
+    return bool(xs.size and xs[-1] - xs[0] >= width * 0.20)
+
+
 def _normalized_content_ink_mask(image: Any) -> Any:
     from PIL import Image
 

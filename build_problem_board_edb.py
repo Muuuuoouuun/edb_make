@@ -59,7 +59,7 @@ from edb_builder import (
     write_edb,
 )
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
-from image_reconstruction_backend import clean_problem_image_transparency
+from image_reconstruction_backend import board_render_has_missing_tail, clean_problem_image_transparency
 from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from page_tiling import PageTilingOptions, tile_page_columns
@@ -1753,10 +1753,12 @@ def _load_board_export_image(
     target_size: tuple[int, int] | None = None,
     text_priority: bool = False,
     trusted_preprocessed_render: bool = False,
+    preserve_source_content: bool = False,
 ) -> Image.Image:
     chalk_color = _resolve_chalk_color(board_theme)
     rendered: Image.Image | None = None
-    if trusted_preprocessed_render:
+    render_checked = trusted_preprocessed_render or preserve_source_content
+    if render_checked:
         try:
             with Image.open(board_render_path) as loaded_render:
                 rendered = loaded_render.convert(
@@ -1764,8 +1766,11 @@ def _load_board_export_image(
                 )
         except OSError:
             rendered = None
+        if rendered is not None and preserve_source_content and board_render_has_missing_tail(crop_image, rendered):
+            rendered = None
         if (
-            rendered is not None
+            trusted_preprocessed_render
+            and rendered is not None
             and "A" in rendered.getbands()
             and rendered.getchannel("A").getextrema()[0] < 245
         ):
@@ -1791,7 +1796,7 @@ def _load_board_export_image(
             cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
         return _finalize_text_cutout(cutout, chalk_color=chalk_color)
 
-    if rendered is None:
+    if rendered is None and not render_checked:
         try:
             rendered = Image.open(board_render_path)
         except OSError:
@@ -2312,7 +2317,7 @@ def _stage2_prefers_chalk_math_media(
     return _source_hints_suggest_math(*source_hints)
 
 
-def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> None:
+def _build_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> Image.Image:
     enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
     if task.text_priority:
         cutout_image = _extract_problem_cutout(
@@ -2334,7 +2339,11 @@ def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> N
         ),
     )
     cutout_image = _apply_selective_media_preservation(cutout_image, crop, regions)
-    _write_render_image(cutout_image, task.board_render_path)
+    return cutout_image
+
+
+def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> None:
+    _write_render_image(_build_problem_board_asset(crop, task), task.board_render_path)
 
 
 def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
@@ -10811,6 +10820,7 @@ def _build_image_only_record_image(
             target_size=crop_image.size if crop_format == CROP_FORMAT_V1 else None,
             text_priority=text_priority,
             trusted_preprocessed_render=entry.board_render_preprocessed,
+            preserve_source_content=processing_step != PROCESSING_STEP_RECONSTRUCT,
         )
     else:
         board_image = crop_image
