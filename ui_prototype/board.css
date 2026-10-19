@@ -930,15 +930,8 @@
     left: 0;
     width: calc(var(--left-zone-width) - 10px);
     z-index: 1;
-    border: 1px dashed rgba(158,201,240,.25);
-    border-block-width: 1px 0;
-    background: repeating-linear-gradient(
-      -45deg,
-      rgba(158,201,240,.055) 0,
-      rgba(158,201,240,.055) 5px,
-      transparent 5px,
-      transparent 10px
-    );
+    border: 0;
+    background: transparent;
     pointer-events: none;
   }
   .active-slot-gap .label{
@@ -953,6 +946,7 @@
     font-size: var(--text-2xs);
     font-weight: 700;
     white-space: nowrap;
+    opacity: 0;
   }
   .stage-next-start,
   .active-next-boundary{
@@ -961,8 +955,8 @@
     right: 0;
     height: 0;
     z-index: 4;
-    border-top: 2px solid rgba(158,201,240,.82);
-    box-shadow: 0 0 0 3px rgba(158,201,240,.09);
+    border-top: 1px dashed rgba(158,201,240,.2);
+    box-shadow: none;
     pointer-events: none;
   }
   .stage-next-start .label,
@@ -983,6 +977,19 @@
     font-weight: 700;
     white-space: nowrap;
     backdrop-filter: blur(4px);
+    opacity: 0;
+  }
+  /* Keep reserved writing space quiet; show measurements while positioning. */
+  .stage-content.is-positioning .active-slot-gap{
+    background: rgba(158,201,240,.025);
+  }
+  .stage-content.is-positioning .active-slot-gap .label,
+  .stage-content.is-positioning .active-next-boundary .label{
+    opacity: 1;
+  }
+  .stage-content.is-positioning .active-next-boundary{
+    border-top: 2px solid rgba(158,201,240,.82);
+    box-shadow: 0 0 0 3px rgba(158,201,240,.09);
   }
 
   @media (max-width: 700px){
