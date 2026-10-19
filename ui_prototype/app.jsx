@@ -3119,7 +3119,7 @@ function TopBar({
   canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
   editingActive = false, saveStateLabel = '', saveStateTone = '',
   onOpenUpdateSettings, onOpenBugReport, onOpenSettings, updateAvailable = false, updateBusy = false,
-  focusMode = false, onChangeFocusMode, canChangeFocusMode = false,
+  focusMode = false, onChangeFocusMode, canChangeFocusMode = false, hasMaterials = total > 0,
 }){
   const resetReason = pageReviewActive ? '페이지 확인을 먼저 마쳐 주세요'
     : conflictBlocked ? '오류 안내에서 최신 상태를 먼저 선택해 주세요'
@@ -3147,27 +3147,35 @@ function TopBar({
       <div className="spacer" />
       {recognitionBusy && <div className="progress is-working" role="status"><span className="spin-ic">{Icon.refresh}</span><span>문항 인식 중…</span></div>}
       <div className="topbar-actions" aria-label="보조 작업">
+        {/* Order: reset first, material controls only once there is material, update last. */}
+        <button className="btn ghost topbar-reset" type="button"
+          onClick={onReset}
+          disabled={pageReviewActive || operationBusy || resetBlocked || !canReset}
+          title={resetReason} aria-label="초기화">
+          {Icon.reset}<span className="topbar-reset-label">초기화</span>
+        </button>
         {canChangeFocusMode && <div className="editor-mode-control" role="group" aria-label="편집기 보기 모드">
           <button className="btn ghost" type="button" aria-pressed={!focusMode}
             disabled={pageReviewActive || operationBusy} onClick={() => onChangeFocusMode?.(false)}>기본형</button>
           <button className="btn ghost" type="button" aria-pressed={focusMode}
             disabled={pageReviewActive || operationBusy} onClick={() => onChangeFocusMode?.(true)}>집중 모드</button>
         </div>}
-        <button className="btn ghost topbar-update" type="button"
-          onClick={onOpenUpdateSettings}
-          disabled={pageReviewActive || operationBusy}
-          title="앱 업데이트 확인 및 설치 설정 열기">
-          <span className={updateBusy ? 'spin-ic' : ''}>{Icon.refresh}</span>
-          업데이트{updateAvailable && <span className="topbar-update-badge">새 버전</span>}
-        </button>
-        <button
+        {(hasMaterials || canUndo) && <button
           className="btn ghost icon"
           title={canUndo ? `되돌리기 (${PRIMARY_MODIFIER_LABEL}+Z)` : '되돌릴 변경이 없습니다'}
           data-tooltip={canUndo ? '마지막 편집 되돌리기' : '되돌릴 변경이 없습니다'}
           aria-label="되돌리기"
           onClick={onUndo}
           disabled={pageReviewActive || operationBusy || !canUndo}
-        >{Icon.undo}</button>
+        >{Icon.undo}</button>}
+        <button className="btn ghost topbar-update" type="button"
+          onClick={onOpenUpdateSettings}
+          disabled={pageReviewActive || operationBusy}
+          title="앱 업데이트 확인 및 설치 설정 열기"
+          aria-label={updateAvailable ? '업데이트 · 새 버전' : '업데이트'}>
+          <span className={updateBusy ? 'spin-ic' : ''}>{Icon.refresh}</span>
+          <span className="topbar-update-label">업데이트</span>{updateAvailable && <span className="topbar-update-badge">새 버전</span>}
+        </button>
         <ToolbarActionMenu
           id="topbar-more"
           label="수업 작업 더보기"
@@ -3179,7 +3187,6 @@ function TopBar({
                   description: reviewAttentionCount > 0 ? `확인 필요 ${reviewAttentionCount}개 · 필요할 때 검수합니다` : '원본과 분할 영역을 확인하거나 직접 수정합니다',
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
             { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
-            { id: 'reset', icon: Icon.reset, label: '초기화', description: resetReason, danger: true, disabled: pageReviewActive || operationBusy || resetBlocked || !canReset, onSelect: onReset },
             { id: 'settings', icon: Icon.rows3, label: '설정', description: 'AI·API 키, 화면, 한글 변환, 업데이트', disabled: !onOpenSettings, onSelect: onOpenSettings },
             { id: 'support', icon: Icon.fileText, label: '문제 신고', description: '오류나 불편한 점을 알려 주세요', onSelect: onOpenBugReport },
             { id: 'shutdown', icon: Icon.power, label: '종료', onSelect: onShutdown },
@@ -19340,6 +19347,7 @@ function App(){
         focusMode={focusMode}
         onChangeFocusMode={setFocusMode}
         canChangeFocusMode={view === 'board' && items.length > 0}
+        hasMaterials={items.length > 0 || pendingFiles.length > 0}
       />
       {initialSessionError && (
         <div className="initial-session-notice" role="alert">

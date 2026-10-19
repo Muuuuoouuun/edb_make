@@ -74,14 +74,34 @@ class TestUiToolbarControls(unittest.TestCase):
         assert.equal(walk(busy).find(node => node.type === sandbox.LessonNameEditor).props.disabled, true);
         const more = walk(busy).find(node => node.props.id === 'topbar-more');
         assert.equal(more.props.items.find(item => item.id === 'review').disabled, true);
-        assert.equal(more.props.items.find(item => item.id === 'reset').disabled, true);
+        const resetButton = tree => walk(tree).find(node => String(node.props?.className || '').includes('topbar-reset'));
+        assert.equal(resetButton(busy).props.disabled, true);
+        assert.equal(more.props.items.some(item => item.id === 'reset'), false, 'reset is a visible toolbar button');
         assert.equal(more.props.items.find(item => item.id === 'refresh').disabled, true);
         const resetBlocked = sandbox.TopBar({ ...base, resetBlocked: true });
-        assert.equal(walk(resetBlocked).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'reset').disabled, true);
+        assert.equal(resetButton(resetBlocked).props.disabled, true);
+        assert.equal(resetButton(sandbox.TopBar(base)).props.disabled, false);
         const reviewingPages = sandbox.TopBar({ ...base, pageReviewActive: true });
         assert.equal(walk(reviewingPages).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'review').disabled, true);
         const reviewBusy = sandbox.TopBar({ ...base, view: 'review', operationBusy: true });
         assert.equal(walk(reviewBusy).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'board').disabled, true);
+        """)
+
+    def test_topbar_orders_reset_before_material_controls_and_update(self) -> None:
+        run_node(r"""
+        const order = tree => {
+          const actions = walk(tree).find(node => node.props?.className === 'topbar-actions');
+          return walk(actions.props.children).filter(node => node && node.props && (
+            node.props.className === 'editor-mode-control' || node.props['aria-label'] === '되돌리기'
+            || /(^|\s)topbar-(reset|update)(\s|$)/.test(String(node.props.className || '')) || node.props.id === 'topbar-more'
+          )).map(node => node.props.id || node.props['aria-label']
+            || String(node.props.className).match(/topbar-(reset|update)(?=\s|$)|editor-mode-control/)[0]);
+        };
+        assert.deepEqual(order(sandbox.TopBar({ ...base, canChangeFocusMode: true })),
+          ['초기화', '편집기 보기 모드', '되돌리기', '업데이트', 'topbar-more']);
+        // Empty home: no material controls, reset still leads.
+        assert.deepEqual(order(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false })),
+          ['초기화', '업데이트', 'topbar-more']);
         """)
 
     def test_primary_output_and_recognition_state_follow_the_current_work(self) -> None:

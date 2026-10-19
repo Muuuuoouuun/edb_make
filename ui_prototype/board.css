@@ -568,7 +568,16 @@
   .stage-smart-move[aria-pressed="true"]{
     color: var(--accent-ink); background: var(--surface-2); border-color: var(--accent);
   }
-  .topbar-update{ white-space: nowrap; }
+  .topbar-update,
+  .topbar-reset{ white-space: nowrap; }
+  .topbar-reset:hover:not(:disabled){ color: var(--danger-ink); }
+  @media (max-width: 700px){
+    /* Narrow windows keep the action row on one line; the icon keeps its label for assistive tech. */
+    .topbar-reset-label{ display: none; }
+  }
+  @media (max-width: 420px){
+    .topbar-update-label{ display: none; }
+  }
   .topbar-update-badge{ font-size: var(--text-xs); color: var(--accent-ink); }
   .editor-mode-control{
     display: inline-flex; flex-shrink: 0; padding: 2px;
