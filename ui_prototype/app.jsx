@@ -3148,12 +3148,12 @@ function TopBar({
       {recognitionBusy && <div className="progress is-working" role="status"><span className="spin-ic">{Icon.refresh}</span><span>문항 인식 중…</span></div>}
       <div className="topbar-actions" aria-label="보조 작업">
         {/* Order: reset first, material controls only once there is material, update last. */}
-        <button className="btn ghost topbar-reset" type="button"
+        {canReset && <button className="btn ghost topbar-reset" type="button"
           onClick={onReset}
-          disabled={pageReviewActive || operationBusy || resetBlocked || !canReset}
+          disabled={Boolean(pageReviewActive || operationBusy || resetBlocked)}
           title={resetReason} aria-label="초기화">
           {Icon.reset}<span className="topbar-reset-label">초기화</span>
-        </button>
+        </button>}
         {canChangeFocusMode && <div className="editor-mode-control" role="group" aria-label="편집기 보기 모드">
           <button className="btn ghost" type="button" aria-pressed={!focusMode}
             disabled={pageReviewActive || operationBusy} onClick={() => onChangeFocusMode?.(false)}>기본형</button>
@@ -7897,7 +7897,6 @@ function BoardStage({
   recentSessions = [], onRestoreRecentSession, restoringSessionId, recentSessionRestoreBlocked = false,
   handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null,
   aiEnabled = true, userSettings = null, pendingFileCount = 0, importBusy = false, importPaused = false, onRestartImport, splitMode, setSplitMode,
-  keepAttachedFigures = true, setKeepAttachedFigures,
   onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
 }){
   const boardTileHandlersRef = useRef(null);
@@ -8837,7 +8836,6 @@ function BoardStage({
             aiEnabled={aiEnabled}
             hasApiKey={Boolean(userSettings?.hasGeminiApiKey)}
             splitMode={splitMode} setSplitMode={setSplitMode}
-            keepAttachedFigures={keepAttachedFigures} setKeepAttachedFigures={setKeepAttachedFigures}
           />
         ) : (
           <>
@@ -9248,7 +9246,6 @@ function HomeDashboard({
   onUpload, onFilesDropped, onAddMockSample, canAddDummy,
   recentSessions, onRestoreRecentSession, restoringSessionId,
   recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey, splitMode = 'recognize', setSplitMode,
-  keepAttachedFigures = true, setKeepAttachedFigures,
 }){
   const [dropActive, setDropActive] = useState(false);
   const [recentLimit, setRecentLimit] = useState(6);
@@ -9382,9 +9379,6 @@ function HomeDashboard({
                 <span className="home-method-icon" aria-hidden="true">{Icon[icon]}</span><strong>{label}</strong><span>{hint}</span>
               </button></li>)}
           </ul>
-          {setKeepAttachedFigures && <FigureColorToggle checked={keepAttachedFigures}
-            label="첨부한 자료 속 그림 원본 유지" note="문제 인식 후 칠판용에 적용 · 끄면 그림만 흑백 처리"
-            onChange={setKeepAttachedFigures} />}
         </div>
         </section>
         </div>
@@ -9454,9 +9448,6 @@ function HomeDashboard({
             <span className={`home-status-pill ${aiEnabled && hasApiKey ? 'positive' : 'neutral'}`}>
               {!aiEnabled ? '로컬 처리 · AI 사용 꺼짐' : hasApiKey ? 'AI 설정 준비됨 · 실행할 때 사용' : '로컬 처리 · AI 연결 설정 필요'}
             </span>
-          </div>
-          <div className="home-shortcuts-hint">
-            단축키: <kbd>{ALTERNATE_MODIFIER_LABEL}+1</kbd>·<kbd>{ALTERNATE_MODIFIER_LABEL}+2</kbd>·<kbd>{ALTERNATE_MODIFIER_LABEL}+3</kbd> 패널 전환 · <kbd>Esc</kbd> 취소 · <kbd>Shift</kbd> 다중 선택
           </div>
         </div>
       </div>
@@ -13525,19 +13516,19 @@ const DEFAULT_SPLIT_MODE = 'recognize';
 const SPLIT_MODE_OPTIONS = [
   {
     value: 'recognize',
-    label: '자동 분할',
+    label: '문항 AI 인식',
     description: '문항을 찾아 각각 잘라 칠판에 배치',
     icon: 'aiBatch',
   },
   {
     value: 'register',
-    label: '페이지 그대로',
+    label: '페이지 전체 넣기',
     description: '페이지 전체를 그대로 칠판에 배치',
     icon: 'pagePng',
   },
   {
     value: 'manual-split',
-    label: '직접 자르기',
+    label: '수동 자르기',
     description: '원본 위에 영역을 그려 자른 뒤 칠판으로',
     icon: 'pen',
   },
@@ -19530,7 +19521,6 @@ function App(){
             importPaused={importPaused}
             onRestartImport={() => processQueuedFiles(normalizeSplitMode(splitMode))}
             splitMode={splitMode} setSplitMode={setSplitMode}
-            keepAttachedFigures={keepAttachedFigures} setKeepAttachedFigures={setKeepAttachedFigures}
             onRecognizeSession={recognizeCurrentSession}
             canRecognizeSession={canRecognizeSession}
             recognitionDisabledReason={recognitionDisabledReason}

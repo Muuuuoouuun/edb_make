@@ -81,6 +81,8 @@ class TestUiToolbarControls(unittest.TestCase):
         const resetBlocked = sandbox.TopBar({ ...base, resetBlocked: true });
         assert.equal(resetButton(resetBlocked).props.disabled, true);
         assert.equal(resetButton(sandbox.TopBar(base)).props.disabled, false);
+        // Nothing to reset (fresh home): the button is not shown at all.
+        assert.equal(resetButton(sandbox.TopBar({ ...base, canReset: false })), undefined);
         const reviewingPages = sandbox.TopBar({ ...base, pageReviewActive: true });
         assert.equal(walk(reviewingPages).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'review').disabled, true);
         const reviewBusy = sandbox.TopBar({ ...base, view: 'review', operationBusy: true });
@@ -99,9 +101,12 @@ class TestUiToolbarControls(unittest.TestCase):
         };
         assert.deepEqual(order(sandbox.TopBar({ ...base, canChangeFocusMode: true })),
           ['초기화', '편집기 보기 모드', '되돌리기', '업데이트', 'topbar-more']);
-        // Empty home: no material controls, reset still leads.
+        // Empty home with history to clear: no material controls, reset still leads.
         assert.deepEqual(order(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false })),
           ['초기화', '업데이트', 'topbar-more']);
+        // Fresh home: only update and the menu.
+        assert.deepEqual(order(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false, canReset: false })),
+          ['업데이트', 'topbar-more']);
         """)
 
     def test_primary_output_and_recognition_state_follow_the_current_work(self) -> None:

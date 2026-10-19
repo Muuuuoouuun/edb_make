@@ -8579,15 +8579,6 @@
     color: var(--ink-2);
     background: rgba(217,119,6,.08);
   }
-  .home-shortcuts-hint kbd{
-    font-family: var(--font-mono);
-    font-size: var(--text-2xs);
-    padding: 2px 4px;
-    border-radius: 3px;
-    background: var(--surface);
-    border: 1px solid var(--line-strong);
-    color: var(--ink);
-  }
   .side-panel-home-empty{
     display: flex;
     flex-direction: column;

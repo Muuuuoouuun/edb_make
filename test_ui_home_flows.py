@@ -343,13 +343,11 @@ class TestUiHomeFlows(unittest.TestCase):
         assert.ok(checking.includes('점검 중'));
         const partial = text(sandbox.HomeDashboard({ ...base, runtimeDiagnostics: { hangul: { status: 'partial', label: '변환기 확인' } } }));
         assert.ok(partial.includes('변환기 확인'));
-        for (const modifier of ['Alt', 'Option']) {
-          sandbox.ALTERNATE_MODIFIER_LABEL = modifier;
-          const shortcuts = text(sandbox.HomeDashboard(base));
-          for (const number of [1, 2, 3]) {
-            assert.ok(shortcuts.includes(`${modifier} +${number}`), 'home must label the platform modifier');
-          }
-        }
+        // The empty home has no panels, so it shows no panel-shortcut legend.
+        sandbox.ALTERNATE_MODIFIER_LABEL = 'Alt';
+        const home = text(sandbox.HomeDashboard(base));
+        assert.ok(!home.includes('패널 전환'));
+        assert.ok(!home.includes('Alt +1'));
         """)
 
 
