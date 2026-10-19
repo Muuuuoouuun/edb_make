@@ -38,20 +38,12 @@ class TestSidePanelControls(unittest.TestCase):
     def test_inspector_sections_follow_selection_and_settings_open_as_dialog(self) -> None:
         source = Path(__file__).with_name("ui_prototype").joinpath("app.jsx").read_text(encoding="utf-8")
         panel = source.split("function SidePanel(", 1)[1].split("\nfunction ", 1)[0]
-        # Review and placement are separate views; settings stay a native dialog.
-        self.assertNotIn('role="tablist"', panel)
-        self.assertIn('id="side-panel-item" role="region" aria-label="선택한 자료" aria-keyshortcuts="Alt+1" hidden={tab === \'placement\'}', panel)
-        self.assertIn('id="side-panel-placement" role="region" aria-label="크기·배치" aria-keyshortcuts="Alt+2" hidden={!item || tab !== \'placement\'}', panel)
-        # App settings are a modal dialog opened from the top-bar menu.
-        self.assertIn('id="side-panel-board" role="dialog" aria-modal="true"', panel)
-        self.assertIn("const settingsDialogOpen = tab === 'board';", panel)
-        self.assertIn("aria-label=\"설정 닫기\" onClick={closeSettingsDialog}", panel)
-        self.assertIn("{ id: 'settings', icon: Icon.rows3, label: '설정'", source)
-        # Multi-selection and needs-check states have their own blocks.
-        self.assertIn('className="inspector-multi"', panel)
-        self.assertIn('className="inspector-check-card"', panel)
-        # Split runs only from the left queue.
-        self.assertIn("showActions={false}", panel)
+        self.assertIn('id="side-panel-item"', panel)
+        self.assertIn("hidden={tab !== 'item'}", panel)
+        self.assertIn('id="side-panel-board" role="region"', panel)
+        self.assertIn("hidden={!settingsTabActive}", panel)
+        self.assertNotIn("settingsDialogRef", panel)
+        self.assertIn('className="inspector-pill-tabs"', panel)
 
     def test_ai_preference_and_key_readiness_are_separate_and_named(self) -> None:
         run_node(RENDER_SETUP + r"""

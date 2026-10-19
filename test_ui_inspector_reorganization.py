@@ -120,7 +120,7 @@ class TestInspectorReorganization(unittest.TestCase):
           document:{getElementById:id=>({focus:()=>calls.push(['focus',id])})}});
         compile(sandbox,'globalThis.quick = () => ('+snippet(quick.node)+');');
         const buttons = walk(sandbox.quick()).filter(node=>node.type==='button');
-        const crop = buttons.find(node=>text(node).includes('다시 자르기'));
+        const crop = buttons.find(node=>text(node).includes('영역 조정'));
         const placement = buttons.find(node=>text(node).includes('크기·간격'));
         assert.ok(crop && placement);
         crop.props.onClick(); placement.props.onClick();
@@ -129,7 +129,7 @@ class TestInspectorReorganization(unittest.TestCase):
         buttons.find(node=>node.props['aria-label']==='선택 자료 삭제').props.onClick();
         assert.deepEqual(calls.slice(-2),[['png','p1'],['remove','p1']]);
         sandbox.panelBusy=true;
-        assert.equal(walk(sandbox.quick()).find(node=>node.type==='button' && text(node).includes('다시 자르기')).props.disabled,true);
+        assert.equal(walk(sandbox.quick()).find(node=>node.type==='button' && text(node).includes('영역 조정')).props.disabled,true);
 
         let scheduled;
         Object.assign(sandbox, {setAdvancedSettingsOpen:value=>{sandbox.advanced=value;},

@@ -61,9 +61,9 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
 
         self.assertIn("const beforeFlow = reviewFlowState(sessionReviewSummary(session));", on_confirm)
         self.assertIn("const afterFlow = reviewFlowState(sessionReviewSummary(nextSession));", on_confirm)
-        self.assertIn("if (afterFlow.complete && (beforeFlow.remaining > 0 || options.bulk))", on_confirm)
+        self.assertIn("if (afterFlow.complete)", on_confirm)
         self.assertIn("requestViewChange('board', { force: true });", on_confirm)
-        self.assertIn("검수 완료 · 칠판 미리보기로 이동했어요", on_confirm)
+        self.assertNotIn("검수 완료 · 칠판 미리보기로 이동했어요", on_confirm)
         self.assertIn("일괄 확인 완료 · 칠판 미리보기로 이동했어요", on_confirm)
 
     def test_bulk_confirmation_moves_mock_session_to_board_preview(self) -> None:
@@ -162,7 +162,7 @@ class TestUiReviewBulkConfirm(unittest.TestCase):
         box_editor = source.split("function BoxEditPanel", 1)[1].split("function ManualSplitEditor", 1)[0]
 
         self.assertIn("view !== 'review'", side_panel)
-        self.assertIn("선택 1개에 적용", side_panel)
+        self.assertIn("확인 완료", side_panel)
         self.assertIn("남은 확인 대상 ${remainingReviewItems.length}개에도 적용", side_panel)
         self.assertNotIn("<button className=\"btn\" disabled={!item}>건너뛰기</button>", side_panel)
         self.assertIn("합치고 다음 검수", box_editor)

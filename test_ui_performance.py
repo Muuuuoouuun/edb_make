@@ -183,8 +183,8 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("overscroll-behavior: contain", board)
         self.assertIn("scrollbar-gutter: stable", board)
         self.assertIn("overscroll-behavior-inline: contain", board)
-        self.assertIn(".problem-order-status .rail-selection-tools{", board)
-        self.assertIn(".items .problem-order-status.is-selection > span{", board)
+        self.assertIn(".rail-selection-popup{", board)
+        self.assertIn("width: min(280px, calc(100vw - 24px))", board)
 
     def test_smooth_scroll_respects_reduced_motion(self) -> None:
         smooth_scroll = self.source.split("function smoothScrollTo", 1)[1]

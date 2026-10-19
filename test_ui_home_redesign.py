@@ -53,11 +53,9 @@ class TestUiHomeRedesign(unittest.TestCase):
         assert.equal(withClass(methods, 'home-method-card').length, 3);
         assert.ok(text(methods).includes('sparkle'));
         assert.ok(text(methods).includes('fileText'));
-        const scissors = nodes(methods).find(node => node.type === 'svg');
-        assert.ok(scissors, 'manual splitting uses the 1b scissors icon');
-        assert.equal(nodes(scissors).filter(node => node.type === 'circle').length, 2);
-        assert.equal(nodes(methods).filter(node => node.props?.onClick).length, 0,
-          'method guidance must not pretend to process files before upload');
+        const scissors = nodes(methods).find(node => node.props?.children?.includes('pen'));
+        assert.ok(text(methods).includes('pen'));
+        assert.equal(nodes(methods).filter(node => node.type === 'button').length, 3, 'method selection is explicit before upload');
         assert.deepEqual(calls, { upload: 0, sample: 0, restore: [], dropped: [] });
         """)
 
@@ -73,7 +71,7 @@ class TestUiHomeRedesign(unittest.TestCase):
         assert.ok(nodes(tree).some(node => node.props?.id === upload.props['aria-describedby']));
         upload.props.onClick();
         assert.equal(calls.upload, 1);
-        assert.ok(text(tree).includes('파일은 먼저 대기열에 담깁니다'));
+        assert.ok(text(tree).includes('바로 처리해 칠판에 배치합니다'));
         const sample = withClass(tree, 'home-quick-card').find(node => node.type === 'button');
         assert.ok(sample);
         sample.props.onClick();

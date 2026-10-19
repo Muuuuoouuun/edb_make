@@ -8,6 +8,7 @@ function publishSandbox(response) {
   const events = { adopted: [], errors: [], requests: 0, downloads: 0, captures: 0 };
   const session = { session_name: '미저장 수업', problems: [{ id: 'p1' }, { id: 'p2' }] };
   const sandbox = {
+    hasRunningQueueRecognition:false, confirmingRecognition:false, queueRegistrationInFlightRef:{current:false}, pendingFiles:[],
     session, items: session.problems, fileName: session.session_name, boardColumns: 1, layoutGapMode: 'classin-grid',
     BOARD_COLUMN_MIN: 1, DEFAULT_SLOT_HEIGHT_PAGES: 1.2, publishInFlightRef: { current: false }, operationRecovery: null,
     publishRequestDraft: { sessionIds: new Set(['p1', 'p2']), order: ['p1', 'p2'], excluded: [], itemsForPublish: session.problems, sessionForPublish: session, placements: [] },

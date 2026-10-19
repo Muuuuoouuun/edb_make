@@ -41,6 +41,7 @@ async function runQueue(mode, selectedIntent, keepAttachedFigures = true) {
     classifyNetworkRequestError: async error => error,
     activateOperationRecovery: error => { failures.push(error); },
   });
+  sandbox.pendingFilesRef = {current:sandbox.pendingFiles};
   vm.runInContext(section('function fileQueueKey(', 'function sourceFileExtension(')
     + section('function fitWidthPageAsIsSession(', 'function mergeSessions(')
     + section('  const processQueuedFiles = useCallback(', '  const applyRecognitionResult =')
@@ -74,9 +75,9 @@ class TestUiUploadIntent(unittest.TestCase):
           const { sandbox, request } = await runQueue('register', 'single-problem');
           assert.equal(request.intent, 'page-as-is');
           assert.equal(request.options.exportEdb, false);
-          assert.equal(sandbox.applied.input_intent, 'page-as-is');
-          assert.equal(sandbox.applied.problems[0].input_intent, 'page-as-is');
-          assert.equal(sandbox.applied.problems[0].placement_mode, 'continuous-page-as-is');
+          assert.equal(sandbox.review.incomingSession.input_intent, 'page-as-is');
+          assert.equal(sandbox.review.incomingSession.problems[0].input_intent, 'page-as-is');
+          assert.equal(sandbox.review.incomingSession.problems[0].placement_mode, 'continuous-page-as-is');
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
@@ -86,14 +87,14 @@ class TestUiUploadIntent(unittest.TestCase):
           for (const selected of ['multi-problem', 'page-as-is']) {
             const { sandbox, request } = await runQueue('register', selected);
             assert.equal(request.intent, 'page-as-is');
-            assert.equal(sandbox.applied.input_intent, 'page-as-is');
-            assert.equal(sandbox.applied.problems[0].placement_mode, 'continuous-page-as-is');
-            assert.equal(sandbox.view, 'board', 'ordinary registration opens board without review');
+            assert.equal(sandbox.review.incomingSession.input_intent, 'page-as-is');
+            assert.equal(sandbox.review.incomingSession.problems[0].placement_mode, 'continuous-page-as-is');
+            assert.equal(sandbox.review.manualSplit,false,'registration uses the common save transaction');
           }
           const { sandbox, request } = await runQueue('manual-split', 'single-problem');
           assert.equal(request.intent, 'page-as-is');
-          assert.equal(sandbox.view, 'review');
-          assert.equal(sandbox.applied.problems[0].placement_mode, undefined,
+          assert.equal(sandbox.review.manualSplit,true,'only manual cutting opens a local source tool');
+          assert.equal(sandbox.review.incomingSession.problems[0].placement_mode, undefined,
             'manual split opens original pages before width fitting');
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)

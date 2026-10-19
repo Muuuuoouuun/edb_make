@@ -18,6 +18,8 @@ function transaction(overrides = {}) {
   const events = [], queued = [{key:'picked'}, {key:'later'}];
   const sandbox = {
     useCallback: fn => fn,
+    settleBackgroundJob() {}, clearOperationRecovery() {},
+    activateOperationRecovery: error => events.push(['error',error.message]),
     recognitionReview: {kind:'queue-recognition', queueGeneration:1, fileKeys:['picked'],
       incomingSession:{problems:[{id:'new'}]}},
     recognitionApplyInFlightRef:{current:false}, confirmingRecognition:false,
@@ -70,7 +72,7 @@ class TestRecognitionAutoApply(unittest.TestCase):
           assert.equal(s.history.length,1);
           assert.equal(s.recognitionReview,null);
           assert.equal(s.recognitionApplyInFlightRef.current,false);
-          assert.ok(events.some(e=>e[0]==='requestView' && e[1]==='board'));
+          assert.equal(events.filter(e=>['view','requestView'].includes(e[0])).length,0, 'import keeps the existing board mounted');
           assert.ok(events.filter(e=>['view','requestView'].includes(e[0])).every(e=>e[1]==='board'),
             'recognition risks must not force an intermediate review screen');
         })().catch(e=>{console.error(e);process.exitCode=1;});
@@ -91,16 +93,20 @@ class TestRecognitionAutoApply(unittest.TestCase):
         })().catch(e=>{console.error(e);process.exitCode=1;});
         """)
 
-    def test_failure_preserves_queue_and_clears_retrying_candidate(self):
+    def test_save_failure_keeps_candidate_for_save_only_retry(self):
         run_node(SETUP + r"""
         (async () => {
           const {sandbox:s,events}=transaction({postRestore:async()=>{throw new Error('disk unavailable');}});
           await s.applyResult();
           assert.deepEqual(s.queue.map(f=>f.key),['picked','later']);
-          assert.equal(s.recognitionReview,null);
+          assert.equal(s.recognitionReview.applyFailed,true);
           assert.equal(s.recognitionApplyInFlightRef.current,false);
           assert.equal(events.filter(e=>e[0]==='apply').length,0);
           assert.equal(events.filter(e=>e[0]==='error').length,1);
+          s.postRestore=async value=>value;
+          await s.applyResult();
+          assert.equal(s.recognitionReview,null);
+          assert.equal(events.filter(e=>e[0]==='apply').length,1,'retry saves the retained result');
         })().catch(e=>{console.error(e);process.exitCode=1;});
         """)
 

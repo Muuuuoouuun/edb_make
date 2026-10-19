@@ -226,12 +226,12 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
-        # State-driven inspector: no tab strip; app settings open as a dialog.
+        # State-driven inspector with settings in its own inline panel.
         self.assertNotIn('role="tablist"', side_panel)
         self.assertEqual(side_panel.count('role="tab"'), 0)
         self.assertIn('className="inspector-pill-tabs"', side_panel)
-        self.assertIn('role="dialog" aria-modal="true" aria-label="설정"', side_panel)
-        self.assertIn("hidden={!settingsDialogOpen}", side_panel)
+        self.assertIn('role="region" aria-label="설정"', side_panel)
+        self.assertIn("hidden={!settingsTabActive}", side_panel)
         rules = side_panel.split('className="placement-section placement-rules"', 1)[1]
         rules = rules.split('className={`placement-diagnostic', 1)[0]
         self.assertIn("자동 배치 안내", rules)
@@ -255,14 +255,14 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("RIGHT_PANEL_TAB_KEY", side_panel)
         self.assertIn("event.key === 'ArrowRight'", side_panel)
         self.assertIn('id="side-panel-placement"', side_panel)
-        self.assertIn('id="side-panel-board" role="dialog"', side_panel)
+        self.assertIn('id="side-panel-board" role="region"', side_panel)
         self.assertIn("function SettingsSection", source)
         self.assertEqual(side_panel.count("<SettingsSection"), 3)
         self.assertIn('<SidebarDisclosure', side_panel)
         self.assertIn("aria-label={BOARD_COLOR_LABELS[c] || c}", side_panel)
         self.assertIn("onClick={() => goToItem(1)}", side_panel)
         self.assertIn("setActive={selectBoardItem}", source.split("<SidePanel", 1)[1])
-        self.assertIn('<SplitModePicker', rail)
+        self.assertIn('autoProcessKeysRef', source)
         self.assertIn(".settings-section-hd", html)
         self.assertIn(".split-mode-control", html)
 
@@ -598,7 +598,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         item_tab = item_tab.split('id="side-panel-placement"', 1)[0]
         placement_tab = side_panel.split('id="side-panel-placement"', 1)[1]
         placement_tab = placement_tab.split('id="side-panel-board"', 1)[0]
-        settings_tab = side_panel.split("{settingsDialogOpen && (", 1)[1].split("</dialog>", 1)[0]
+        settings_tab = side_panel.split("const settingsPanel = (", 1)[1].split("  return (", 1)[0]
         materialize = source.split("function materializeSessionForItems", 1)[1]
         materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
 
@@ -640,37 +640,12 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
     def test_left_sidebar_filters_recognized_material_without_destructive_recognition_target(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        board = board_document()
-        items_rail = source.split("function ItemsRail({", 1)[1].split("function BoardStage({", 1)[0]
-        side_panel = source.split("function SidePanel", 1)[1]
-        side_panel = side_panel.split("function LoadingOverlay", 1)[0]
-        export_request = source.split("async function postExport(files", 1)[1]
-        export_request = export_request.split("function formatApiError", 1)[0]
-        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const cancelRecognitionReview = useCallback", 1)[0]
-
-        self.assertIn('role="group" aria-label="자료 모아보기"', items_rail)
-        self.assertIn("['all', '전체', materialCounts.all]", items_rail)
-        self.assertIn("['questions', '문항', materialCounts.questions]", items_rail)
-        self.assertIn("['passages', '공통 지문', materialCounts.passages]", items_rail)
-        self.assertIn("items.filter(item => !isPassageFragmentProblem(item)).length", items_rail)
-        self.assertIn("items.filter(isPassageFragmentProblem).length", items_rail)
-        self.assertIn("모아보기 중 · 순서 변경은 전체 보기에서", items_rail)
-        self.assertNotIn('aria-label="인식 대상"', side_panel)
-        self.assertIn("contentTarget: resolvedContentTarget", export_request)
-        self.assertIn("content_target: resolvedContentTarget", export_request)
-        self.assertIn("contentTarget: DEFAULT_CONTENT_TARGET", queue_source)
-        self.assertEqual(1, items_rail.count("processQueuedFiles("))
-        self.assertIn("normalizeSplitMode(splitMode)", items_rail)
-        self.assertIn("const isPassageOnly = mode === 'passage-only';", queue_source)
-        self.assertIn("const isRecognition = mode === 'recognize' || isPassageOnly;", queue_source)
-        self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", queue_source)
-        self.assertIn("contentTarget: isPassageOnly ? 'shared-passages' : DEFAULT_CONTENT_TARGET", source)
-        self.assertIn("const CONTENT_TARGETS = new Set(['all', 'questions', 'shared-passages']);", source)
-        self.assertIn("return CONTENT_TARGETS.has(normalized) ? normalized : DEFAULT_CONTENT_TARGET;", source)
-        self.assertIn("review.kind === 'session-passage-reextract'", source)
-        self.assertIn("공통 지문 ${summary.problems}개", source)
-        self.assertIn(".material-filter", board)
+        rail = source.split("function ItemsRail", 1)[1].split("function BoardStage", 1)[0]
+        self.assertIn("materialFilter", rail)
+        queue = source.split("const processQueuedFiles = useCallback", 1)[1].split("const applyRecognitionResult", 1)[0]
+        self.assertNotIn("materialFilter", queue)
+        self.assertIn("pendingFilesRef.current.filter", queue)
+        self.assertIn("requestedKeySet.has(fileQueueKey(file))", queue)
 
     def test_left_sidebar_supports_modifier_multiselect_group_move_and_bulk_delete(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -691,7 +666,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("removeItem(orderedSelectedIds[0], { problemIds: orderedSelectedIds });", items_rail)
         self.assertIn("선택 문제 일괄 작업", items_rail)
         self.assertNotIn("onClassifySelected?.(orderedSelectedIds, 'shared-passage')", items_rail)
-        self.assertIn("onClassifySelected?.(orderedSelectedIds, 'question')", items_rail)
+        self.assertNotIn("onClassifySelected?.(orderedSelectedIds, 'question')", items_rail)
         self.assertIn("onDownloadSelected?.(orderedSelectedIds)", items_rail)
         self.assertIn("reorderItemGroupForDrop(items, sourceIds, toId, dropPosition)", reorder_flow)
         self.assertIn("await mutateSession('exclude', { problemIds });", remove_flow)
@@ -699,7 +674,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("stepLabel(nextStep)", selected_step_flow)
         self.assertNotIn("processingStepLabel", selected_step_flow)
         self.assertIn(".item.is-selected", board)
-        self.assertIn(".problem-order-status.is-selection", board)
+        self.assertIn(".rail-selection-popup", board)
         self.assertIn("updatePointerDragVisual(event.clientX, event.clientY)", items_rail)
         self.assertIn("resetPointerDragVisual()", items_rail)
         self.assertIn("isPressed ? 'is-pressed' : ''", items_rail)
@@ -739,21 +714,16 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("수업의 미저장 변경도 함께 저장", side_panel)
         self.assertIn(">독립 지문 이미지</button>", side_panel)
         self.assertIn("action === 'classify' ? '자료 분류를 저장하는 중…'", mutation)
-        self.assertIn("action === 'classify' ? '자료 분류를 변경했어요'", mutation)
+        self.assertIn("adoptMutatedSession(next, snapshotBefore)", mutation)
 
     def test_page_png_queue_register_applies_fit_width_page_flow(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        queue_source = source.split("const processQueuedFiles = useCallback(async (mode, targetKey = null) => {", 1)[1]
-        queue_source = queue_source.split("const applyRecognitionResult = useCallback", 1)[0]
-        session_helper = source.split("function fitWidthPageAsIsSession", 1)[1]
-        session_helper = session_helper.split("function mergeSessions", 1)[0]
-
-        self.assertIn("const registeredSession = isManualSplit ? s : fitWidthPageAsIsSession(s, { fileName, boardColumns });", queue_source)
-        self.assertIn("let sessionToApply = registeredSession;", queue_source)
-        self.assertIn("const merged = mergeSessions(currentSnapshot, registeredSession, fileName, boardColumns);", queue_source)
-        self.assertIn("} else if (!isManualSplit && sessionToApply !== s) {", queue_source)
-        self.assertIn("sessionToApply = await postRestore(sessionToApply);", queue_source)
-        self.assertIn("return fitWidthContinuousPageItem", session_helper)
+        queue = source.split("const processQueuedFiles = useCallback", 1)[1].split("const applyRecognitionResult", 1)[0]
+        self.assertIn("isManualSplit ? s : fitWidthPageAsIsSession(s", queue)
+        self.assertIn("incomingSession: registeredSession", queue)
+        apply = source.split("const applyRecognitionResult", 1)[1].split("const setStep", 1)[0]
+        self.assertIn("mergeSessions(currentSnapshot, incomingSession", apply)
+        self.assertIn("await postRestore(candidate)", apply)
 
     def test_reorder_reflows_saved_board_page_positions(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

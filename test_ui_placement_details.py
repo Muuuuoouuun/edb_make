@@ -28,6 +28,7 @@ function placementSandbox() {
   // placement normalizers, reflow, serialization, mapping and signatures.
   const sandbox = {
     riskFlagsFor: entity => entity.riskFlags || [],
+    riskFlagLabel: flag => flag,
     deriveProblemStatus: entity => entity.reviewStatus || 'normal',
     normalizeReviewStatus: status => status || 'normal',
     reviewStatusMeta: status => ({ label: status }),

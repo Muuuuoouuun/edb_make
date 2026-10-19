@@ -29,10 +29,10 @@ def component(name: str) -> str:
 SIDE_PANEL = component("SidePanel")
 LAYOUT_CONTROLS = component("BoardLayoutControls")
 # The right panel is now a state-driven inspector (item + placement sections)
-# and app settings live in a dialog opened from the top-bar menu.
+# and app settings use an inline panel opened from the settings tab.
 ITEM_TAB = SIDE_PANEL.split('id="side-panel-item"', 1)[1].split('id="side-panel-placement"', 1)[0]
 PLACEMENT_TAB = SIDE_PANEL.split('id="side-panel-placement"', 1)[1].split('id="side-panel-board"', 1)[0]
-SETTINGS_TAB = SIDE_PANEL.split("{settingsDialogOpen && (", 1)[1].split("</dialog>", 1)[0]
+SETTINGS_TAB = SIDE_PANEL.split("const settingsPanel = (", 1)[1].split("  return (", 1)[0]
 
 
 class TestSettingsTabHoldsRealSettings(unittest.TestCase):
@@ -146,7 +146,7 @@ class TestPlacementOwnsSessionLayout(unittest.TestCase):
         (async () => {
           for (const columns of [1, 2, 3]) {
             const messages = [];
-            const state = { session: { problems: [{ id: 'legacy' }] },
+            const state = { hasRunningQueueRecognition:false, confirmingRecognition:false, queueRegistrationInFlightRef:{current:false}, pendingFiles:[], session: { problems: [{ id: 'legacy' }] },
               boardColumns: columns, BOARD_COLUMN_MIN: 1,
               publishInFlightRef: { current: false }, operationRecovery: null,
               normalizeBoardColumns: value => value, showToast: message => messages.push(message),
@@ -175,8 +175,9 @@ class TestItemTab(unittest.TestCase):
 
         self.assertIn('className="section-hd-action"', header)
         self.assertIn("onClick={() => applyToAll(item.step)}", header)
-        # Review view already has the confirm bar's own "전체 적용".
-        self.assertIn("!showItemConfirmBar", header)
+        self.assertIn("{items.length > 1 && (", header)
+        self.assertNotIn("!showItemConfirmBar", header)
+        self.assertIn(">전체 적용</button>", header)
 
 
 class TestRememberedPanelState(unittest.TestCase):
@@ -212,26 +213,12 @@ class TestTabNavigation(unittest.TestCase):
         self.assertIn("isEditableKeyboardTarget(evt.target)", handler)
         self.assertIn("evt.metaKey || evt.ctrlKey || evt.shiftKey", handler)
 
-    def test_settings_modal_opens_natively_and_restores_focus_on_close(self) -> None:
-        run_node(r"""
-        const assert = require('node:assert/strict'), fs = require('node:fs'), vm = require('node:vm');
-        const source = fs.readFileSync('ui_prototype/app.jsx','utf8');
-        const start = source.indexOf('  useEffect(() => {\n    if (!settingsDialogOpen) return undefined;');
-        const end = source.indexOf('}, [settingsDialogOpen, setTab]);',start);
-        assert.ok(start >= 0 && end > start);
-        let cleanup, opens=0, closes=0, focuses=0, restored=0;
-        const dialog={open:false,showModal(){this.open=true;opens++},close(){this.open=false;closes++},focus(){focuses++}};
-        const sandbox={settingsDialogOpen:true,settingsDialogRef:{current:dialog},setTab(){},
-          document:{activeElement:{isConnected:true,focus(){restored++}}},
-          useEffect:effect=>{cleanup=effect()}};
-        vm.createContext(sandbox);
-        const effect=source.slice(start,end+'}, [settingsDialogOpen, setTab]);'.length);
-        vm.runInContext(effect,sandbox);
-        assert.equal(opens,1);assert.equal(focuses,1);assert.equal(restored,0);
-        cleanup();assert.equal(closes,1);assert.equal(restored,1);
-        sandbox.settingsDialogOpen=false;vm.runInContext(effect,sandbox);
-        assert.equal(opens,1);assert.equal(cleanup,undefined);
-        """)
+    def test_settings_uses_inline_panel_without_modal_focus_trap(self) -> None:
+        self.assertIn("const settingsTabActive = tab === 'board';", SIDE_PANEL)
+        self.assertIn('id="side-panel-board" role="region"', SIDE_PANEL)
+        self.assertIn('hidden={!settingsTabActive}', SIDE_PANEL)
+        self.assertNotIn('settingsDialogRef', SIDE_PANEL)
+        self.assertNotIn('settings-dialog-backdrop', SIDE_PANEL)
 
 
 class TestStatusChips(unittest.TestCase):

@@ -120,7 +120,7 @@ class TestUiHomeFlows(unittest.TestCase):
         let selected = null;
         const sandbox = {
           useCallback: fn => fn,
-          pendingFilesRef: { current: [] },
+          pendingFilesRef: { current: [] }, autoProcessKeysRef: {current:new Set()}, items:[],
           pendingFileKeysRef: { current: new Set() },
           queueGenerationRef: { current: 0 },
           fileInputRef: { current: { value: 'picked' } },
@@ -138,8 +138,8 @@ class TestUiHomeFlows(unittest.TestCase):
         const b = { name: 'B.png', size: 30, lastModified: 2 };
         sandbox.handleFiles([a, a, b]);
         assert.equal(sandbox.renderedFiles.length, 2);
-        assert.ok(toasts.at(-1).startsWith('2개 파일'));
-        assert.ok(toasts.at(-1).includes('중복 1개 제외'));
+        assert.equal(toasts.length,0,'normal uploads stay quiet');
+        assert.equal(sandbox.autoProcessKeysRef.current.size,2);
         assert.equal(selected, 'A.pdf::20::1');
         assert.equal(sandbox.fileInputRef.current.value, '');
         const generation = sandbox.queueGenerationRef.current;
@@ -147,17 +147,17 @@ class TestUiHomeFlows(unittest.TestCase):
         sandbox.handleFiles([{ ...a }, { ...b }]);
         assert.equal(sandbox.pendingFilesRef.current, queue);
         assert.equal(sandbox.queueGenerationRef.current, generation);
-        assert.equal(reviewClears, 1, 'duplicate pick must preserve the recognition review');
+        assert.equal(reviewClears, 0, 'file additions preserve converted candidates');
         assert.equal(toasts.at(-1), '이미 대기열에 있는 파일입니다');
         sandbox.handleFiles([{ name: 'C.hwp', size: 10, lastModified: 3 }]);
         sandbox.handleFiles([{ name: 'D.pdf', size: 40, lastModified: 4 }]);
         assert.equal(sandbox.pendingFilesRef.current.length, 4, 'back-to-back additions must retain both files');
-        assert.equal(sandbox.queueGenerationRef.current, generation + 2);
+        assert.equal(sandbox.queueGenerationRef.current, generation, 'appending does not cancel an active batch');
         """)
 
     def test_queue_keyboard_does_not_cancel_nested_button_activation(self) -> None:
         run_node(NODE_SETUP + r"""
-        const row = section('className={`source-queue-row ', 'className="source-queue-actions"');
+        const row = section('className={`source-queue-row ', 'className="source-queue-note"');
         const body = row.split('onKeyDown={e => {')[1].split('\n                  }}')[0];
         let selections = 0;
         let prevented = 0;

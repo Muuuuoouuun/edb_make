@@ -88,7 +88,7 @@ class TestWorkspaceLayout(unittest.TestCase):
           press(code); assert.equal(sandbox.tab, tab);
         }
         assert.equal(revealed, 3); assert.equal(prevented, 3);
-        assert.deepEqual(focused,['side-panel-item','side-panel-placement']);
+        assert.deepEqual(focused,['side-panel-item','side-panel-placement','side-panel-board']);
         for (const target of [{ tagName: 'INPUT' }, { tagName: 'TEXTAREA' }, { tagName: 'SELECT' },
           { tagName: 'DIV', isContentEditable: true }]) press('Digit1', { target });
         for (const extra of [{ altKey: false }, { metaKey: true }, { ctrlKey: true }, { shiftKey: true }])
@@ -119,7 +119,7 @@ class TestWorkspaceLayout(unittest.TestCase):
         """)
 
     def test_all_review_and_board_stage_branches_expose_the_navigation_target(self) -> None:
-        self.assertEqual(component("ReviewStage").count('id="workspace-stage"'), 2)
+        self.assertEqual(component("ReviewStage").count('id="workspace-source-editor"'), 2)
         self.assertEqual(component("BoardStage").count('id="workspace-stage"'), 1)
 
 
@@ -140,7 +140,7 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
         const upload = buttons.find(node => node.props['aria-label'] === '파일 추가');
         const preserve = findClass(tree, 'rail-preserve-all');
         assert.ok(text(upload).includes('파일 추가'));
-        assert.ok(text(preserve).includes('전체 보존'));
+        assert.ok(text(preserve).includes('전체 칠판용'));
         assert.ok(preserve.props['data-tooltip'].includes('AI 실행 없이'));
         upload.props.onClick(); assert.equal(uploads, 1);
         preserve.props.onClick(); assert.equal(preserved, 's2');

@@ -164,7 +164,7 @@ class TestUiRefreshDraftPreservation(unittest.TestCase):
           for (const change of [
             sandbox => { sandbox.fileName = '새 수업 이름'; },
             sandbox => { sandbox.items[0] = { ...sandbox.items[0], name: '새 문항 제목' }; },
-            sandbox => { sandbox.items[0] = { ...sandbox.items[0], step: 's2' }; },
+            sandbox => { sandbox.items[0] = { ...sandbox.items[0], step: 's3' }; },
             sandbox => { sandbox.layoutGapMode = 'compact'; },
           ]) {
             const { sandbox, state } = stateSandbox();

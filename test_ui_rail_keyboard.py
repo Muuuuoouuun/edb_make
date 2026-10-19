@@ -62,6 +62,30 @@ function railSandbox(visibleIds = ['a', 'b', 'c', 'd'], selectedIds = ['b'], anc
 
 
 class TestUiRailKeyboard(unittest.TestCase):
+    def test_first_shift_click_uses_active_item_without_prior_selection(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const { applySelectionClick } = require('./ui_prototype/reorder.js');
+        const sandbox = {
+          visibleItemRows: ['a','b','c','d'].map(id => ({item:{id}})),
+          selectedItemIds: new Set(), activeId: 'a',
+          selectionAnchorRef: {current:null}, railSelectionSnapshotRef: {current:''},
+          applySelectionClick,
+          setSelectedItemIds(value) { sandbox.selectedItemIds = value; },
+          setActive(value) { sandbox.activeId = value; },
+        };
+        vm.createContext(sandbox);
+        const clickStart = source.indexOf('  const selectRailItem = (itemId, event = {}) => {');
+        const clickEnd = source.indexOf('  const clearRailSelection =', clickStart);
+        vm.runInContext(source.slice(clickStart, clickEnd) + '\nglobalThis.click = selectRailItem;', sandbox);
+        sandbox.click('c', {shiftKey:true});
+        assert.deepEqual(Array.from(sandbox.selectedItemIds), ['a','b','c']);
+        assert.equal(sandbox.selectionAnchorRef.current, 'a');
+        sandbox.click('d', {shiftKey:true});
+        assert.deepEqual(Array.from(sandbox.selectedItemIds), ['a','b','c','d']);
+        sandbox.click('b', {shiftKey:true});
+        assert.deepEqual(Array.from(sandbox.selectedItemIds), ['a','b']);
+        """)
+
     def test_control_and_command_select_all_are_consumed_without_throwing(self) -> None:
         run_node(NODE_SETUP + r"""
         for (const modifier of ['ctrlKey', 'metaKey']) {

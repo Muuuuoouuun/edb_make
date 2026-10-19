@@ -104,6 +104,10 @@
 .original-bottom-tools button[aria-pressed=true]{background:#ffffff22}
 .original-bottom-tools button:disabled{opacity:.4;cursor:default}
 .original-bottom-tools button:focus-visible{outline:2px solid #fff8ec;outline-offset:0}
+.original-zoom-value{display:flex;align-items:center;gap:2px;font-size:12px;font-variant-numeric:tabular-nums}
+.original-zoom-value input{box-sizing:border-box;width:44px;min-width:0;height:34px;padding:4px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;text-align:right;appearance:textfield;-moz-appearance:textfield}
+.original-zoom-value input::-webkit-inner-spin-button,.original-zoom-value input::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.original-zoom-value input:focus-visible{outline:2px solid var(--accent);outline-offset:0;background:var(--surface)}
 .original-before-after>summary{cursor:pointer;font-size:12px;font-weight:650}
 #side-panel-item .tab-body{flex:1;overflow:auto}
 #side-panel-item .item-preview[hidden]{display:none}
