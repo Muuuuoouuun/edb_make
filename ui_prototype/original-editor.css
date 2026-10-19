@@ -119,7 +119,10 @@
 .manual-split-layout.panel-left .manual-split-panel{grid-column:1}
 @media(min-width:701px){.box-edit-panel,.manual-split-panel{max-height:calc(100vh - 210px)} .box-edit-panel{top:12px} }
 #workspace-panel .inspector-quick-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) 34px}
-#workspace-panel .inspector-quick-actions>.btn:last-child{grid-column:1/-1}
+/* Row 1: 영역 조정 · 나누기. Row 2: 크기·간격 · PNG · delete. */
+#workspace-panel .inspector-quick-actions>.inspector-split-action{grid-column:2/-1}
+#workspace-panel .inspector-quick-actions>.inspector-split-action.on{border-color:var(--accent-ink);background:var(--accent-soft);color:var(--accent-ink)}
+#workspace-panel .inspector-split-hint{margin:6px 2px 0;color:var(--accent-ink);font-size:12px;line-height:1.45}
 #workspace-panel .item-meta .nm .t{font-size:20px;line-height:1.25}
 #workspace-panel .step-row .t{font-size:14px}
 #workspace-panel .step-row .d{font-size:12px}

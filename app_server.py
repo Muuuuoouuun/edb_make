@@ -6552,6 +6552,35 @@ def _remove_problems(session: dict[str, Any], problem_ids: set[str]) -> list[dic
     return removed
 
 
+def _split_ratio_from_crop_ratio(session: dict[str, Any], problem_id: str, crop_y_ratio: float) -> float:
+    """Map a cut chosen on the board image to a ratio of the problem's page box.
+
+    The board shows the problem's crop, which may be trimmed and padded around
+    its page box; ``cropSourceOffset`` records where the crop starts on the page.
+    """
+    if not (0.0 < crop_y_ratio < 1.0):
+        raise ValueError("자를 위치가 문제 밖에 있어요")
+    _index, problem = _find_problem(session, problem_id)
+    bbox = problem.get("bbox") or {}
+    top = float(bbox.get("top", 0.0))
+    height = float(bbox.get("height", 0.0))
+    if height <= 0:
+        raise ValueError("problem bbox is empty — cannot split")
+    crop_path = _resolve_session_path(problem.get("imagePath") or problem.get("image_path"))
+    if crop_path is None or not crop_path.exists():
+        raise FileNotFoundError(f"crop image missing for {problem_id}: {crop_path}")
+    from PIL import Image
+
+    with Image.open(crop_path) as crop:
+        crop_height = crop.height
+    offset = problem.get("cropSourceOffset") or problem.get("crop_source_offset")
+    offset_top = float(offset.get("top", top)) if isinstance(offset, dict) else top
+    ratio = (offset_top + crop_y_ratio * crop_height - top) / height
+    if not (0.05 < ratio < 0.95):
+        raise ValueError("문제 위아래 끝에 너무 가까워 나눌 수 없어요. 조금 더 안쪽을 골라 주세요")
+    return ratio
+
+
 def _mutate_split(session: dict[str, Any], problem_id: str, split_y_ratio: float) -> dict[str, Any]:
     if not (0.05 < split_y_ratio < 0.95):
         raise ValueError("splitYRatio must be between 0.05 and 0.95")
@@ -10836,12 +10865,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         try:
             if action == "split":
                 problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                crop_ratio = payload.get("splitCropYRatio")
+                if crop_ratio is None:
+                    crop_ratio = payload.get("split_crop_y_ratio")
                 raw_ratio = payload.get("splitYRatio")
                 if raw_ratio is None:
                     raw_ratio = payload.get("split_y_ratio")
-                if raw_ratio is None:
-                    raw_ratio = 0.5
-                split_ratio = float(raw_ratio)
+                if crop_ratio is not None:
+                    split_ratio = _split_ratio_from_crop_ratio(session, problem_id, float(crop_ratio))
+                else:
+                    split_ratio = float(0.5 if raw_ratio is None else raw_ratio)
                 new_session = _mutate_split(session, problem_id, split_ratio)
             elif action == "merge":
                 ids_raw = payload.get("problemIds") or payload.get("problem_ids") or []
@@ -12166,6 +12199,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     crop_format=crop_format,
                     input_intent=input_intent,
                     preserve_media_mode=str(payload.get("preserveMediaMode") or "off"),
+                    trim_page_whitespace=_coerce_bool(payload.get("trimPageWhitespace"), default=False),
                     page_tile_mode=str(
                         payload.get("pageTileMode")
                         or payload.get("page_tile_mode")

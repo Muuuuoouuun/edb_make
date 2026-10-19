@@ -660,8 +660,22 @@ function renumberManualSplitRegions(regions){
 
 function sortManualSplitRegions(regions, page){
   const pageHeight = Math.max(1, finiteNumber(page?.height, 1));
+  const pageWidth = Math.max(1, finiteNumber(page?.width, 1));
   const rowTolerance = pageHeight * MANUAL_SPLIT_ROW_TOLERANCE_RATIO;
+  // On a two-column page every region sits in one half; read the left column
+  // top to bottom before the right one, as the exam is read.
+  const middle = pageWidth / 2;
+  const slack = pageWidth * 0.02;
+  const columnOf = region => {
+    const box = region?.bbox || {};
+    if (finiteNumber(box.left, 0) + finiteNumber(box.width, 0) <= middle + slack) return 0;
+    if (finiteNumber(box.left, 0) >= middle - slack) return 1;
+    return -1;
+  };
+  const columns = (regions || []).map(columnOf);
+  const twoColumns = columns.length > 1 && !columns.includes(-1) && columns.includes(0) && columns.includes(1);
   return renumberManualSplitRegions([...(regions || [])].sort((a, b) => {
+    if (twoColumns && columnOf(a) !== columnOf(b)) return columnOf(a) - columnOf(b);
     const aBox = a?.bbox || {};
     const bBox = b?.bbox || {};
     const topDelta = finiteNumber(aBox.top, 0) - finiteNumber(bBox.top, 0);
@@ -1478,6 +1492,8 @@ const Icon = {
   pagePng:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M7 3.5h7l4 4V19a1.8 1.8 0 0 1-1.8 1.8H7A1.8 1.8 0 0 1 5.2 19V5.3A1.8 1.8 0 0 1 7 3.5z"/><path d="M14 3.7v4h4"/><path d="M8.5 12.4h7M8.5 15.3h5.5"/><path d="M3.6 7.3v12.2a2.8 2.8 0 0 0 2.8 2.8h8.2"/></svg>,
   stamp: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 4h6l1 5a3 3 0 0 1-3 3h-2a3 3 0 0 1-3-3l1-5z"/><path d="M8 14h8l1 5H7l1-5z"/><path d="M5 21h14"/><path d="M12 4v8"/></svg>,
   copy:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 16H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
+  scissors: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M8.12 8.12 12 12M20 4 8.12 15.88M14.8 14.8 20 20"/></svg>,
+  merge: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v6M12 22v-6M9 5l3 3 3-3M9 19l3-3 3 3M4 12h16"/></svg>,
   keyboard:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h.01M11 9h.01M15 9h.01M18 9h.01M7 13h.01M11 13h.01M15 13h.01M8 16h8"/></svg>,
   check:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 13l4 4L19 7"/></svg>,
   board:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="13" rx="1"/><path d="M8 21h8M12 17v4"/></svg>,
@@ -1787,7 +1803,9 @@ function inkMaskFromImageData(data, width, height){
   return { width, height, dark };
 }
 function loadPageInkMask(page){
-  const uri = page?.sourceImageUri;
+  return loadImageInkMask(page?.sourceImageUri);
+}
+function loadImageInkMask(uri){
   if (!uri || typeof document === 'undefined' || typeof Image === 'undefined') return Promise.resolve(null);
   const url = filePreviewUrl(uri, INK_MASK_MAX_DIMENSION);
   if (inkMaskCache.has(url)) return inkMaskCache.get(url);
@@ -1821,6 +1839,164 @@ function loadPageInkMask(page){
 async function fitBoxRowsToInk(page, box){
   const mask = await loadPageInkMask(page);
   return mask ? inkTrimmedBoxRows(mask, box, page) : null;
+}
+// Blank bands between inked rows (not the blank paper above or below), in
+// mask rows. Used to suggest where a problem can be cut without hitting ink.
+function inkBlankBands(mask, minRows = 3){
+  if (!mask?.dark) return [];
+  const bands = [];
+  let seenInk = false;
+  let start = -1;
+  for (let y = 0; y < mask.height; y += 1) {
+    let ink = false;
+    const offset = y * mask.width;
+    for (let x = 0; x < mask.width; x += 1) if (mask.dark[offset + x]) { ink = true; break; }
+    if (ink) {
+      if (seenInk && start >= 0 && y - start >= minRows) bands.push({ start, end: y });
+      seenInk = true;
+      start = -1;
+    } else if (seenInk && start < 0) start = y;
+  }
+  return bands;
+}
+
+// Automatic split for manual split: content blocks separated by blank bands
+// that are clearly wider than the line spacing. A two-column page is split
+// per column (a thin rule in the gutter still counts as gutter). On a whole
+// page, a short narrow block alone at the very top or bottom (page number,
+// running header) is left out. Boxes keep each column's ink width, so every
+// problem in a column gets the same text size on the board.
+const AUTO_SPLIT_MIN_GAP_RATIO = 0.018;
+const AUTO_SPLIT_LINE_GAP_FACTOR = 2.6;
+const AUTO_SPLIT_EDGE_ZONE_RATIO = 0.1;
+const AUTO_SPLIT_EDGE_BLOCK_MAX_HEIGHT_RATIO = 0.025;
+const AUTO_SPLIT_EDGE_BLOCK_MAX_WIDTH_RATIO = 0.35;
+const AUTO_SPLIT_COLUMN_MIN_ROW_COVERAGE = 0.03;
+const AUTO_SPLIT_COLUMN_BALANCE = 0.3;
+function autoSplitColumns(mask, x0, x1, y0, y1){
+  const rowCount = Math.max(1, y1 - y0);
+  const width = x1 - x0;
+  const counts = new Array(width).fill(0);
+  for (let y = y0; y < y1; y += 1) {
+    const offset = y * mask.width;
+    for (let x = x0; x < x1; x += 1) if (mask.dark[offset + x]) counts[x - x0] += 1;
+  }
+  const lightLimit = Math.max(2, rowCount * 0.005);
+  const gutter = counts.map(count => count <= lightLimit);
+  // A thin vertical rule between the columns is still a gutter.
+  const ruleWidth = Math.max(2, Math.round(width * 0.006));
+  for (let x = 1; x < width - 1; x += 1) {
+    if (gutter[x] || !gutter[x - 1]) continue;
+    let end = x;
+    while (end < width && !gutter[end] && counts[end] >= rowCount * 0.5) end += 1;
+    if (end > x && end - x <= ruleWidth && end < width && gutter[end]) for (let fill = x; fill < end; fill += 1) gutter[fill] = true;
+  }
+  let best = null;
+  for (let x = Math.floor(width * 0.3); x < Math.ceil(width * 0.7); x += 1) {
+    if (!gutter[x]) continue;
+    let start = x;
+    while (start > 0 && gutter[start - 1]) start -= 1;
+    let end = x;
+    while (end < width && gutter[end]) end += 1;
+    if (!best || end - start > best.end - best.start) best = { start, end };
+    x = end;
+  }
+  if (!best || best.end - best.start < Math.max(4, width * 0.02)) return [[x0, x1]];
+  const coverage = (from, to) => {
+    let rows = 0;
+    for (let y = y0; y < y1; y += 1) {
+      const offset = y * mask.width;
+      for (let x = from; x < to; x += 1) if (mask.dark[offset + x]) { rows += 1; break; }
+    }
+    return rows / rowCount;
+  };
+  // Both sides must carry comparable text; a figure beside blank paper is
+  // not a second column.
+  const left = [x0, x0 + best.start];
+  const right = [x0 + best.end, x1];
+  const leftCoverage = coverage(...left);
+  const rightCoverage = coverage(...right);
+  return Math.min(leftCoverage, rightCoverage) >= AUTO_SPLIT_COLUMN_MIN_ROW_COVERAGE
+    && Math.min(leftCoverage, rightCoverage) >= Math.max(leftCoverage, rightCoverage) * AUTO_SPLIT_COLUMN_BALANCE
+    ? [left, right] : [[x0, x1]];
+}
+function manualSplitAutoBoxes(mask, box, page, { wholePage = false } = {}){
+  if (!mask?.dark || !box) return [];
+  const pageWidth = Math.max(1, finiteNumber(page?.width, mask.width));
+  const pageHeight = Math.max(1, finiteNumber(page?.height, mask.height));
+  const scaleX = mask.width / pageWidth;
+  const scaleY = mask.height / pageHeight;
+  const x0 = Math.max(0, Math.floor(box.left * scaleX));
+  const x1 = Math.min(mask.width, Math.ceil((box.left + box.width) * scaleX));
+  const y0 = Math.max(0, Math.floor(box.top * scaleY));
+  const y1 = Math.min(mask.height, Math.ceil((box.top + box.height) * scaleY));
+  if (x1 - x0 < 2 || y1 - y0 < 2) return [];
+  const minGap = Math.max(2, mask.height * AUTO_SPLIT_MIN_GAP_RATIO);
+  const boxes = [];
+  autoSplitColumns(mask, x0, x1, y0, y1).forEach(([cx0, cx1]) => {
+    const runs = [];
+    let inkLeft = cx1, inkRight = cx0, runStart = -1;
+    for (let y = y0; y <= y1; y += 1) {
+      let ink = false;
+      if (y < y1) {
+        const offset = y * mask.width;
+        for (let x = cx0; x < cx1; x += 1) if (mask.dark[offset + x]) {
+          ink = true;
+          if (x < inkLeft) inkLeft = x;
+          if (x > inkRight) inkRight = x;
+        }
+      }
+      if (ink && runStart < 0) runStart = y;
+      if (!ink && runStart >= 0) { runs.push([runStart, y]); runStart = -1; }
+    }
+    if (!runs.length) return;
+    const gaps = runs.slice(1).map((run, index) => run[0] - runs[index][1]).sort((a, b) => a - b);
+    const lineGap = gaps.length ? gaps[Math.floor((gaps.length - 1) * 0.25)] : 0;
+    const threshold = Math.max(minGap, lineGap * AUTO_SPLIT_LINE_GAP_FACTOR);
+    let blocks = [];
+    runs.forEach(run => {
+      const last = blocks[blocks.length - 1];
+      if (last && run[0] - last.end < threshold) last.end = run[1];
+      else blocks.push({ start: run[0], end: run[1] });
+    });
+    blocks.forEach(block => {
+      let left = cx1, right = cx0;
+      for (let y = block.start; y < block.end; y += 1) {
+        const offset = y * mask.width;
+        for (let x = cx0; x < cx1; x += 1) if (mask.dark[offset + x]) { if (x < left) left = x; if (x > right) right = x; }
+      }
+      block.inkWidth = right - left + 1;
+    });
+    if (wholePage) {
+      const edgeBlock = block => block.end - block.start <= mask.height * AUTO_SPLIT_EDGE_BLOCK_MAX_HEIGHT_RATIO
+        && block.inkWidth <= (cx1 - cx0) * AUTO_SPLIT_EDGE_BLOCK_MAX_WIDTH_RATIO;
+      if (blocks.length > 1 && blocks[0].end <= mask.height * AUTO_SPLIT_EDGE_ZONE_RATIO && edgeBlock(blocks[0])) blocks = blocks.slice(1);
+      const tail = blocks[blocks.length - 1];
+      if (blocks.length > 1 && tail.start >= mask.height * (1 - AUTO_SPLIT_EDGE_ZONE_RATIO) && edgeBlock(tail)) blocks = blocks.slice(0, -1);
+    }
+    // Ignore specks of a few pixels; a real line is taller than this.
+    blocks = blocks.filter(block => block.end - block.start >= Math.max(2, mask.height * 0.003));
+    const padX = Math.max(1, Math.round(mask.width * 0.006));
+    const left = Math.max(box.left, (Math.max(cx0, inkLeft - padX)) / scaleX);
+    const right = Math.min(box.left + box.width, (Math.min(cx1, inkRight + 1 + padX)) / scaleX);
+    blocks.forEach(block => {
+      const top = Math.max(box.top, Math.floor(block.start / scaleY - INK_TRIM_MARGIN_PX));
+      const bottom = Math.min(box.top + box.height, Math.ceil(block.end / scaleY + INK_TRIM_MARGIN_PX));
+      boxes.push(adjustOriginalBox({ left: Math.floor(left), top, width: Math.ceil(right) - Math.floor(left), height: bottom - top }, page,
+        { left: Math.floor(left), top, width: Math.ceil(right) - Math.floor(left), height: bottom - top }));
+    });
+  });
+  return boxes;
+}
+function mergedManualSplitBox(boxes, page){
+  const valid = (boxes || []).filter(Boolean);
+  if (!valid.length) return null;
+  const left = Math.min(...valid.map(box => box.left));
+  const top = Math.min(...valid.map(box => box.top));
+  const right = Math.max(...valid.map(box => box.left + box.width));
+  const bottom = Math.max(...valid.map(box => box.top + box.height));
+  return adjustOriginalBox({ left, top, width: right - left, height: bottom - top }, page,
+    { left, top, width: right - left, height: bottom - top });
 }
 function OriginalNumberInput({value,min,max,label,disabled,onChange}){
   const [draft,setDraft]=useState(String(value));
@@ -2302,6 +2478,8 @@ function ManualSplitEditor({
   page,
   trimToInk = true,
   onTrimToInkChange,
+  onAutoSplit,
+  notice = '',
   regions,
   draftBox,
   mode,
@@ -2523,6 +2701,12 @@ function ManualSplitEditor({
             <span>스탬프</span>
           </button>
         </div>
+        <button type="button" className="manual-split-auto" disabled={mutating} aria-keyshortcuts="A"
+          title="선택한 영역(없으면 전체)을 빈 줄 기준으로 문제마다 나눕니다 · 2단은 단별로"
+          onClick={() => { void onAutoSplit?.(); }}>
+          {Icon.wand}<span>빈 줄로 자동 나누기</span><kbd>A</kbd>
+        </button>
+        {notice && <div className="manual-split-notice" role="status">{notice}</div>}
         <div className="manual-split-note" role="status">
           {activeMode === 'stamp' ? '클릭마다 새 영역 · Esc로 선택·이동'
             : activeMode === 'draw' ? '드래그마다 새 영역 · 기존 영역 클릭으로 수정'
@@ -2617,7 +2801,8 @@ function ManualSplitEditor({
           <span>V 선택</span>
           <span>G 드래그</span>
           <span>S 스탬프</span>
-          <span>P 패널 이동</span>
+          <span>A 자동 나누기</span>
+          <span>M 합치기</span>
           <span>Enter 적용 · ? 도움말</span>
         </div>
         {shortcutHelpOpen && (
@@ -2625,6 +2810,8 @@ function ManualSplitEditor({
             <span><kbd>G</kbd> 드래그 모드</span>
             <span><kbd>V / Esc</kbd> 선택·이동 모드</span>
             <span><kbd>S</kbd> 스탬프 모드</span>
+            <span><kbd>A</kbd> 빈 줄로 자동 나누기 (선택 영역, 없으면 전체)</span>
+            <span><kbd>M</kbd> 선택 영역 합치기</span>
             <span><kbd>P</kbd> 패널 좌우 이동</span>
             <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 전체 선택</span>
             <span><kbd>{PRIMARY_MODIFIER_LABEL} D</kbd> 선택 복제</span>
@@ -2639,8 +2826,8 @@ function ManualSplitEditor({
           <div className="manual-split-empty">
             {activeMode === 'stamp'
               ? '원본 위를 클릭해 같은 크기 영역을 찍으세요.'
-              : activeMode === 'select' ? '드래그나 스탬프로 영역을 만든 뒤 선택해 조절하세요.'
-              : '원본 위에서 드래그해 자를 영역을 만드세요.'}
+              : activeMode === 'select' ? '드래그나 스탬프로 영역을 만들거나 A로 자동으로 나누세요.'
+              : '원본 위에서 드래그하거나 A로 빈 줄 기준 자동 나누기를 하세요.'}
           </div>
         ) : (
           <div className="manual-split-list">
@@ -4472,6 +4659,62 @@ function ReviewStage({
   };
   const trimNewManualSplitRegionRef = useRef(trimNewManualSplitRegion);
   trimNewManualSplitRegionRef.current = trimNewManualSplitRegion;
+  const [manualSplitNotice, setManualSplitNotice] = useState('');
+  useEffect(() => { setManualSplitNotice(''); }, [manualSplit?.pageId]);
+  // Splits the selected regions at blank bands, all regions when none is
+  // selected, and the whole page when nothing is drawn yet.
+  const autoSplitManualSplitRegions = async () => {
+    const page = manualSplitPage;
+    if (!manualSplit || !page || mutating) return;
+    const regions = manualSplit.regions || [];
+    const selected = new Set(manualSplit.selectedRegionIds || []);
+    const targets = regions.filter(region => !selected.size || selected.has(region.id));
+    setManualSplitNotice('빈 줄을 찾는 중…');
+    const mask = await loadPageInkMask(page);
+    if (!mask) { setManualSplitNotice('원본 이미지를 읽지 못해 자동으로 나누지 못했어요'); return; }
+    const pageArea = page.width * page.height;
+    const sources = targets.length
+      ? targets.map(region => ({ id: region.id, box: region.bbox }))
+      : [{ id: null, box: { left: 0, top: 0, width: page.width, height: page.height } }];
+    const pieces = sources.map(source => ({ ...source,
+      parts: manualSplitAutoBoxes(mask, source.box, page, { wholePage: source.box.width * source.box.height >= pageArea * 0.9 }) }))
+      .filter(piece => piece.parts.length);
+    const created = pieces.reduce((sum, piece) => sum + piece.parts.length, 0);
+    if (!created) { setManualSplitNotice('나눌 글자를 찾지 못했어요'); return; }
+    // Parts take their source region's place in the list and keep column
+    // reading order (left column first), which a row sort would interleave.
+    const partsFor = piece => piece.parts.map(bbox => ({
+      id: `draft-region-${manualSplitSeqRef.current++}`, pageId: page.id, bbox,
+    }));
+    const partsById = new Map(pieces.filter(piece => piece.id).map(piece => [piece.id, partsFor(piece)]));
+    const pageParts = pieces.filter(piece => !piece.id).flatMap(partsFor);
+    setManualSplit(prev => {
+      if (!prev || prev.pageId !== page.id) return prev;
+      const regions = pageParts.length ? pageParts
+        : (prev.regions || []).flatMap(region => partsById.get(region.id) || [region]);
+      return { ...prev, mode: 'select', regions: renumberManualSplitRegions(regions), selectedRegionIds: [] };
+    });
+    setManualSplitNotice(`영역 ${created}개로 나눴어요 · 잘못 나뉜 곳은 함께 선택해 합치세요 (M)`);
+  };
+  const mergeManualSplitSelected = () => {
+    const page = manualSplitPage;
+    if (!manualSplit || !page || mutating) return;
+    const selected = (manualSplit.regions || []).filter(region => (manualSplit.selectedRegionIds || []).includes(region.id));
+    if (selected.length < 2) return;
+    const bbox = mergedManualSplitBox(selected.map(region => region.bbox), page);
+    const id = `draft-region-${manualSplitSeqRef.current++}`;
+    const mergedIds = new Set(selected.map(region => region.id));
+    setManualSplit(prev => {
+      if (!prev || prev.pageId !== page.id) return prev;
+      const list = prev.regions || [];
+      const firstIndex = list.findIndex(region => mergedIds.has(region.id));
+      const rest = list.filter(region => !mergedIds.has(region.id));
+      const insertAt = list.slice(0, firstIndex).filter(region => !mergedIds.has(region.id)).length;
+      rest.splice(insertAt, 0, { id, pageId: page.id, bbox });
+      return { ...prev, regions: renumberManualSplitRegions(rest), selectedRegionIds: [id] };
+    });
+    setManualSplitNotice(`영역 ${selected.length}개를 하나로 합쳤어요`);
+  };
   useEffect(() => {
     if (manualSplitPage && manualSplitTrimToInk) void loadPageInkMask(manualSplitPage);
   }, [manualSplitPage?.id, manualSplitPage?.sourceImageUri, manualSplitTrimToInk]);
@@ -5348,7 +5591,7 @@ function ReviewStage({
       const isFormControl = isEditableKeyboardTarget(evt.target);
       const key = manualSplitShortcutKey(evt);
       const primaryModifier = evt.ctrlKey || evt.metaKey;
-      if (!isFormControl && evt.repeat && ['a', 'd', 'v', 'g', 's', 'p', '?', 'enter', 'escape'].includes(key)) {
+      if (!isFormControl && evt.repeat && ['a', 'd', 'm', 'v', 'g', 's', 'p', '?', 'enter', 'escape'].includes(key)) {
         evt.preventDefault();
         return;
       }
@@ -5400,6 +5643,16 @@ function ReviewStage({
       if (!primaryModifier && !evt.altKey && key === 'p') {
         evt.preventDefault();
         toggleManualSplitPanelSide();
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && !evt.shiftKey && key === 'a') {
+        evt.preventDefault();
+        void autoSplitManualSplitRegions();
+        return;
+      }
+      if (!primaryModifier && !evt.altKey && !evt.shiftKey && key === 'm') {
+        evt.preventDefault();
+        mergeManualSplitSelected();
         return;
       }
       if (evt.altKey) return;
@@ -5535,6 +5788,16 @@ function ReviewStage({
         <button
           className="btn"
           type="button"
+          title="선택한 영역을 하나로 합치기 (M)"
+          aria-keyshortcuts="M"
+          onClick={mergeManualSplitSelected}
+          disabled={mutating || (manualSplit.selectedRegionIds || []).length < 2}
+        >
+          {Icon.merge} 합치기
+        </button>
+        <button
+          className="btn"
+          type="button"
           title={`선택 영역 복제 (${PRIMARY_MODIFIER_LABEL}+D)`}
           aria-keyshortcuts="Control+D Meta+D"
           onClick={duplicateManualSplitSelected}
@@ -5543,37 +5806,6 @@ function ReviewStage({
           {Icon.copy} 복제
         </button>
         <button
-          className="btn"
-          type="button"
-          title="위에서 아래, 왼쪽에서 오른쪽 순서로 자동 정렬"
-          onClick={autoSortManualSplitRegions}
-          disabled={mutating || !(manualSplit.regions || []).length}
-        >
-          {Icon.align} 자동 정렬
-        </button>
-        <button
-          className="btn"
-          type="button"
-          title={`영역 패널을 ${manualSplitPanelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동 (P)`}
-          aria-keyshortcuts="P"
-          onClick={toggleManualSplitPanelSide}
-          disabled={mutating}
-        >
-          {manualSplitPanelSide === 'right' ? Icon.arrowLeft : Icon.arrowRight} 패널 이동
-        </button>
-        <button
-          className={`btn ${manualSplitShortcutHelpOpen ? 'is-active' : ''}`}
-          type="button"
-          title="전체 단축키 보기 (?)"
-          aria-keyshortcuts="?"
-          aria-expanded={manualSplitShortcutHelpOpen}
-          aria-controls="manual-split-shortcuts"
-          onClick={() => setManualSplitShortcutHelpOpen(open => !open)}
-        >
-          {Icon.keyboard} 단축키
-        </button>
-        <span className="manual-split-toolbar-separator" aria-hidden="true" />
-        <button
           className="btn danger"
           type="button"
           title="선택 영역 삭제 (Delete)"
@@ -5581,8 +5813,19 @@ function ReviewStage({
           onClick={deleteManualSplitSelected}
           disabled={mutating || !(manualSplit.selectedRegionIds || []).length}
         >
-          {Icon.trash} 선택 삭제
+          {Icon.trash} 삭제
         </button>
+        <span className="manual-split-toolbar-separator" aria-hidden="true" />
+        {/* Occasional actions stay one click away without crowding the row. */}
+        <ToolbarActionMenu id="manual-split-more" label="수동 자르기 더보기" className="manual-split-more" items={[
+          { id: 'sort', icon: Icon.align, label: '자동 정렬', description: '읽는 순서로 · 2단이면 왼쪽 단 먼저',
+            disabled: mutating || !(manualSplit.regions || []).length, onSelect: autoSortManualSplitRegions },
+          { id: 'panel', icon: manualSplitPanelSide === 'right' ? Icon.arrowLeft : Icon.arrowRight,
+            label: `영역 패널을 ${manualSplitPanelSide === 'right' ? '왼쪽' : '오른쪽'}으로 이동`, description: 'P',
+            disabled: mutating, onSelect: toggleManualSplitPanelSide },
+          { id: 'keys', icon: Icon.keyboard, label: manualSplitShortcutHelpOpen ? '단축키 닫기' : '전체 단축키 보기', description: '?',
+            onSelect: () => setManualSplitShortcutHelpOpen(open => !open) },
+        ]} />
         <button className="btn" type="button" onClick={cancelManualPageSplit} disabled={mutating}>취소</button>
       </div>
     </div>
@@ -5865,6 +6108,7 @@ function ReviewStage({
           {originalToolbar}
         {reviewEditorActive && <div className={`original-bottom-tools layout-${originalLayout}`} role="toolbar" aria-label={originalLayout==='floating'?'플로팅 원본 편집 도구':'원본 편집 배율'}>
           {manualSplit && originalLayout==='floating' && [['select','선택·이동'],['draw','드래그'],['stamp','스탬프']].map(([value,label])=><button type="button" key={value} aria-pressed={manualSplit.mode===value} onClick={()=>setManualSplitMode(value)}>{label}</button>)}
+          {manualSplit && originalLayout==='floating' && <button type="button" title="빈 줄 기준으로 자동 나누기 (A)" onClick={() => { void autoSplitManualSplitRegions(); }} disabled={mutating}>자동 나누기</button>}
           <button type="button" aria-label="원본 축소" onClick={()=>adjustReviewZoom(-REVIEW_ZOOM_STEP)} disabled={reviewZoom<=REVIEW_ZOOM_MIN}>{Icon.zoomOut}</button>
           <label className="original-zoom-value">
             <OriginalNumberInput label="시험지 미리보기 배율 (%)" value={reviewZoomPercent(reviewZoom)} min={reviewZoomPercent(REVIEW_ZOOM_MIN)} max={reviewZoomPercent(REVIEW_ZOOM_MAX)} onChange={value=>setReviewZoomValue(value/100)}/>
@@ -6185,6 +6429,8 @@ function ReviewStage({
                     page={page}
                     trimToInk={manualSplitTrimToInk}
                     onTrimToInkChange={setManualSplitTrimToInk}
+                    onAutoSplit={autoSplitManualSplitRegions}
+                    notice={manualSplitNotice}
                     layout={originalLayout}
                     onRegionBoxChange={(id,box)=>setManualSplit(prev=>prev?{...prev,regions:prev.regions.map(region=>region.id===id?{...region,originalBox:region.originalBox || region.bbox,bbox:adjustOriginalBox(region.bbox,page,box)}:region)}:prev)}
                     regions={manualSplit.regions || []}
@@ -8086,6 +8332,7 @@ function BoardStage({
   handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null,
   aiEnabled = true, userSettings = null, pendingFileCount = 0, importBusy = false, importPaused = false, onRestartImport, splitMode, setSplitMode,
   onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
+  splitTargetId = null, onConfirmSplit, onCancelSplit,
 }){
   const boardTileHandlersRef = useRef(null);
   const boardSelectionIntentRef = useRef(null);
@@ -8503,8 +8750,11 @@ function BoardStage({
   };
 
   useLayoutEffect(() => {
-    boardTileHandlersRef.current = { onTileClick, beginPositionDrag };
+    boardTileHandlersRef.current = { onTileClick, beginPositionDrag, confirmSplit: onConfirmSplit, cancelSplit: onCancelSplit };
   });
+  useEffect(() => {
+    if (splitTargetId) tileRefs.current[splitTargetId]?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [splitTargetId]);
 
   const focusActiveTileAtPreviewZoom = (value) => {
     const container = scrollRef.current;
@@ -9322,6 +9572,7 @@ function BoardStage({
                     moveDirection={isJustMoved ? moveFeedback.direction : null}
                     dropPosition={boardDropTarget?.id === it.id ? boardDropTarget.position : null}
                     previewShift={reorderPreviewShifts?.get(String(it.id)) || 0}
+                    splitActive={splitTargetId === it.id}
                     tileRefs={tileRefs} handlersRef={boardTileHandlersRef} />;
                 })}
 
@@ -9412,7 +9663,7 @@ function RailItemDetails({ it, i, hasPageChrome }){
 const MemoRailItemDetails = React.memo(RailItemDetails);
 
 function BoardTile({ it, p, i, contentW, pageH, isSelected, isActive, isPositioning,
-  isJustMoved, moveDirection, dropPosition, smartMove, previewShift = 0, tileRefs, handlersRef }){
+  isJustMoved, moveDirection, dropPosition, smartMove, previewShift = 0, splitActive = false, tileRefs, handlersRef }){
   // The element stays memoized; events always use the latest selection and drag state.
   const onTileClick = (...args) => handlersRef.current.onTileClick(...args);
   const beginPositionDrag = (...args) => handlersRef.current.beginPositionDrag(...args);
@@ -9466,6 +9717,9 @@ function BoardTile({ it, p, i, contentW, pageH, isSelected, isActive, isPosition
     >
       <MemoBoardTileContents it={it} p={p} i={i} smartMove={smartMove}
         isJustMoved={isJustMoved} moveDirection={moveDirection} hasPageChrome={hasPageChrome} />
+      {splitActive && <BoardSplitOverlay item={it}
+        onConfirm={ratio => handlersRef.current.confirmSplit?.(it.id, ratio)}
+        onCancel={() => handlersRef.current.cancelSplit?.()} />}
     </button>
   );
 }
@@ -9515,6 +9769,116 @@ function BoardTileContents({ it, p, i, smartMove, isJustMoved, moveDirection, ha
   </>;
 }
 const MemoBoardTileContents = React.memo(BoardTileContents);
+
+// Splitting a problem on the board: the cut line follows the pointer and
+// snaps to blank bands in the problem image, so it does not run through text.
+// It opens on the widest blank band near the middle, the likeliest seam.
+const BOARD_SPLIT_EDGE_RATIO = 0.06;
+const BOARD_SPLIT_SNAP_RATIO = 0.04;
+const BOARD_SPLIT_SHOWN_BAND_RATIO = 0.05;
+function boardSplitCandidates(mask){
+  if (!mask) return [];
+  return inkBlankBands(mask, Math.max(3, Math.round(mask.height * 0.006)))
+    .map(band => ({ center: (band.start + band.end) / 2 / mask.height, size: (band.end - band.start) / mask.height }))
+    .filter(band => band.center > BOARD_SPLIT_EDGE_RATIO && band.center < 1 - BOARD_SPLIT_EDGE_RATIO);
+}
+function snapBoardSplitRatio(ratio, candidates){
+  const clamped = Math.max(BOARD_SPLIT_EDGE_RATIO, Math.min(1 - BOARD_SPLIT_EDGE_RATIO, ratio));
+  let best = null;
+  (candidates || []).forEach(candidate => {
+    const distance = Math.abs(candidate.center - clamped);
+    if (distance <= BOARD_SPLIT_SNAP_RATIO && (!best || distance < best.distance)) best = { distance, candidate };
+  });
+  return best ? best.candidate.center : clamped;
+}
+function initialBoardSplitRatio(candidates){
+  let best = null;
+  (candidates || []).forEach(candidate => {
+    const score = candidate.size * (1 - Math.abs(candidate.center - 0.5));
+    if (!best || score > best.score) best = { score, candidate };
+  });
+  return best ? best.candidate.center : 0.5;
+}
+function steppedBoardSplitRatio(ratio, candidates, direction){
+  const ordered = (candidates || []).map(candidate => candidate.center).sort((a, b) => a - b);
+  const next = direction > 0 ? ordered.find(center => center > ratio + 0.001) : [...ordered].reverse().find(center => center < ratio - 0.001);
+  return next ?? Math.max(BOARD_SPLIT_EDGE_RATIO, Math.min(1 - BOARD_SPLIT_EDGE_RATIO, ratio + direction * 0.02));
+}
+function BoardSplitOverlay({ item, onConfirm, onCancel }){
+  const overlayRef = useRef(null);
+  const [candidates, setCandidates] = useState([]);
+  const [ratio, setRatio] = useState(0.5);
+  const [frame, setFrame] = useState(null);
+  const latestRef = useRef({ ratio, candidates });
+  latestRef.current = { ratio, candidates };
+  useEffect(() => {
+    let cancelled = false;
+    void loadImageInkMask(item.imageUrl).then(mask => {
+      if (cancelled) return;
+      const found = boardSplitCandidates(mask);
+      setCandidates(found);
+      setRatio(initialBoardSplitRatio(found));
+    });
+    return () => { cancelled = true; };
+  }, [item.imageUrl]);
+  // The image is drawn top-aligned with object-fit: contain inside the tile.
+  const measure = useCallback(() => {
+    const overlay = overlayRef.current;
+    const image = overlay?.closest('.stage-tile')?.querySelector('.tile-img');
+    if (!overlay || !image) return null;
+    const box = image.getBoundingClientRect();
+    const own = overlay.getBoundingClientRect();
+    const naturalWidth = image.naturalWidth || box.width;
+    const naturalHeight = image.naturalHeight || box.height;
+    const scale = Math.min(box.width / Math.max(1, naturalWidth), box.height / Math.max(1, naturalHeight));
+    return { top: box.top - own.top, height: Math.max(1, naturalHeight * scale) };
+  }, []);
+  useLayoutEffect(() => {
+    const update = () => setFrame(measure());
+    update();
+    const overlay = overlayRef.current;
+    const image = overlay?.closest('.stage-tile')?.querySelector('.tile-img');
+    image?.addEventListener('load', update);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(update);
+    if (overlay) observer?.observe(overlay);
+    return () => { observer?.disconnect(); image?.removeEventListener('load', update); };
+  }, [measure]);
+  useEffect(() => {
+    overlayRef.current?.focus({ preventScroll: true });
+    const onKeyDown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel?.(); return; }
+      if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); onConfirm?.(latestRef.current.ratio); return; }
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault();
+        event.stopPropagation();
+        const { ratio: current, candidates: found } = latestRef.current;
+        setRatio(steppedBoardSplitRatio(current, found, event.key === 'ArrowDown' ? 1 : -1));
+      }
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, [onCancel, onConfirm]);
+  const ratioAt = event => {
+    const current = measure();
+    const own = overlayRef.current?.getBoundingClientRect();
+    if (!current || !own) return latestRef.current.ratio;
+    return snapBoardSplitRatio((event.clientY - own.top - current.top) / current.height, latestRef.current.candidates);
+  };
+  const lineTop = frame ? frame.top + ratio * frame.height : null;
+  return <div ref={overlayRef} className="board-split-overlay" tabIndex={-1} role="group"
+    aria-label="나눌 위치 선택. 위아래 방향키로 빈 줄 이동, Enter로 나누기, Esc로 취소"
+    onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
+    onPointerMove={event => setRatio(ratioAt(event))}
+    onClick={event => { event.stopPropagation(); event.preventDefault(); onConfirm?.(ratioAt(event)); }}>
+    {/* Every gap snaps the line; only clear seams are drawn, not each line gap. */}
+    {frame && candidates.filter(candidate => candidate.size >= BOARD_SPLIT_SHOWN_BAND_RATIO).map(candidate =>
+      <i key={candidate.center} className="board-split-candidate" aria-hidden="true"
+        style={{ top: frame.top + candidate.center * frame.height }} />)}
+    {lineTop !== null && <div className="board-split-line" style={{ top: lineTop }}>
+      <span className="board-split-chip">{Icon.scissors}<strong>여기서 나누기</strong><small>클릭 · Enter · Esc 취소</small></span>
+    </div>}
+  </div>;
+}
 
 function HomeDashboard({
   onUpload, onFilesDropped, onAddMockSample, canAddDummy,
@@ -10284,6 +10648,8 @@ function SidePanel({
   onEditOriginal, onDownloadItemImage, onRemoveItem,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
   keepAttachedFigures = false, setKeepAttachedFigures,
+  trimPageWhitespace = true, setTrimPageWhitespace,
+  onSplitItem, splitActiveId = null,
   focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
   const floatingInspector = useFloatingInspector(focusMode);
@@ -10866,6 +11232,9 @@ function SidePanel({
               {setKeepAttachedFigures && <FigureColorToggle checked={keepAttachedFigures} busy={queueBusy}
                 label="첨부한 자료 속 그림 원본 유지" note="새로 추가하는 자료에 적용 · 끄면 그림까지 배경 제거"
                 onChange={setKeepAttachedFigures} />}
+              {splitMode === 'register' && setTrimPageWhitespace && <FigureColorToggle checked={trimPageWhitespace} busy={queueBusy}
+                label="페이지 위아래 빈 공간 자동 제거" note="새로 넣는 페이지에 적용 · 아래쪽에 홀로 있는 쪽번호도 정리"
+                onChange={setTrimPageWhitespace} />}
             </SettingsSection>
             <SettingsSection id="keys" title="AI 사용·연결" summary={aiConnectionLabel} open={settingsOpen.keys} onToggle={toggleSettingsSection}>
 
@@ -11238,16 +11607,25 @@ function SidePanel({
                   {session && <> 적용 시 수업의 미저장 변경도 함께 저장됩니다.</>}
                 </p>
 
+                {/* Edit actions first, then export, with delete last and apart. */}
                 <div className="inspector-quick-actions" role="group" aria-label="선택 자료 빠른 편집">
                   <button className="btn" type="button" disabled={panelBusy || !session} onClick={()=>onEditOriginal?.(item.id)}>
                     {Icon.crop} 영역 조정
                   </button>
-                  <button className="btn" type="button" disabled={panelBusy || !session} onClick={()=>onDownloadItemImage?.(item)}>{Icon.download} PNG</button>
-                  <button className="icon-btn danger" type="button" aria-label="선택 자료 삭제" disabled={panelBusy} onClick={()=>onRemoveItem?.(item.id)}>{Icon.trash}</button>
+                  <button className={`btn inspector-split-action ${splitActiveId === item.id ? 'on' : ''}`} type="button"
+                    aria-pressed={splitActiveId === item.id} disabled={panelBusy || !session || view !== 'board'}
+                    title={view === 'board' ? '칠판에서 나눌 위치를 클릭해 문제를 둘로 나눕니다 · Esc 취소' : '칠판 화면에서 나눌 수 있어요'}
+                    onClick={() => onSplitItem?.(item.id)}>
+                    {Icon.scissors} 나누기
+                  </button>
                   <button className="btn" type="button" onClick={() => { setTab('placement'); document.getElementById('side-panel-placement')?.focus(); }}>
                     {Icon.align} 크기·간격
                   </button>
+                  <button className="btn" type="button" disabled={panelBusy || !session} onClick={()=>onDownloadItemImage?.(item)}>{Icon.download} PNG</button>
+                  <button className="icon-btn danger" type="button" aria-label="선택 자료 삭제" title="선택 자료 삭제" disabled={panelBusy} onClick={()=>onRemoveItem?.(item.id)}>{Icon.trash}</button>
                 </div>
+                {splitActiveId === item.id && <p className="inspector-split-hint" role="status">
+                  칠판의 문제 위에서 나눌 위치를 클릭하세요 · 빈 줄에 자동으로 맞춰져요 · 방향키로 이동 · Esc 취소</p>}
 
                 <div className={`item-preview ${previewExpanded ? 'is-expanded' : 'is-collapsed'}`} ref={wrapRef} hidden={!previewExpanded}>
                   <button
@@ -13892,6 +14270,7 @@ const INPUT_INTENT_OPTIONS = [
 // One split choice + one 분할하기 button drive the upload queue. The value is
 // the processQueuedFiles mode, so the selection is exactly what runs.
 const SPLIT_MODE_STORAGE_KEY = 'edb.splitMode';
+const TRIM_PAGE_WHITESPACE_KEY = 'edb.trimPageWhitespace';
 const DEFAULT_SPLIT_MODE = 'recognize';
 const SPLIT_MODE_OPTIONS = [
   {
@@ -16161,6 +16540,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       // Full-page input stays as one page/one column by default. Column tiling
       // remains an explicit API option, never an implicit page-as-is behavior.
       pageTileMode: resolvedInputIntent === 'page-as-is' ? (options.pageTileMode || 'off') : 'off',
+      trimPageWhitespace: resolvedInputIntent === 'page-as-is' && options.trimPageWhitespace === true,
       aiEnabled: options.aiEnabled !== false,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     })),
@@ -16792,6 +17172,7 @@ function App(){
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiToggleBusy, setAiToggleBusy] = useState(false);
   const [keepAttachedFigures, setKeepAttachedFigures] = useStoredPreference('edb-keep-attached-figures-background-v2', false, isStoredBoolean);
+  const [trimPageWhitespace, setTrimPageWhitespace] = useStoredPreference(TRIM_PAGE_WHITESPACE_KEY, true, isStoredBoolean);
   const [splitMode, setSplitModeState] = useState(readStoredSplitMode);
   const inputIntent = normalizeSplitMode(splitMode) === 'recognize' ? 'multi-problem' : 'page-as-is';
   const setSplitMode = useCallback((value) => {
@@ -17890,6 +18271,26 @@ function App(){
     }
   }, [session, items, fileName, boardColumns, layoutGapMode, showSimpleErrorToast]);
 
+  // Board split: the inspector starts it, the board tile picks the cut line.
+  const [boardSplitId, setBoardSplitId] = useState(null);
+  const startBoardSplit = useCallback(id => {
+    if (!id || mutatingRef.current) return;
+    setActiveId(id);
+    setSelectedProblemIds(new Set([id]));
+    setBoardSplitId(id);
+  }, []);
+  const cancelBoardSplit = useCallback(() => setBoardSplitId(null), []);
+  const confirmBoardSplit = useCallback(async (id, ratio) => {
+    setBoardSplitId(null);
+    const next = await mutateSession('split', { problemId: id, splitCropYRatio: ratio });
+    if (next) showToast('문제를 둘로 나눴어요 · 되돌리기로 취소할 수 있어요');
+  }, [mutateSession, showToast]);
+  useEffect(() => {
+    if (boardSplitId && (view !== 'board' || activeId !== boardSplitId || !items.some(item => item.id === boardSplitId))) {
+      setBoardSplitId(null);
+    }
+  }, [boardSplitId, view, items, activeId]);
+
   const renameLesson = async name => {
     if (mutatingRef.current || loading || hasRunningBackgroundJobs || hasPendingSessionConflict || reviewEditorActive) {
       throw new Error('진행 중인 작업이 끝난 뒤 이름을 변경해 주세요.');
@@ -18536,6 +18937,7 @@ function App(){
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
         signal: job.controller.signal,
         preserveMediaMode: keepAttachedFigures ? 'auto' : 'off',
+        trimPageWhitespace: !isManualSplit && trimPageWhitespace,
         edbName: fileName,
         ocr: recognitionOcr,
         aiEnabled,
@@ -18575,7 +18977,7 @@ function App(){
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [keepAttachedFigures, initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
+  }, [keepAttachedFigures, trimPageWhitespace, initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
 
   // Recognition results are applied as soon as they arrive (no confirm
   // popup). Ctrl+Z restores the previous board when one existed.
@@ -19936,6 +20338,9 @@ function App(){
             recognitionDisabledReason={recognitionDisabledReason}
             sourcePageCount={sourcePageCount}
             sessionEditState={sessionEditState}
+            splitTargetId={boardSplitId}
+            onConfirmSplit={confirmBoardSplit}
+            onCancelSplit={cancelBoardSplit}
           />
           </div>
           {view === 'review' && <div className={`unified-source-editor ${reviewEditorActive ? 'is-editing' : ''}`}>
@@ -20012,6 +20417,8 @@ function App(){
             requestViewChange('review');
           }}
           onDownloadItemImage={downloadItemImage}
+          onSplitItem={startBoardSplit}
+          splitActiveId={boardSplitId}
           onRemoveItem={removeItem}
           userSettings={userSettings}
           runtimeDiagnostics={runtimeDiagnostics}
@@ -20049,6 +20456,7 @@ function App(){
           pendingFileCount={pendingFiles.length}
           pendingImageOnly={isImageOnlyFileBatch(pendingFiles)}
           keepAttachedFigures={keepAttachedFigures} setKeepAttachedFigures={setKeepAttachedFigures}
+          trimPageWhitespace={trimPageWhitespace} setTrimPageWhitespace={setTrimPageWhitespace}
           processQueuedFiles={processQueuedFiles}
           queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
           onPendingPreviewError={showPendingPreviewError}

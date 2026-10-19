@@ -6,11 +6,11 @@ from test_ui_placement_details import NODE_SETUP, run_node
 
 
 QUEUE_SETUP = NODE_SETUP + r"""
-async function runQueue(mode, selectedIntent, keepAttachedFigures = true) {
+async function runQueue(mode, selectedIntent, keepAttachedFigures = true, trimPageWhitespace = true) {
   const sandbox = placementSandbox();
   const requests = [], failures = [];
   Object.assign(sandbox, {
-    useCallback: fn => fn, initialSessionLoaded: true, operationRecovery: null, keepAttachedFigures,
+    useCallback: fn => fn, initialSessionLoaded: true, operationRecovery: null, keepAttachedFigures, trimPageWhitespace,
     listUnique: values => [...new Set(values)],
     pendingFiles: [{ name: '수학.pdf', size: 10, lastModified: 1 }],
     inputIntent: selectedIntent, aiEnabled: false, userSettings: {}, session: null, usingMock: false,
@@ -66,6 +66,18 @@ class TestUiUploadIntent(unittest.TestCase):
               assert.equal(request.options.preserveMediaMode, keep ? 'auto' : 'off');
             }
           }
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_page_whitespace_trim_applies_only_to_whole_page_registration(self) -> None:
+        run_node(QUEUE_SETUP + r"""
+        (async () => {
+          for (const trim of [true, false]) {
+            const {request} = await runQueue('register', 'multi-problem', true, trim);
+            assert.equal(request.options.trimPageWhitespace, trim);
+          }
+          const manual = await runQueue('manual-split', 'multi-problem', true, true);
+          assert.equal(manual.request.options.trimPageWhitespace, false, 'manual split keeps the whole page to cut from');
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 

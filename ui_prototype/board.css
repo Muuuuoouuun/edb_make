@@ -580,9 +580,12 @@
   .topbar-update,
   .topbar-reset{ white-space: nowrap; }
   .topbar-reset:hover:not(:disabled){ color: var(--danger-ink); }
-  @media (max-width: 700px){
-    /* Narrow windows keep the action row on one line; the icon keeps its label for assistive tech. */
+  @media (max-width: 1100px){
+    /* Keep the header on one row beside both panels; the icons keep their
+       names in the tooltip and for assistive tech. */
     .topbar-reset-label{ display: none; }
+    .topbar:has(.topbar-export-group) .topbar-update-label{ display: none; }
+    .topbar{ column-gap: 12px; }
   }
   @media (max-width: 420px){
     .topbar-update-label{ display: none; }
@@ -700,6 +703,53 @@
       radial-gradient(circle at 1px 1px, rgba(15,20,30,.06) 1px, transparent 0) 0 0 / 24px 24px,
       var(--bg);
   }
+  /* Board split: a cut line over one tile, snapped to blank bands. */
+  .board-split-overlay{
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    cursor: row-resize;
+    border-radius: inherit;
+    background: color-mix(in srgb, var(--accent) 6%, transparent);
+    outline: 2px dashed var(--accent-ink);
+    outline-offset: -2px;
+  }
+  .board-split-overlay:focus{ outline-style: solid; }
+  .board-split-candidate{
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    height: 0;
+    border-top: 1px dashed color-mix(in srgb, var(--accent-ink) 45%, transparent);
+    pointer-events: none;
+  }
+  .board-split-line{
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 0;
+    border-top: 2px solid var(--accent-ink);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--surface) 70%, transparent);
+    pointer-events: none;
+  }
+  .board-split-chip{
+    position: absolute;
+    right: 8px;
+    bottom: 4px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border: 1px solid var(--accent-ink);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--accent-ink);
+    box-shadow: var(--shadow-2);
+    font-size: var(--text-2xs);
+    white-space: nowrap;
+  }
+  .board-split-chip > .ic{ width: 14px; height: 14px; }
+  .board-split-chip > small{ opacity: .85; font-size: var(--text-2xs); }
   .stage-file-drop-hint{
     position: absolute;
     inset: 8px;
@@ -6786,6 +6836,37 @@
     color: var(--accent-ink);
     box-shadow: inset 0 0 0 1px rgba(47,111,237,.12);
   }
+  /* The automatic split is the fastest way to make regions, so it sits
+     right under the manual tools as one full-width action. */
+  .manual-split-auto{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 40px;
+    margin-top: 8px;
+    padding: 0 12px;
+    border: 1px dashed color-mix(in srgb, var(--accent-ink) 45%, var(--line));
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+    color: var(--accent-ink);
+    font-size: var(--text-xs);
+    font-weight: 800;
+    cursor: pointer;
+  }
+  .manual-split-auto > span{ flex: 1; text-align: left; }
+  .manual-split-auto > .ic{ width: 16px; height: 16px; flex: none; }
+  .manual-split-auto > kbd{ color: var(--muted); font-size: var(--text-2xs); font-weight: 600; }
+  .manual-split-auto:hover:not(:disabled){ border-style: solid; }
+  .manual-split-auto:focus-visible{ outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+  .manual-split-auto:disabled{ opacity: .55; cursor: not-allowed; }
+  .manual-split-notice{
+    margin-top: 6px;
+    color: var(--accent-ink);
+    font-size: var(--text-xs);
+    font-weight: 700;
+    line-height: 1.45;
+  }
   .manual-split-scope,
   .rail-edit-scope{
     display: grid;
@@ -7089,6 +7170,13 @@
     flex-wrap: nowrap;
     gap: 6px;
     min-height: 58px;
+    container: manual-split-bar / inline-size;
+  }
+  /* With both side panels open the bar gets narrow; dropping the icons keeps
+     every action, labels included, on one row. */
+  @container manual-split-bar (width < 560px){
+    .manual-split-toolbar-actions .btn:not(.icon) > .ic{ display: none; }
+    .manual-split-toolbar-actions{ gap: 6px; }
   }
   .manual-split-actionbar .count-chip,
   .manual-split-actionbar .review-summary-chip{
@@ -9364,7 +9452,7 @@
 
 
 /* Lesson names edit in place; original-file navigation uses an overlay. */
-.topbar > .crumb { flex: 1 1 260px; max-width: 440px; }
+.topbar > .crumb { flex: 1 1 200px; max-width: 440px; }
 .lesson-name-control { min-width: 0; flex: 1; }
 .lesson-name-trigger {
   display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 36px;

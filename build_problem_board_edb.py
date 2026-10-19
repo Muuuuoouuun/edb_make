@@ -112,6 +112,16 @@ TEXT_PRIORITY_SOURCE_EDGE_MIN_ACTIVE_ROWS = 8
 PROBLEM_CROP_CONTENT_INK_THRESHOLD = 232
 PROBLEM_CROP_CONTENT_MARGIN_Y_PX = 6
 PROBLEM_CROP_CONTENT_MIN_TRIM_RATIO = 0.04
+# "페이지 전체 넣기" keeps whole pages, but the blank paper under the last line
+# (and a lone page number below it) only adds board pages. When asked, drop
+# blank rows above and below the content and such a footer; the page width,
+# and so the text size, stays the same.
+PAGE_AS_IS_TRIM_MARGIN_RATIO = 0.008
+PAGE_AS_IS_TRIM_MIN_RATIO = 0.03
+PAGE_AS_IS_FOOTER_ZONE_RATIO = 0.10
+PAGE_AS_IS_FOOTER_MAX_HEIGHT_RATIO = 0.025
+PAGE_AS_IS_FOOTER_MIN_GAP_RATIO = 0.03
+PAGE_AS_IS_FOOTER_MAX_WIDTH_RATIO = 0.35
 PROBLEM_EDGE_INK_SCAN_PX = 18
 PROBLEM_EDGE_INK_DARK_THRESHOLD = 236
 PROBLEM_EDGE_INK_MIN_DARK_PIXELS = 6
@@ -1438,6 +1448,42 @@ def _trim_problem_crop_to_content(
     if offset_output is not None:
         offset_output.append(top)
     return image.crop((0, top, image.width, bottom))
+
+
+def _page_as_is_content_box(image: Image.Image) -> Box | None:
+    """Full-width box around a page's content without its blank top/bottom.
+
+    Returns None when nothing worth trimming is found, including tinted scans
+    whose background is darker than the ink threshold.
+    """
+    if np is None or image.width <= 0 or image.height <= 0:
+        return None
+    dark = np.asarray(image.convert("L"), dtype=np.uint8) < PROBLEM_CROP_CONTENT_INK_THRESHOLD
+    rows = np.flatnonzero(dark.any(axis=1))
+    if rows.size == 0:
+        return None
+    height, width = dark.shape
+    top = int(rows[0])
+    bottom = int(rows[-1]) + 1
+    breaks = np.flatnonzero(np.diff(rows) > 1)
+    if breaks.size:
+        footer_top = int(rows[breaks[-1] + 1])
+        content_bottom = int(rows[breaks[-1]]) + 1
+        footer_columns = np.flatnonzero(dark[footer_top:bottom].any(axis=0))
+        if (
+            footer_top >= height * (1.0 - PAGE_AS_IS_FOOTER_ZONE_RATIO)
+            and bottom - footer_top <= height * PAGE_AS_IS_FOOTER_MAX_HEIGHT_RATIO
+            and footer_top - content_bottom >= height * PAGE_AS_IS_FOOTER_MIN_GAP_RATIO
+            and footer_columns.size
+            and int(footer_columns[-1] - footer_columns[0]) + 1 <= width * PAGE_AS_IS_FOOTER_MAX_WIDTH_RATIO
+        ):
+            bottom = content_bottom
+    margin = max(4, int(round(height * PAGE_AS_IS_TRIM_MARGIN_RATIO)))
+    top = max(0, top - margin)
+    bottom = min(height, bottom + margin)
+    if height - (bottom - top) <= height * PAGE_AS_IS_TRIM_MIN_RATIO:
+        return None
+    return Box(left=0.0, top=float(top), width=float(width), height=float(bottom - top))
 
 
 def _pad_problem_crop_edges(
@@ -6157,6 +6203,7 @@ def build_problem_entries(
     content_target: str = "all",
     render_board_assets: bool = True,
     preserve_media_mode: str = "off",
+    trim_page_whitespace: bool = False,
     timings: dict[str, int] | None = None,
 ) -> list[ProblemEntry]:
     if preserve_media_mode not in {"auto", "grayscale", "off"}:
@@ -6298,9 +6345,24 @@ def build_problem_entries(
                 force_full_page_bounds
                 and str(problem.metadata.get("input_intent") or page.metadata.get("input_intent") or "") == "page-as-is"
             )
+            page_as_is_trimmed = False
             if force_full_page_bounds:
                 blocks = list(page.sorted_blocks())
                 merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
+                content_box = (
+                    _page_as_is_content_box(prepared_page.image)
+                    if preserve_page_as_is and trim_page_whitespace
+                    else None
+                )
+                if content_box is not None:
+                    scale_y = float(page.height_px) / max(1, prepared_page.image.height)
+                    merged_box = Box(
+                        left=0.0,
+                        top=content_box.top * scale_y,
+                        width=float(page.width_px),
+                        height=content_box.height * scale_y,
+                    )
+                    page_as_is_trimmed = True
             else:
                 boxes = [block.bbox for block in blocks]
                 metadata_box = _problem_metadata_bbox(problem, page)
@@ -6405,6 +6467,7 @@ def build_problem_entries(
             source_asset_path = Path(prepared_page.source_path).resolve()
             reuse_full_page_asset = (
                 preserve_page_as_is
+                and not page_as_is_trimmed
                 and source_asset_path.is_file()
                 and prepared_page.image.size == prepared_page.original_size
             )
@@ -11801,6 +11864,7 @@ def run_problem_export(
     input_notes: str | None = None,
     processing_step: str | None = None,
     preserve_media_mode: str = "off",
+    trim_page_whitespace: bool = False,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
     ai_fallback_provider: str = "gemini",
@@ -11928,6 +11992,7 @@ def run_problem_export(
         board_theme=resolved_board_theme,
         content_target=resolved_content_target,
         preserve_media_mode=preserve_media_mode,
+        trim_page_whitespace=trim_page_whitespace,
     )
     if not problem_entries and resolved_content_target == "shared-passages":
         raise ValueError("여러 문항이 함께 쓰는 공통 지문을 찾지 못했습니다")
