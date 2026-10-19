@@ -79,8 +79,8 @@
 .original-layout-floating .manual-split-panel,.original-layout-floating .box-edit-panel{margin-top:36px;background:var(--bg);box-shadow:0 12px 30px #201e1d20;border-radius:24px}
 .original-layout-floating .manual-split-panel{max-height:min(var(--manual-panel-available,65vh),calc(100vh - 270px))}
 .original-layout-floating .review-page-canvas{box-shadow:0 6px 20px #201e1d20}
-.main.review-editor-focus .review-actionbar{font-size:11px}
-.main.review-editor-focus .review-actionbar .hint{display:none}
+.unified-source-editor.is-editing .review-actionbar{font-size:11px}
+.unified-source-editor.is-editing .review-actionbar .hint{display:none}
 @media(max-width:1000px){
  .manual-split-layout.panel-right,.manual-split-layout.panel-left,.box-edit-layout.is-open,.original-layout-floating.manual-split-layout,.original-layout-floating.box-edit-layout.is-open{grid-template-columns:minmax(0,1fr) 270px;padding:10px;gap:10px}
  .original-toolbar-help{display:none}
@@ -136,8 +136,11 @@
 @media(min-width:1001px){
  .original-loupe,.box-edit-layout>.original-loupe{position:fixed;right:375px;bottom:48px}
  .manual-split-layout.panel-left .original-loupe{right:48px}
+ /* The side panel stays open beside the unified editor: anchor the loupe to the canvas edge away from the tool panel. */
+ .unified-source-editor .original-loupe,.unified-source-editor .box-edit-layout>.original-loupe{right:auto;left:calc(clamp(220px,17vw,248px) + 56px)}
+ .unified-source-editor .manual-split-layout.panel-left .original-loupe{left:auto;right:calc(clamp(320px,25vw,360px) + 56px)}
 }
-.main.review-editor-focus .manual-split-actionbar,.main.review-editor-focus .box-edit-actionbar{top:var(--original-toolbar-height,76px)}
+.unified-source-editor.is-editing .manual-split-actionbar,.unified-source-editor.is-editing .box-edit-actionbar{top:var(--original-toolbar-height,76px)}
 .manual-region-geometry{padding:0 14px 12px;font-size:12px;color:var(--muted)}
 .manual-region-geometry>summary{padding:10px;border-radius:12px;background:var(--surface);cursor:pointer}
 .manual-region-geometry .original-geometry{padding:12px 0}
@@ -166,11 +169,11 @@
 .manual-split-panel,.box-edit-panel{background:var(--editor-panel,var(--surface-2))}
 .original-layout-floating .manual-split-panel,.original-layout-floating .box-edit-panel{background:var(--bg)}
 /* Original edit owns its toolbar; the surrounding review chrome should not consume the canvas. */
-.main.review-editor-focus .review-stage-toolbar{display:none}
-.main.review-editor-focus .review-page:has(.box-edit-layout.is-open)>.review-page-hd,
-.main.review-editor-focus .review-page:has(.manual-split-layout)>.review-page-hd{display:none}
-.main.review-editor-focus .box-edit-actionbar{display:none}
-.main.review-editor-focus:has(.multi-crop-panel) .box-edit-actionbar{display:flex}
+.unified-source-editor.is-editing .review-stage-toolbar{display:none}
+.unified-source-editor.is-editing .review-page:has(.box-edit-layout.is-open)>.review-page-hd,
+.unified-source-editor.is-editing .review-page:has(.manual-split-layout)>.review-page-hd{display:none}
+.unified-source-editor.is-editing .box-edit-actionbar{display:none}
+.unified-source-editor.is-editing:has(.multi-crop-panel) .box-edit-actionbar{display:flex}
 .original-edit-title small{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .original-bottom-tools.layout-fixed{background:var(--surface-2);color:var(--ink);border:1px solid var(--line);box-shadow:0 2px 6px #201e1d12}
 .original-bottom-tools.layout-fixed button[aria-pressed=true]{background:var(--surface)}

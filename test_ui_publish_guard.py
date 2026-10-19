@@ -31,7 +31,7 @@ class TestUiPublishGuard(unittest.TestCase):
             on_publish.index("publishInFlightRef.current = true;"),
         )
         self.assertIn(
-            "operationBusy={Boolean(loading) || hasRunningQueueRecognition || confirmingRecognition || pendingFiles.length > 0 || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            "operationBusy={Boolean(loading) || hasRunningQueueRecognition || confirmingRecognition || (pendingFiles.length > 0 && !importPaused) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
             source,
         )
         self.assertIn("if (operationRecovery?.conflict)", on_publish)
@@ -160,7 +160,7 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("selectedPageChromeProblemIds", review_stage)
         self.assertIn("onEnhanceImage?.(selectedPageChromeProblemIds, { mode: 'preserve' })", review_stage)
         self.assertIn("imageEnhanceBusy", review_stage)
-        self.assertIn("3단계 칠판용", review_stage)
+        self.assertIn("3단계 글자 보존", review_stage)
         self.assertIn("page-chrome-artifact", review_stage)
         self.assertIn("onEnhanceImage={enhanceImageSession}", review_usage)
         self.assertIn("imageEnhanceBusy={hasRunningImageEnhance}", review_usage)

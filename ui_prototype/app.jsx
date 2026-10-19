@@ -350,6 +350,7 @@ const MANUAL_SPLIT_FAST_NUDGE_PX = 10;
 const REVIEW_ZOOM_MIN = 0.25;
 const REVIEW_ZOOM_MAX = 3;
 const REVIEW_ZOOM_STEP = 0.1;
+const QUEUE_RECOVERY_KINDS = new Set(['recognition', 'registration', 'apply-recognition']);
 const RECENT_SESSIONS_COLLAPSED_KEY = 'edb.recentSessionsCollapsed';
 const RECENT_SESSIONS_PAGE_SIZE = 5;
 const RIGHT_PANEL_TAB_KEY = 'edb.rightPanel.tab';
@@ -2341,7 +2342,7 @@ function ManualSplitEditor({
           <label>적용 범위
             <select aria-label="자르기 적용 범위" value={scope} disabled={mutating} onChange={evt => onScopeChange?.(evt.target.value)}>
               {selectedScopeCount > 0 && <option value="selection">선택한 {selectedScopeCount}개 문제만</option>}
-              <option value="page">이 페이지 전체 영역 조정</option>
+              <option value="page">이 페이지 전체 교체</option>
               <option value="append">기존 문제 유지하고 추가</option>
             </select>
           </label>
@@ -3461,9 +3462,12 @@ function ReviewStage({
     });
   }, [syncReviewPageNavigation]);
 
+  // A guided multi-page split briefly has no open page between commits; keep
+  // reporting the editor as active so the workspace does not return to the board.
+  const guidedSplitPending = guidedSplitPageIds.length > 0;
   useLayoutEffect(() => {
-    onEditorModeChange?.(reviewEditorActive);
-  }, [onEditorModeChange, reviewEditorActive]);
+    onEditorModeChange?.(reviewEditorActive || guidedSplitPending);
+  }, [onEditorModeChange, reviewEditorActive, guidedSplitPending]);
   useEffect(() => () => onEditorModeChange?.(false), [onEditorModeChange]);
   useEffect(() => () => {
     cancelSmoothScroll(reviewWrapRef.current);
@@ -4981,14 +4985,24 @@ function ReviewStage({
   useEffect(() => {
     if (!boxEdit || mutating) return undefined;
     const onBoxEditKeyDown = (evt) => {
+      if (evt.defaultPrevented || evt.isComposing || evt.keyCode === 229) return;
+      if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
       if (isEditableKeyboardTarget(evt.target)) return;
+      if (evt.target?.closest?.('#workspace-rail, #workspace-panel, .rail-selection-popup')) return;
+      if (evt.repeat && (evt.key === 'Enter' || evt.key === 'Escape')) {
+        evt.preventDefault();
+        return;
+      }
+      const primaryModifier = evt.ctrlKey || evt.metaKey;
       if (evt.key === 'Escape') {
         evt.preventDefault();
         cancelBoxEdit();
       } else if (evt.key === 'Enter') {
+        // Enter activates focused buttons; Ctrl/Command+Enter explicitly applies.
+        if (!primaryModifier && evt.target?.closest?.('button, a, summary, [role="button"]')) return;
         evt.preventDefault();
         void applyBoxEdit();
-      } else {
+      } else if (!primaryModifier && !evt.altKey) {
         const arrowDelta = {
           ArrowLeft: [-1, 0],
           ArrowRight: [1, 0],
@@ -5137,6 +5151,8 @@ function ReviewStage({
     const onKeyDown = (evt) => {
       if (evt.defaultPrevented || evt.isComposing || evt.keyCode === 229) return;
       if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
+      // The rail and side panel stay usable beside the editor; their keys are theirs.
+      if (evt.target?.closest?.('#workspace-rail, #workspace-panel, .rail-selection-popup')) return;
       const isFormControl = isEditableKeyboardTarget(evt.target);
       const key = manualSplitShortcutKey(evt);
       const primaryModifier = evt.ctrlKey || evt.metaKey;
@@ -5438,7 +5454,7 @@ function ReviewStage({
         <span className="count-chip">{selectedList.length}개 선택됨</span>
         <span className="hint">
           {selectedHasPageChromeArtifact
-            ? '페이지 선/번호가 감지된 문제입니다. 3단계 칠판용으로 다시 뽑거나 원본 틀을 조정하세요.'
+            ? '페이지 선/번호가 감지된 문제입니다. 3단계 글자 보존으로 다시 뽑거나 원본 틀을 조정하세요.'
             : selectedList.length === 1
             ? '현재 문항의 테두리를 원본 위에서 바로 조정할 수 있어요.'
             : sameSourcePage
@@ -5457,7 +5473,7 @@ function ReviewStage({
               onClick={() => onEnhanceImage?.(selectedPageChromeProblemIds, { mode: 'preserve' })}
               disabled={imageEnhanceBusy || mutating || !onEnhanceImage}
             >
-              {Icon.wand} 3단계 칠판용 {selectedPageChromeProblemIds.length}
+              {Icon.wand} 3단계 글자 보존 {selectedPageChromeProblemIds.length}
             </button>
           )}
           {selectedList.length >= 2 && (
@@ -5520,7 +5536,7 @@ function ReviewStage({
                 type="button"
                 onClick={beginManualSplitForSelection}
                 disabled={mutating || !selectedCanManualSplit}
-                title={selectedCanManualSplit ? '선택한 항목들의 영역을 직접 조정' : '같은 원본 페이지의 항목만 수동 자르기할 수 있습니다'}
+                title={selectedCanManualSplit ? '선택한 항목들을 수동 자르기로 다시 나누기' : '같은 원본 페이지의 항목만 수동 자르기할 수 있습니다'}
               >
                 {Icon.pen} 선택 항목 재분할
               </button>
@@ -6554,21 +6570,27 @@ function ItemsRail({
       if (!anchor || !popup) return;
       const rect = anchor.getBoundingClientRect();
       const railRect = railRef.current?.getBoundingClientRect() || rect;
-      setSelectionPopupPosition({
+      const next = {
         left: railRect.width === 0
           ? Math.max(12, (window.innerWidth - popup.offsetWidth) / 2)
           : Math.max(12, Math.min(railRect.right + 12, window.innerWidth - popup.offsetWidth - 12)),
         top: railRect.width === 0
           ? window.innerHeight - popup.offsetHeight - 16
           : Math.max(12, Math.min(rect.top, window.innerHeight - popup.offsetHeight - 12)),
-      });
+      };
+      // Scroll fires continuously; skip renders when the popup did not move.
+      setSelectionPopupPosition(prev => (prev.left === next.left && prev.top === next.top ? prev : next));
     };
     const dismissOutside = event => {
       if (selectionPopupRef.current?.contains(event.target) || railRef.current?.contains(event.target)) return;
       setDismissedSelection(selectionKey);
     };
     const dismissOnEscape = event => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const insidePopup = selectionPopupRef.current?.contains(event.target);
+      // Escape inside an unrelated field (search, number input) belongs to that field.
+      if (!insidePopup && isEditableKeyboardTarget(event.target)) return;
+      event.preventDefault();
       if (selectionPopupRef.current?.contains(document.activeElement)) {
         itemRefs.current[activeId]?.focus?.({ preventScroll: true });
       }
@@ -7094,6 +7116,12 @@ function ItemsRail({
     const isSelectAll = (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a';
     const isRangeArrow = event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown');
     if (!isSelectAll && !isRangeArrow && event.key !== 'Escape') return false;
+    if (event.key === 'Escape' && selectionPopupOpen) {
+      // The first Escape closes the bulk-action popup; the next clears the selection.
+      event.preventDefault();
+      setDismissedSelection(selectionKey);
+      return true;
+    }
     const result = selectionKeyboardCommand(
       visibleIds,
       Array.from(selectedItemIds),
@@ -7534,7 +7562,7 @@ function ItemsRail({
               );})}
             </div>
             {importPaused && <button className="btn" type="button" onClick={() => processQueuedFiles(normalizeSplitMode(splitMode))}>처리 다시 시작</button>}
-            <p className="source-queue-note">{queueBusy ? '처리 중 · 추가 자료는 이어서 처리합니다' : '준비된 자료부터 자동으로 처리합니다'}</p>
+            <p className="source-queue-note">{queueBusy ? '처리 중 · 추가 자료는 이어서 처리합니다' : importPaused ? '처리가 멈췄어요 · 다시 시작하면 남은 자료를 처리합니다' : '준비된 자료부터 자동으로 처리합니다'}</p>
 
           </div>
         )}
@@ -7861,7 +7889,8 @@ function BoardStage({
   panelCollapsed = false, onOpenPanel, panelReopenRef,
   recentSessions = [], onRestoreRecentSession, restoringSessionId, recentSessionRestoreBlocked = false,
   handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null,
-  aiEnabled = true, userSettings = null, pendingFileCount = 0, importBusy = false, splitMode, setSplitMode,
+  aiEnabled = true, userSettings = null, pendingFileCount = 0, importBusy = false, importPaused = false, onRestartImport, splitMode, setSplitMode,
+  keepAttachedFigures = true, setKeepAttachedFigures,
   onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
 }){
   const boardTileHandlersRef = useRef(null);
@@ -8801,10 +8830,13 @@ function BoardStage({
             aiEnabled={aiEnabled}
             hasApiKey={Boolean(userSettings?.hasGeminiApiKey)}
             splitMode={splitMode} setSplitMode={setSplitMode}
+            keepAttachedFigures={keepAttachedFigures} setKeepAttachedFigures={setKeepAttachedFigures}
           />
         ) : (
           <>
-          {!items.length && <div className="board-import-state" role="status"><span className="mini-spinner"/><strong>{importBusy ? '자료를 칠판용으로 준비하고 있어요' : '자료 처리 준비 중'}</strong><small>완료되면 이 화면에 바로 배치합니다</small></div>}
+          {!items.length && (importPaused
+            ? <div className="board-import-state is-paused" role="status"><strong>자료 처리가 멈췄어요</strong><small>대기 중인 자료 {pendingFileCount}개 · 다시 시작하면 이어서 처리합니다</small>{onRestartImport && <button className="btn primary" type="button" onClick={onRestartImport}>처리 다시 시작</button>}</div>
+            : <div className="board-import-state" role="status"><span className="mini-spinner"/><strong>{importBusy ? '자료를 준비하고 있어요' : '자료 처리 준비 중'}</strong><small>완료되면 이 화면에 바로 배치합니다</small></div>)}
           <div className="stage-toolbar stage-unified-toolbar" role="group" aria-label="칠판 도구">
             <button className="stage-estimate-summary stage-estimate-details-toggle" type="button"
               ref={estimateToggleRef} aria-label="배치 정보"
@@ -9209,6 +9241,7 @@ function HomeDashboard({
   onUpload, onFilesDropped, onAddMockSample, canAddDummy,
   recentSessions, onRestoreRecentSession, restoringSessionId,
   recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey, splitMode = 'recognize', setSplitMode,
+  keepAttachedFigures = true, setKeepAttachedFigures,
 }){
   const [dropActive, setDropActive] = useState(false);
   const [recentLimit, setRecentLimit] = useState(6);
@@ -9342,6 +9375,9 @@ function HomeDashboard({
                 <span className="home-method-icon" aria-hidden="true">{Icon[icon]}</span><strong>{label}</strong><span>{hint}</span>
               </button></li>)}
           </ul>
+          {setKeepAttachedFigures && <FigureColorToggle checked={keepAttachedFigures}
+            label="첨부한 자료 속 그림 원본 유지" note="문제 인식 후 칠판용에 적용 · 끄면 그림만 흑백 처리"
+            onChange={setKeepAttachedFigures} />}
         </div>
         </section>
         </div>
@@ -9945,11 +9981,23 @@ function SidePanel({
   const cropControlRef = useRef(null);
   const panelTabRefs = useRef({});
   const consumedSettingsRequestRef = useRef(settingsRequest);
+  // The empty home hides the panel; a settings request opens it on its own.
+  const [homeSettingsOpen, setHomeSettingsOpen] = useState(false);
   useEffect(() => {
     if (!settingsRequest || consumedSettingsRequestRef.current === settingsRequest) return;
     consumedSettingsRequestRef.current = settingsRequest;
     setTab('board');
-  }, [settingsRequest, setTab]);
+    if (emptyHome) setHomeSettingsOpen(true);
+    else if (typeof onRevealPanel === 'function') onRevealPanel();
+  }, [settingsRequest, setTab, emptyHome, onRevealPanel]);
+  useEffect(() => {
+    if (!emptyHome) setHomeSettingsOpen(false);
+  }, [emptyHome]);
+  const closeHomeSettings = () => {
+    setHomeSettingsOpen(false);
+    setTab('item');
+  };
+  const panelVisible = !emptyHome || homeSettingsOpen;
   const settingsTabActive = tab === 'board';
   const selectedPanelItems = (items || []).filter(candidate => selectedIds?.has?.(String(candidate.id)));
   const multiSelectionCount = selectedPanelItems.length > 1 ? selectedPanelItems.length : 0;
@@ -10476,8 +10524,11 @@ function SidePanel({
         <>
           <div className="tab-body settings-tab-body">
             <SettingsSection id="upload" title="분할 방식" summary={splitModeMeta(splitMode).label} open={settingsOpen.upload} onToggle={toggleSettingsSection}>
-              <p className="settings-hint">업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다</p>
+              <p className="settings-hint">자료를 추가하면 이 방식으로 바로 처리합니다</p>
               <SplitModePicker splitMode={splitMode} setSplitMode={setSplitMode} disabled={queueBusy} />
+              {setKeepAttachedFigures && <FigureColorToggle checked={keepAttachedFigures} busy={queueBusy}
+                label="첨부한 자료 속 그림 원본 유지" note="새로 추가하는 자료에 적용 · 끄면 그림만 흑백 처리"
+                onChange={setKeepAttachedFigures} />}
             </SettingsSection>
             <SettingsSection id="keys" title="AI 사용·연결" summary={aiConnectionLabel} open={settingsOpen.keys} onToggle={toggleSettingsSection}>
 
@@ -10661,7 +10712,14 @@ function SidePanel({
   return (
     <>
     {updateDialog}
-    {!emptyHome && <div className={`col right ${view === 'review' ? 'review-context' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정">
+    {panelVisible && <div className={`col right ${view === 'review' ? 'review-context' : ''} ${emptyHome ? 'home-settings' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정"
+      onKeyDown={emptyHome ? event => { if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); closeHomeSettings(); } } : undefined}>
+      {emptyHome && (
+        <div className="home-settings-heading">
+          <div><strong>설정</strong></div>
+          <button className="icon-btn" type="button" aria-label="설정 닫기" onClick={closeHomeSettings}>{Icon.close}</button>
+        </div>
+      )}
       {focusMode && (
         <div className="focus-panel-heading">
           <div>
@@ -10678,7 +10736,7 @@ function SidePanel({
         </div>
       )}
       <div className="inspector-pill-tabs" role="group" aria-label="검수와 설정">
-        <button type="button" aria-pressed={tab!=='board'} onClick={()=>setTab('item')}>편집 {remainingReviewItems.length>0 && <span>{remainingReviewItems.length+(itemNeedsCheck?1:0)}</span>}</button>
+        <button type="button" aria-pressed={tab!=='board'} onClick={()=>setTab('item')}>편집 {remainingReviewItems.length+(itemNeedsCheck?1:0)>0 && <span>{remainingReviewItems.length+(itemNeedsCheck?1:0)}</span>}</button>
         <button type="button" aria-pressed={settingsTabActive} aria-controls="side-panel-board" onClick={()=>setTab('board')}>설정</button>
       </div>
 
@@ -10820,7 +10878,7 @@ function SidePanel({
                     className={`step-row ${item.step === 's3' ? 'on' : ''}`}
                     type="button"
                     aria-pressed={item.step === 's3'}
-                    data-tooltip="칠판용 2K 또는 선택적 AI 1K 재구성으로 고화질 제작"
+                    data-tooltip="글자 보존 2K 또는 선택적 AI 1K 재구성으로 고화질 제작"
                     disabled={panelBusy}
                     onClick={() => selectProcessingStep('s3')}
                   >
@@ -11140,12 +11198,14 @@ function SidePanel({
             )}
           </div>
 
-          {showItemConfirmBar && (
+          {view !== 'review' && !!item && (
           <div className="tab-foot">
+            {/* The whole-session figure policy stays reachable for saved items. */}
             <FigureColorToggle checked={items.every(keepsFigureColors)} busy={panelBusy || !session || !items.length}
               label="전체 자료 속 그림 원본 유지"
               note={items.some(keepsFigureColors) && !items.every(keepsFigureColors) ? '일부 자료는 흑백 처리 중 · 전체 설정 변경' : '전체 자료에 즉시 저장 · 칠판용 방식에 적용'}
               onChange={enabled => mutateSession?.('preserve-media', { problemIds: items.map(candidate => candidate.id), mode: enabled ? 'auto' : 'grayscale' })} />
+            {showItemConfirmBar && <>
             {remainingReviewItems.length>0 ? <label className={`inspector-remaining-card ${bulk?'on':''}`}>
               <span className="inspector-remaining-icon">{Icon.check}</span><span><strong>남은 {remainingReviewItems.length}개에도 적용</strong><small>‘{stepLabel(item.step)}’ 방식으로 함께 확인</small></span>
               <input type="checkbox" role="switch" checked={bulk} disabled={panelBusy} onChange={e=>setBulk(e.target.checked)} aria-label={`남은 확인 대상 ${remainingReviewItems.length}개에도 적용`}/>
@@ -11169,6 +11229,7 @@ function SidePanel({
             >
               {Icon.check} {mutating ? '저장 중…' : itemNeedsCheck ? (bulk && remainingReviewItems.length ? `${remainingApplyIds.length}개 확인·적용` : '확인 완료') : '변경 저장'}
             </button>
+            </>}
           </div>
           )}
         </>
@@ -12242,7 +12303,7 @@ function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewErro
         </button>
       </div>
       </>}
-      {!showActions && <p className="pending-preview-hint">분할은 왼쪽 업로드 대기열에서 실행합니다.</p>}
+      {!showActions && <p className="pending-preview-hint">추가한 자료는 설정의 분할 방식으로 자동 처리합니다.</p>}
     </div>
   );
 }
@@ -13575,6 +13636,26 @@ const RISK_FLAG_META = {
   source_problem_bbox_overlap: '문항 영역 겹침',
   step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
   step3_page_chrome_artifact: '3단계 페이지 장식',
+  ai_boundary: 'AI 경계 판단',
+  ai_partial_retry_failed: '부분 재인식 실패',
+  ai_partial_retry_multiple_candidates: '재인식 후보 여러 개',
+  ai_retry_empty: '재인식 결과 없음',
+  ai_retry_failed: '재인식 실패',
+  choice_problem_marker_overlap: '선지와 번호 겹침',
+  low_avg_confidence: '인식 신뢰도 낮음',
+  low_confidence: '인식 신뢰도 낮음',
+  low_confidence_number: '번호 인식 불확실',
+  low_ocr_confidence: '글자 인식 신뢰도 낮음',
+  low_source_coverage: '원본 일부 누락 의심',
+  marker_conflicts: '문항 번호 충돌',
+  merged_problem_block: '여러 문항 합쳐짐 의심',
+  multi_block_page: '여러 영역 페이지',
+  no_text_markers: '텍스트 번호 없음',
+  recovered_uncovered_region: '누락 영역 복구',
+  scan_unnumbered_column: '번호 없는 단',
+  textless_blocks: '글자 없는 영역',
+  unreliable_pdf_text_markers: 'PDF 번호 신뢰 낮음',
+  visual_unnumbered_leading_region: '번호 앞 영역',
 };
 
 const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
@@ -13916,11 +13997,11 @@ function riskFlagLabel(flag){
   const key = String(flag || '').trim();
   if (!key) return '검토 사유';
   if (RISK_FLAG_META[key]) return RISK_FLAG_META[key];
-  return key
-    .split('_')
-    .filter(Boolean)
-    .map(part => part.length > 8 ? part.slice(0, 8) : part)
-    .join(' ');
+  if (key.startsWith('low_confidence')) return '인식 신뢰도 낮음';
+  // Human-written reasons (e.g. AI review notes) pass through as-is.
+  if (/[^\x00-\x7f]|\s/.test(key)) return key;
+  // Unknown internal keys are never shown raw.
+  return '추가 확인 필요';
 }
 
 function hangulRuntimeStatusMeta(hangul){
@@ -16443,6 +16524,32 @@ function App(){
     () => (session ? Math.max(0, Number(sessionReviewSummary(session).actionableNeedsReviewCount) || 0) : 0),
     [session]
   );
+  // Review targets include pages and shared passages, not only board items;
+  // open the source editor for those so the user can resolve them.
+  const openFirstReviewTarget = targetSession => {
+    if (!targetSession) return false;
+    const summary = sessionReviewSummary(targetSession);
+    const target = (summary.reviewTargets || []).find(candidate => candidate.status !== 'normal');
+    const itemIds = new Set(items.map(item => String(item.id)));
+    const problemId = target?.type === 'problem' ? String(target.problemIds?.[0] || target.id || '') : '';
+    if (problemId && itemIds.has(problemId)) {
+      selectBoardItem(problemId);
+      setSelectedProblemIds(new Set([problemId]));
+      revealSidePanel();
+      return true;
+    }
+    if (target?.pageId) {
+      setReviewFocus({ filter: 'all', scopePageIds: [target.pageId], problemIds: target.problemIds || [] });
+      requestViewChange('review', { force: true });
+      return true;
+    }
+    if (Number(summary.passageReviewItemCount) > 0) {
+      setReviewFocus({ filter: 'passage-review' });
+      requestViewChange('review', { force: true });
+      return true;
+    }
+    return false;
+  };
   // auto-revert to board view if the session is cleared or never had pages
   useEffect(() => {
     if (view === 'review' && !reviewAvailable) setView('board');
@@ -16517,6 +16624,17 @@ function App(){
   const operationRecoveryDismissed = operationRecoveryState.dismissed;
   const lastOperationError = operationRecovery?.error || null;
   const hasPendingSessionConflict = Boolean(operationRecovery?.conflict);
+  // Only an unresolved upload-queue failure (or a conflict) holds automatic
+  // import; an unrelated or dismissed recovery must not strand new uploads.
+  const importRecoveryBlocking = Boolean(operationRecovery && (
+    operationRecovery.conflict
+    || (!operationRecoveryDismissed && QUEUE_RECOVERY_KINDS.has(operationRecovery.kind))
+  ));
+  // Files left in the queue with nothing scheduled or in flight (canceled,
+  // failed and dismissed, or replaced) need an explicit restart.
+  const importPaused = initialSessionLoaded && pendingFiles.length > 0 && !loading && !mutating
+    && !hasRunningQueueRecognition && !recognitionReview && !confirmingRecognition && !importRecoveryBlocking
+    && !pendingFiles.some(file => autoProcessKeysRef.current.has(fileQueueKey(file)));
   const sessionEditState = useMemo(
     () => deriveSessionEditState(session, items, fileName, boardColumns, layoutGapMode, mutating || publishBusy || confirmingRecognition),
     [session, items, fileName, boardColumns, layoutGapMode, mutating, publishBusy, confirmingRecognition]
@@ -17581,7 +17699,7 @@ function App(){
         : (ids.length === 1 ? '고화질 재구성 중' : `${ids.length}개 문항 고화질 처리 중`),
       hint: isPreserve
         ? '원본 글자 형태를 유지하며 로컬 2K 확대와 투명 배경 처리를 적용합니다.'
-        : '칠판용 변환 또는 선택형 Nano Banana 1K 경로를 사용합니다.',
+        : '글자 보존형 또는 선택형 Nano Banana 1K 경로를 사용합니다.',
     });
     try {
       const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
@@ -17843,9 +17961,11 @@ function App(){
     }
     try {
       const files = replacePendingSourceFile(pendingFilesRef.current, target.key, replacement);
+      autoProcessKeysRef.current.delete(target.key);
+      autoProcessKeysRef.current.add(fileQueueKey(replacement));
       setPendingFilesTracked(files);
       selectPendingFile(fileQueueKey(replacement));
-      if (operationRecovery?.retryTargetKey === target.key) clearOperationRecovery();
+      if (QUEUE_RECOVERY_KINDS.has(operationRecovery?.kind)) clearOperationRecovery();
       showToast('선택한 대기 파일을 교체했어요');
     } catch (error) { showToast(error.message); }
   };
@@ -18196,14 +18316,14 @@ function App(){
   }, [recognitionReview, confirmingRecognition, mutating, loading, hasPendingSessionConflict, applyRecognitionResult]);
 
   useEffect(() => {
-    if (!initialSessionLoaded || loading || mutating || hasRunningBackgroundJobs
-      || recognitionReview || confirmingRecognition || hasPendingSessionConflict || operationRecovery || reviewEditorActive) return;
+    if (!initialSessionLoaded || loading || mutating || hasRunningBackgroundJobs || publishBusy || refreshing
+      || recognitionReview || confirmingRecognition || hasPendingSessionConflict || importRecoveryBlocking || reviewEditorActive) return;
     const keys = pendingFiles.filter(file => autoProcessKeysRef.current.has(fileQueueKey(file))).map(fileQueueKey);
     if (!keys.length) return;
     keys.forEach(key => autoProcessKeysRef.current.delete(key));
     void processQueuedFiles(normalizeSplitMode(splitMode), null, keys);
-  }, [pendingFiles, initialSessionLoaded, loading, mutating, hasRunningBackgroundJobs,
-    recognitionReview, confirmingRecognition, hasPendingSessionConflict, operationRecovery, reviewEditorActive, splitMode, processQueuedFiles]);
+  }, [pendingFiles, initialSessionLoaded, loading, mutating, hasRunningBackgroundJobs, publishBusy, refreshing,
+    recognitionReview, confirmingRecognition, hasPendingSessionConflict, importRecoveryBlocking, reviewEditorActive, splitMode, processQueuedFiles]);
 
   const setStep = (id, step) => {
     const nextStep = normalizeProcessingStep(step);
@@ -18758,8 +18878,7 @@ function App(){
     }
     const publishReviewWarning = publishReviewWarningMessage(sessionForPublish, publishReviewSummary);
     if (publishReviewWarning) {
-      const candidate = items.find(item => item.reviewStatus === 'check_needed' || item.reviewStatus === 'failed');
-      if (candidate) { selectBoardItem(candidate.id); setSelectedProblemIds(new Set([String(candidate.id)])); revealSidePanel(); }
+      openFirstReviewTarget(sessionForPublish);
       showToast('확인이 필요한 문항을 먼저 확인해 주세요', 'error');
       return;
     }
@@ -19200,7 +19319,7 @@ function App(){
         reviewAvailable={reviewAvailable}
         recognitionBusy={Boolean(runningRecognitionJob)}
         pageReviewActive={Boolean(recognitionReview)}
-        operationBusy={Boolean(loading) || hasRunningQueueRecognition || confirmingRecognition || pendingFiles.length > 0 || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
+        operationBusy={Boolean(loading) || hasRunningQueueRecognition || confirmingRecognition || (pendingFiles.length > 0 && !importPaused) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}
         resetBlocked={hasRunningBackgroundJobs}
         conflictBlocked={hasPendingSessionConflict}
         reviewAttentionCount={reviewAttentionCount}
@@ -19302,7 +19421,7 @@ function App(){
                 className={mobilePane === pane ? 'on' : ''}
                 type="button"
                 aria-pressed={mobilePane === pane}
-                aria-controls={pane === 'rail' ? 'workspace-rail' : pane === 'panel' ? 'workspace-panel' : 'workspace-stage'}
+                aria-controls={pane === 'rail' ? 'workspace-rail' : pane === 'panel' ? 'workspace-panel' : (view === 'review' ? 'workspace-source-editor' : 'workspace-stage')}
                 disabled={reviewEditorActive && pane !== 'stage'}
                 onClick={() => pane === 'panel' ? revealSidePanel() : setMobilePane(pane)}
               >{label}</button>
@@ -19329,8 +19448,8 @@ function App(){
           removePendingFile={removePendingFile}
           clearPendingFiles={clearPendingFiles}
           processQueuedFiles={processQueuedFiles}
-          importPaused={!operationRecovery && !recognitionReview && !hasRunningBackgroundJobs && backgroundJobs.some(job => job.status === 'canceled' && String(job.scope).startsWith('queue-'))}
-          queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || hasPendingSessionConflict}
+          importPaused={importPaused}
+          queueBusy={!initialSessionLoaded || !!loading || hasRunningQueueRecognition || confirmingRecognition || !!recognitionReview || hasPendingSessionConflict}
           aiAvailable={aiEnabled && !!userSettings?.hasGeminiApiKey}
           splitMode={splitMode}
           setSplitMode={setSplitMode}
@@ -19381,10 +19500,7 @@ function App(){
             panelReopenRef={focusPanelReopenRef}
             onOpenPanel={() => { revealSidePanel(); window.requestAnimationFrame(() => document.getElementById('side-panel-item')?.focus()); }}
             reviewAttentionCount={reviewAttentionCount}
-            onOpenPendingReview={() => {
-              const problem = items.find(candidate => candidate.reviewStatus === 'check_needed' || candidate.reviewStatus === 'failed');
-              if (problem) { selectBoardItem(problem.id); setSelectedProblemIds(new Set([String(problem.id)])); revealSidePanel(); }
-            }}
+            onOpenPendingReview={() => openFirstReviewTarget(session)}
             moveFeedback={moveFeedback}
             selectedIds={selectedProblemIds}
             setSelectedIds={setSelectedProblemIds}
@@ -19402,8 +19518,11 @@ function App(){
             aiEnabled={aiEnabled}
             userSettings={userSettings}
             pendingFileCount={pendingFiles.length}
-            importBusy={hasRunningQueueRecognition || confirmingRecognition || queueRegistrationInFlightRef.current}
+            importBusy={hasRunningQueueRecognition || confirmingRecognition || !!recognitionReview}
+            importPaused={importPaused}
+            onRestartImport={() => processQueuedFiles(normalizeSplitMode(splitMode))}
             splitMode={splitMode} setSplitMode={setSplitMode}
+            keepAttachedFigures={keepAttachedFigures} setKeepAttachedFigures={setKeepAttachedFigures}
             onRecognizeSession={recognizeCurrentSession}
             canRecognizeSession={canRecognizeSession}
             recognitionDisabledReason={recognitionDisabledReason}
@@ -19411,7 +19530,7 @@ function App(){
             sessionEditState={sessionEditState}
           />
           </div>
-          {view === 'review' && <div className="unified-source-editor">
+          {view === 'review' && <div className={`unified-source-editor ${reviewEditorActive ? 'is-editing' : ''}`}>
             <button className="btn unified-source-close" hidden={reviewEditorActive} type="button" onClick={() => requestViewChange('board', { force: true })}>{Icon.arrowLeft} 편집 닫기</button>
           <ReviewStage
             session={session}

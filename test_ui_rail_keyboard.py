@@ -29,6 +29,10 @@ function railSandbox(visibleIds = ['a', 'b', 'c', 'd'], selectedIds = ['b'], anc
     focusCalls: [],
     selectionKeyboardCommand,
     activeId: anchor,
+    selectionPopupOpen: false,
+    selectionKey: '',
+    dismissedSelection: null,
+    setDismissedSelection(value) { sandbox.dismissedSelection = value; calls.push('dismiss'); },
     setSelectedItemIds(value) {
       sandbox.selectedItemIds = value;
       calls.push('selection');
@@ -142,6 +146,19 @@ class TestUiRailKeyboard(unittest.TestCase):
           assert.ok(!rail.calls.includes('active'));
           assert.deepEqual(rail.focusCalls, []);
         }
+        """)
+
+    def test_first_escape_closes_the_bulk_popup_before_clearing_selection(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const rail = railSandbox(['a','b','c'], ['a','b'], 'b');
+        rail.selectionPopupOpen = true;
+        rail.selectionKey = '["a","b"]';
+        assert.deepEqual(rail.press('b', {key:'Escape'}), {consumed:true, prevented:1});
+        assert.equal(rail.dismissedSelection, '["a","b"]');
+        assert.deepEqual(Array.from(rail.selectedItemIds), ['a','b']);
+        rail.selectionPopupOpen = false;
+        assert.deepEqual(rail.press('b', {key:'Escape'}), {consumed:true, prevented:1});
+        assert.deepEqual(Array.from(rail.selectedItemIds), []);
         """)
 
     def test_filtered_selection_uses_only_visible_rows(self) -> None:

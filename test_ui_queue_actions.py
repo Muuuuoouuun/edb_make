@@ -82,7 +82,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertNotIn("setInputIntent", source)
         self.assertNotIn("INPUT_INTENT_OPTIONS.map", side_panel)
         self.assertIn("splitMode, setSplitMode,", side_panel)
-        self.assertIn("업로드 대기열의 [분할하기]가 이 방식으로 실행됩니다", side_panel)
+        self.assertIn("자료를 추가하면 이 방식으로 바로 처리합니다", side_panel)
         self.assertEqual(2, side_panel.count("<SplitModePicker") + side_panel.count("<PendingFilePreview"))
 
     def test_image_only_recognition_allows_configured_ai_and_keeps_offline_fast_path(self) -> None:
@@ -197,7 +197,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("manualSplit: isManualSplit", queue)
         self.assertIn("if (review.manualSplit)", apply)
         self.assertIn("manualSplitPageId: pageIds[0]", apply)
-        self.assertIn('className="unified-source-editor"', source)
+        self.assertIn('className={`unified-source-editor ${reviewEditorActive ? \'is-editing\' : \'\'}`}', source)
         self.assertIn("onManualSplitFlowDone={finishManualSplitFlow}", source)
 
     def test_queue_manual_split_cuts_each_page_then_returns_to_board(self) -> None:
@@ -230,13 +230,18 @@ class TestUiQueueActions(unittest.TestCase):
         review_stage = source.split("function ReviewStage", 1)[1].split("function ItemsRail", 1)[0]
 
         self.assertIn("const reviewEditorActive = Boolean(boxEdit || manualSplit);", review_stage)
-        self.assertIn("onEditorModeChange?.(reviewEditorActive);", review_stage)
+        self.assertIn("onEditorModeChange?.(reviewEditorActive || guidedSplitPending);", review_stage)
         self.assertIn("onEditorModeChange?.(false)", review_stage)
         self.assertIn("const [reviewEditorActive, setReviewEditorActive] = useState(false);", source)
-        self.assertIn('className="unified-source-editor"', source)
+        self.assertIn('className={`unified-source-editor ${reviewEditorActive ? \'is-editing\' : \'\'}`}', source)
         self.assertIn("onEditorModeChange={handleSourceEditorMode}", source)
         self.assertIn(".main.review-editor-focus", html)
         self.assertIn(".main.review-editor-focus > .col.right", html)
+        # Editor-only chrome follows the unified source editor while it edits.
+        original_editor = (PROJECT_ROOT / "ui_prototype" / "original-editor.css").read_text(encoding="utf-8")
+        self.assertIn(".unified-source-editor.is-editing .manual-split-actionbar", original_editor)
+        self.assertIn(".unified-source-editor.is-editing .review-stage-toolbar{display:none", html)
+        self.assertNotIn(".unified-source-editor .review-stage-toolbar{display:none", html)
 
     def test_manual_split_panel_stays_accessible_above_canvas_in_narrow_windows(self) -> None:
         responsive_block = media_rules(board_document(), "max-width: 700px")
@@ -423,7 +428,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("downloadInFlightRef.current || downloadBusy", reset_source)
         self.assertIn("EDB 다운로드 준비가 끝난 뒤 초기화해 주세요", reset_source)
         self.assertIn(
-            "operationBusy={Boolean(loading) || hasRunningQueueRecognition || confirmingRecognition || pendingFiles.length > 0 || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
+            "operationBusy={Boolean(loading) || hasRunningQueueRecognition || confirmingRecognition || (pendingFiles.length > 0 && !importPaused) || (!initialSessionLoaded && !initialSessionError) || resetBusy || publishBusy || downloadBusy || hasPendingSessionConflict}",
             source,
         )
         self.assertIn(
