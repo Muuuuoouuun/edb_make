@@ -188,11 +188,14 @@ const acceleratedEdgeAutoScrollDelta = REORDER_HELPERS.acceleratedEdgeAutoScroll
   edgePx = 64,
   maxPx = 22,
   holdDurationMs = 0,
-  frameDurationMs = 1000 / 60
+  frameDurationMs = 1000 / 60,
+  maxHoldMultiplier = 2,
+  holdRampMs = 900
 ) => {
   const baseDelta = edgeAutoScrollDelta(rect, clientY, edgePx, maxPx);
   if (!baseDelta) return 0;
-  const holdMultiplier = 1 + Math.min(1, Math.max(0, Number(holdDurationMs) || 0) / 900);
+  const holdMultiplier = 1 + (Math.max(1, maxHoldMultiplier) - 1)
+    * Math.min(1, Math.max(0, Number(holdDurationMs) || 0) / Math.max(1, holdRampMs));
   const frameMultiplier = Math.max(4, Math.min(42, Number(frameDurationMs) || (1000 / 60))) / (1000 / 60);
   return Math.sign(baseDelta) * Math.max(1, Math.round(Math.abs(baseDelta) * holdMultiplier * frameMultiplier));
 });
@@ -336,8 +339,11 @@ const PLACEMENT_SCALE_STEP = 0.05;
 const ADJACENT_RETRY_PADDING_RATIO = 0.16;
 const ADJACENT_RETRY_MIN_PADDING_PX = 28;
 const BOARD_DRAG_REORDER_THRESHOLD_PX = 28;
-const BOARD_DRAG_AUTOSCROLL_EDGE_PX = 58;
-const BOARD_DRAG_AUTOSCROLL_MAX_PX = 22;
+const BOARD_DRAG_AUTOSCROLL_EDGE_PX = 96;
+const BOARD_DRAG_AUTOSCROLL_MAX_PX = 26;
+// Holding a dragged problem at the board edge ramps scrolling to 5x over 1.4s.
+const BOARD_DRAG_AUTOSCROLL_MAX_HOLD_MULTIPLIER = 5;
+const BOARD_DRAG_AUTOSCROLL_HOLD_RAMP_MS = 1400;
 const RAIL_DRAG_AUTOSCROLL_EDGE_PX = 72;
 const RAIL_DRAG_AUTOSCROLL_MAX_PX = 18;
 const MANUAL_CROP_EDGE_MAX = 0.45;
@@ -753,6 +759,12 @@ function isEditableKeyboardTarget(target){
   return ['input', 'textarea', 'select'].includes(tagName) || Boolean(target?.isContentEditable);
 }
 
+// A problem moved to another row keeps its size and column but starts at the
+// top of its new row, so no leftover vertical gap travels with it.
+function resetItemVerticalOffset(item){
+  return { ...item, placementYRatio: DEFAULT_PLACEMENT_Y_RATIO };
+}
+
 function resetItemPlacement(item){
   return {
     ...item,
@@ -938,6 +950,19 @@ function boardItemVisualBounds(item){
 
 // Hit-test the pointer against stationary cards, never the translated drag ghost.
 // A neighbouring card wins over its side gutter; distant blank space is a move.
+// Live reorder previews translate tiles; hit-testing uses their resting rects
+// so the target does not oscillate while neighbours slide.
+function unshiftedTileRect(element){
+  const rect = element?.getBoundingClientRect?.();
+  if (!rect) return rect;
+  const transform = element.style?.transform ? window.getComputedStyle(element).transform : '';
+  if (!transform || transform === 'none' || typeof DOMMatrixReadOnly === 'undefined') return rect;
+  const shift = new DOMMatrixReadOnly(transform).m42 || 0;
+  if (!shift) return rect;
+  return { left: rect.left, right: rect.right, width: rect.width, height: rect.height,
+    top: rect.top - shift, bottom: rect.bottom - shift };
+}
+
 function resolveSmartBoardDropTarget(candidates, clientX, clientY, sourceId){
   if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
   const rows = candidates.filter(candidate => candidate?.rect?.height > 0);
@@ -7232,7 +7257,7 @@ function ItemsRail({
               data-tooltip={`${String(i + 1).padStart(2, '0')} · ${problemDisplayName(it, i)}`}
               onClick={() => setActive(it.id)}
             >
-              <span className="thumb"><TileImage item={it} forceMode="raw" /></span>
+              <span className={`thumb ${railThumbClass(it)}`}><TileImage item={it} previewMaxDimension={RAIL_THUMB_PREVIEW_MAX_DIMENSION} /></span>
               <span className="idx">
                 <span className={`status-dot ${reviewStatusClass(it.reviewStatus)}`} />
                 {String(i + 1).padStart(2, '0')}
@@ -7642,8 +7667,8 @@ function ItemsRail({
                 <span className="grip-icon">{Icon.grip}</span>
                 <span className="idx">{String(dragPreview.index + 1).padStart(2, '0')}</span>
               </div>
-              <div className="thumb">
-                <TileImage item={dragPreviewItem} forceMode="raw" />
+              <div className={`thumb ${railThumbClass(dragPreviewItem)}`}>
+                <TileImage item={dragPreviewItem} previewMaxDimension={RAIL_THUMB_PREVIEW_MAX_DIMENSION} />
               </div>
               <div className="meta">
                 <div className="name">
@@ -8116,6 +8141,33 @@ function BoardStage({
     () => deriveBoardPreviewEstimate(layout.items, activeId, DEFAULT_SLOT_HEIGHT_PAGES),
     [layout.items, activeId]
   );
+
+  // While a reorder target is held, neighbours slide to where the drop would
+  // put them, and the moved problem drops its own offsets (no stale gap).
+  const reorderPreviewShifts = useMemo(() => {
+    if (!positioningId || boardDropTarget?.mode !== 'reorder') return null;
+    const reordered = reorderItemsForDrop(items, positioningId, boardDropTarget.id, boardDropTarget.position);
+    if (reordered === items) return null;
+    const preview = reflowItemsForBoardOrder(
+      reordered.map(item => String(item.id) === String(positioningId) ? resetItemVerticalOffset(item) : item),
+      DEFAULT_SLOT_HEIGHT_PAGES,
+      columnCount,
+      layoutGapMode
+    );
+    const nextStart = new Map(preview.map(item => [String(item.id), item.startYPages]));
+    const shifts = new Map();
+    layout.items.forEach(item => {
+      const id = String(item.id);
+      if (id === String(positioningId)) return;
+      const next = nextStart.get(id);
+      if (!Number.isFinite(next)) return;
+      const delta = (next - item.startYPages) * pageH;
+      if (Math.abs(delta) > 0.5) shifts.set(id, delta);
+    });
+    return shifts.size ? shifts : null;
+  }, [positioningId, boardDropTarget, items, layout, columnCount, layoutGapMode, pageH]);
+  const reorderPreviewShiftsRef = useRef(null);
+  reorderPreviewShiftsRef.current = reorderPreviewShifts;
   const [currentPage, setCurrentPage] = useState(1);
   const visibleCurrentPage = Math.min(
     currentPage,
@@ -8408,12 +8460,34 @@ function BoardStage({
     const candidates = layout.items.map(item => {
       const rect = item.id === drag.id
         ? { ...drag.sourceRect, top: drag.sourceRect.top - scrollDeltaY, bottom: drag.sourceRect.bottom - scrollDeltaY }
-        : tileRefs.current[item.id]?.getBoundingClientRect?.();
+        : unshiftedTileRect(tileRefs.current[item.id]);
       return { id: item.id, rect };
     });
-    const target = resolveSmartBoardDropTarget(candidates, clientX, clientY, drag.id);
+    const target = resolveSmartBoardDropTarget(candidates, clientX, clientY, drag.id)
+      || smartBoardInsertionTarget(clientY, drag);
     if (target?.mode !== 'gap') return target;
     return { ...target, removableGapPages: derivePlacementGapActionFromLayout(layout.items, target.id).removableGapPages };
+  };
+
+  // Above the first problem or below the last one: insert at that end. Blank
+  // space between problems stays a free placement move, as before.
+  const smartBoardInsertionTarget = (clientY, drag) => {
+    const content = contentRef.current;
+    if (!content?.getBoundingClientRect || !Array.isArray(layout.positions) || !Number.isFinite(clientY)) return null;
+    const y = clientY - content.getBoundingClientRect().top;
+    const others = layout.items
+      .map((item, index) => ({ item, position: layout.positions[index] }))
+      .filter(({ item, position }) => position && String(item.id) !== String(drag.id));
+    if (!others.length) return null;
+    const visualTop = position => position.top
+      + (position.yRatio || 0) * Math.max(0, position.rowHeightPages - position.renderedHeightPages) * pageH;
+    const first = others[0];
+    const last = others[others.length - 1];
+    if (y < visualTop(first.position)) return { id: first.item.id, mode: 'reorder', position: 'before' };
+    if (y > visualTop(last.position) + last.position.renderedHeightPages * pageH) {
+      return { id: last.item.id, mode: 'reorder', position: 'after' };
+    }
+    return null;
   };
 
   const updateBoardDropTarget = (clientX, clientY, sourceId, force = false) => {
@@ -8493,8 +8567,10 @@ function BoardStage({
   const stepBoardAutoScroll = (timestamp) => {
     const drag = positionDragRef.current;
     const scroll = scrollRef.current;
-    const clientX = autoScrollRef.current.clientX;
-    const clientY = autoScrollRef.current.clientY;
+    // The pointer's latest position lives on the drag; the copy taken when the
+    // loop started goes stale while the pointer rests at the edge.
+    const clientX = drag?.lastClientX ?? autoScrollRef.current.clientX;
+    const clientY = drag?.lastClientY ?? autoScrollRef.current.clientY;
     if (!drag || !scroll || clientY == null) {
       stopBoardAutoScroll();
       return;
@@ -8531,13 +8607,21 @@ function BoardStage({
       BOARD_DRAG_AUTOSCROLL_EDGE_PX,
       BOARD_DRAG_AUTOSCROLL_MAX_PX,
       Math.max(0, timestamp - edgeEnteredAt),
-      Math.max(4, timestamp - lastFrameAt || (1000 / 60))
+      Math.max(4, timestamp - lastFrameAt || (1000 / 60)),
+      BOARD_DRAG_AUTOSCROLL_MAX_HOLD_MULTIPLIER,
+      BOARD_DRAG_AUTOSCROLL_HOLD_RAMP_MS
     );
     autoScrollRef.current.lastFrameAt = timestamp;
     const previousTop = scroll.scrollTop;
+    // The dragged tile's transform grows the scrollable overflow; stop at the
+    // board's real end instead of scrolling into empty space forever.
+    const content = contentRef.current;
+    const contentEnd = content
+      ? content.getBoundingClientRect().bottom - rect.top + previousTop
+      : scroll.scrollHeight;
     const nextTop = Math.max(
       0,
-      Math.min(scroll.scrollHeight - scroll.clientHeight, previousTop + delta)
+      Math.min(Math.min(scroll.scrollHeight, contentEnd) - scroll.clientHeight, previousTop + delta)
     );
     scroll.scrollTop = nextTop;
     if (Math.abs(nextTop - previousTop) > 0.01) {
@@ -8716,7 +8800,14 @@ function BoardStage({
       if (target?.mode === 'gap') {
         if (target.removableGapPages > PLACEMENT_EPSILON_PAGES) reducePlacementGap?.(target.id);
       } else if (orderChanged) {
-        reorder?.(drag.id, target.id, target.position, { resetPlacement: false });
+        // Tiles already sit at their previewed rows; land them there without sliding back.
+        reorderPreviewShiftsRef.current?.forEach((_shift, id) => {
+          const element = tileRefs.current[id];
+          if (!element) return;
+          element.style.transition = 'none';
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => { element.style.transition = ''; }));
+        });
+        reorder?.(drag.id, target.id, target.position, { resetPlacement: false, resetVerticalOffset: drag.smartMode });
       } else if (!drag.reorderMode && !target && drag.pendingPlacement) {
         setPlacement?.(drag.id, drag.pendingPlacement);
       }
@@ -9049,6 +9140,7 @@ function BoardStage({
                     isPositioning={positioningId === it.id} isJustMoved={isJustMoved}
                     moveDirection={isJustMoved ? moveFeedback.direction : null}
                     dropPosition={boardDropTarget?.id === it.id ? boardDropTarget.position : null}
+                    previewShift={reorderPreviewShifts?.get(String(it.id)) || 0}
                     tileRefs={tileRefs} handlersRef={boardTileHandlersRef} />;
                 })}
 
@@ -9114,8 +9206,8 @@ function RailItemDetails({ it, i, hasPageChrome }){
         : originalNumber.status === 'inferred' ? `${originalNumber.number}번 · 추정`
           : problemDisplayName(it, i);
   return <>
-            <div className="thumb">
-              <TileImage item={it} forceMode="raw" />
+            <div className={`thumb ${railThumbClass(it)}`}>
+              <TileImage item={it} previewMaxDimension={RAIL_THUMB_PREVIEW_MAX_DIMENSION} />
             </div>
             <div className="meta">
               <div className={`name original-number-${originalNumber.status}`} title={`${originalNumber.description}\n자료명: ${it.name || ''}`}>
@@ -9139,7 +9231,7 @@ function RailItemDetails({ it, i, hasPageChrome }){
 const MemoRailItemDetails = React.memo(RailItemDetails);
 
 function BoardTile({ it, p, i, contentW, pageH, isSelected, isActive, isPositioning,
-  isJustMoved, moveDirection, dropPosition, smartMove, tileRefs, handlersRef }){
+  isJustMoved, moveDirection, dropPosition, smartMove, previewShift = 0, tileRefs, handlersRef }){
   // The element stays memoized; events always use the latest selection and drag state.
   const onTileClick = (...args) => handlersRef.current.onTileClick(...args);
   const beginPositionDrag = (...args) => handlersRef.current.beginPositionDrag(...args);
@@ -9178,12 +9270,13 @@ function BoardTile({ it, p, i, contentW, pageH, isSelected, isActive, isPosition
     top: p.top + (yRatio * maxTopOffset),
     height: scaledHeight,
     ...(scaledWidth ? { left: xRatio * maxLeft, width: scaledWidth } : null),
+    ...(previewShift ? { transform: `translate3d(0, ${previewShift}px, 0)` } : null),
   };
   return (
     <button
       key={it.id}
       ref={el => { tileRefs.current[it.id] = el; }}
-      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${isActive ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${isPositioning ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${dropPosition === 'gap' ? 'drop-gap' : ''}`}
+      className={`stage-tile ${hasPageChrome ? 'page-chrome-artifact' : ''} ${isSelected ? 'is-selected' : ''} ${isActive ? 'active' : ''} ${it.step === 's1' ? 'paper' : ''} ${isPositioning ? 'positioning' : ''} ${isJustMoved ? `just-moved move-${moveDirection}` : ''} ${dropPosition === 'before' ? 'drop-before' : ''} ${dropPosition === 'after' ? 'drop-after' : ''} ${dropPosition === 'gap' ? 'drop-gap' : ''} ${previewShift ? 'is-reorder-preview' : ''}`}
       onClick={event => onTileClick(it.id, event)}
       onPointerDown={e => beginPositionDrag(e, it, p)}
       aria-label={`${i + 1}번 ${problemDisplayName(it, i)}. ${smartMove ? '문제 위로 드래그하면 순서 변경, 옆에 놓으면 뒤 여백 당기기' : `드래그로 위치 이동, ${ALTERNATE_MODIFIER_LABEL}+드래그로 순서 이동`}`}
@@ -12095,6 +12188,13 @@ function BackgroundJobsPanel({ jobs, onCancel, onDismiss }){
 }
 
 const CENTER_PANEL_PREVIEW_MAX_DIMENSION = 1024;
+// Rail thumbnails show the same board render as the tile (background removed,
+// on the board colour) at the smallest preview size the server produces.
+const RAIL_THUMB_PREVIEW_MAX_DIMENSION = 256;
+
+function railThumbClass(item){
+  return item?.step === 's1' ? 'is-paper' : 'is-board';
+}
 
 function filePreviewUrl(url, maxDimension = CENTER_PANEL_PREVIEW_MAX_DIMENSION){
   const normalizedUrl = String(url || '');
@@ -18551,9 +18651,14 @@ function App(){
     const snapshotBefore = session
       ? (materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session))
       : null;
-    const resetItems = reordered.map(item => sourceIdSet.has(String(item.id)) ? resetItemPlacement(item) : item);
+    const resetItems = reordered.map(item => (
+      !sourceIdSet.has(String(item.id)) ? item
+        : options?.resetPlacement ? resetItemPlacement(item)
+        : options?.resetVerticalOffset ? resetItemVerticalOffset(item)
+        : item
+    ));
     const nextItems = reflowItemsForBoardOrder(
-      options?.resetPlacement ? resetItems : reordered,
+      options?.resetPlacement || options?.resetVerticalOffset ? resetItems : reordered,
       DEFAULT_SLOT_HEIGHT_PAGES,
       boardColumns,
       layoutGapMode

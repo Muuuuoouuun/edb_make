@@ -1458,8 +1458,19 @@
     background: transparent;
     border-radius: 4px;
   }
-  .item .thumb .tile-img{
-    object-fit: cover;
+  .item .thumb .tile-img,
+  .rail-mini-item .thumb .tile-img{
+    object-fit: contain;
+  }
+  /* Rail thumbnails mirror the board tile: board render on the board colour. */
+  .item .thumb.is-board,
+  .rail-mini-item .thumb.is-board{
+    background: var(--board);
+    border-color: color-mix(in srgb, var(--board) 70%, var(--line));
+  }
+  .item .thumb.is-paper,
+  .rail-mini-item .thumb.is-paper{
+    background: #fff;
   }
 
   .stage-empty-tile{
