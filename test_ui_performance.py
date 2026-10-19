@@ -133,7 +133,7 @@ class TestUiPerformance(unittest.TestCase):
         self.assertNotIn(".stage-wrap:has(.stage-estimate-details", board)
         self.assertIn("min-width: 0", estimate_css)
 
-    def test_board_grid_and_active_slot_guides_are_visible_but_noninteractive(self) -> None:
+    def test_board_grid_and_active_slot_guides_stay_quiet_and_noninteractive(self) -> None:
         board = board_stylesheet()
         grid_css = board.split(".page-divider.is-classin-grid{", 1)[1].split("}", 1)[0]
         slot_gap_css = board.split(".active-slot-gap{", 1)[1].split("}", 1)[0]
@@ -142,7 +142,8 @@ class TestUiPerformance(unittest.TestCase):
 
         self.assertIn("rgba(244,237,224,.28)", grid_css)
         self.assertIn("pointer-events: none", slot_gap_css)
-        self.assertIn("rgba(158,201,240,.055)", slot_gap_css)
+        self.assertIn("background: transparent", slot_gap_css)
+        self.assertNotIn("repeating-linear-gradient", slot_gap_css)
         self.assertIn("pointer-events: none", next_boundary_css)
         self.assertIn("outline: 2px solid", active_tile_css)
         self.assertIn(".stage-tile.paper.active", board)
