@@ -2466,30 +2466,32 @@ function ManualSplitEditor({
               가로·세로 비율 유지
             </label>
             <div className="manual-stamp-fields" aria-label="스탬프 크기 조절">
-              {[['width', '가로', stampWidth, pageWidth], ['height', '세로', stampHeight, pageHeight]].map(([axis, label, value, maxValue]) => (
+              {[['width', '가로', stampWidth, pageWidth], ['height', '세로', stampHeight, pageHeight]].map(([axis, label, value, maxValue]) => {
+                const maximum = stampRatio === null ? maxValue : Math.floor(Math.min(maxValue, axis === 'width' ? pageHeight * stampRatio : pageWidth / stampRatio));
+                const minimum = Math.min(maximum, stampRatio === null ? 24 : Math.ceil(Math.max(Math.min(24, maxValue), axis === 'width' ? Math.min(24, pageHeight) * stampRatio : Math.min(24, pageWidth) / stampRatio)));
+                return (
                 <div key={axis} className="manual-stamp-dimension">
                   <label className="manual-stamp-field">
                     <span>{label} (px)</span>
                     <ManualSplitStampDimensionInput value={value}
-                      minValue={stampRatio === null ? 24 : Math.ceil(Math.max(Math.min(24, maxValue), axis === 'width' ? Math.min(24, pageHeight) * stampRatio : Math.min(24, pageWidth) / stampRatio))}
-                      maxValue={stampRatio === null ? maxValue : Math.floor(Math.min(maxValue, axis === 'width' ? pageHeight * stampRatio : pageWidth / stampRatio))}
+                      minValue={minimum} maxValue={maximum}
                       disabled={mutating}
                       onChange={next => changeStampDimension(axis, next)} />
                   </label>
-                  <div className="manual-stamp-nudge">
-                    {[-1, 1].map(delta => (
-                      <button key={delta} type="button" className="btn" disabled={mutating}
-                        aria-label={`${label} ${delta > 0 ? '늘리기' : '줄이기'}`}
-                        title="1px씩 조절 · Shift를 누르면 10px"
-                        onClick={event => changeStampDimension(axis, value + delta * (event.shiftKey ? 10 : 1))}>
-                        {delta > 0 ? '+' : '−'}
-                      </button>
-                    ))}
-                  </div>
+                  <input className="manual-stamp-slider" type="range" min={minimum} max={maximum} step="1"
+                    value={value} disabled={mutating} aria-label={`스탬프 ${label} 조절`}
+                    title={`${label} 크기를 드래그로 조절`}
+                    style={{ '--stamp-fill': `${Math.max(0, Math.min(100, (value - minimum) / Math.max(1, maximum - minimum) * 100))}%` }}
+                    onChange={event => changeStampDimension(axis, Number(event.target.value))}
+                    onKeyDown={event => {
+                      if (!event.shiftKey || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+                      event.preventDefault(); event.stopPropagation();
+                      changeStampDimension(axis, value + (['ArrowRight', 'ArrowUp'].includes(event.key) ? 10 : -10));
+                    }} />
                 </div>
-              ))}
+              ); })}
             </div>
-            <small className="manual-stamp-hint">원본 픽셀 기준 · ± 1px · Shift와 함께 10px</small>
+            <small className="manual-stamp-hint">슬라이더를 끌어 크기·비율 조절 · 숫자로 정밀 입력</small>
           </div>
         ) : canSaveStamp ? (
           <button
@@ -2884,18 +2886,51 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
   const openingEdgeRef = useRef('first');
-  usePreviewFocusIsolation(open, rootRef);
+  usePreviewFocusIsolation(open, menuRef);
   const closeMenu = useCallback((restoreFocus = false) => {
     setOpen(false);
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
+  useLayoutEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const trigger = triggerRef.current;
+      const menu = menuRef.current;
+      if (!trigger || !menu) return;
+      const rect = trigger.getBoundingClientRect();
+      const viewport = window.visualViewport;
+      const leftEdge = (viewport?.offsetLeft || 0) + 12;
+      const topEdge = (viewport?.offsetTop || 0) + 12;
+      const rightEdge = leftEdge + (viewport?.width || window.innerWidth) - 24;
+      const bottomEdge = topEdge + (viewport?.height || window.innerHeight) - 24;
+      const width = Math.min(280, rightEdge - leftEdge);
+      const below = bottomEdge - rect.bottom - 8;
+      const above = rect.top - topEdge - 8;
+      const placeAbove = below < Math.min(menu.scrollHeight, 260) && above > below;
+      menu.style.width = `${width}px`;
+      menu.style.maxHeight = `${Math.max(80, placeAbove ? above : below)}px`;
+      menu.style.left = `${Math.max(leftEdge, Math.min(rect.right - width, rightEdge - width))}px`;
+      menu.style.top = `${placeAbove ? Math.max(topEdge, rect.top - menu.offsetHeight - 8) : Math.max(topEdge, rect.bottom + 8)}px`;
+    };
+    place();
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    window.visualViewport?.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('scroll', place);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      window.visualViewport?.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('scroll', place);
+    };
+  }, [open]);
   useEffect(() => {
     if (!open) return undefined;
     const menuItems = menuRef.current?.querySelectorAll('[role="menuitem"]') || [];
     const index = openingEdgeRef.current === 'last' ? menuItems.length - 1 : 0;
     menuItems[index]?.focus();
     const onPointerDown = event => {
-      if (!rootRef.current?.contains(event.target)) closeMenu();
+      if (!rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) closeMenu();
     };
     window.addEventListener('pointerdown', onPointerDown);
     return () => window.removeEventListener('pointerdown', onPointerDown);
@@ -2910,7 +2945,7 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
         // becomes the object; pointer-outside, Tab and Escape still dismiss.
         if (event.relatedTarget == null && typeof document !== 'undefined'
           && document.querySelector?.('.pending-preview-pdf')) return;
-        if (!event.currentTarget.contains(event.relatedTarget)) closeMenu();
+        if (!event.currentTarget.contains(event.relatedTarget) && !menuRef.current?.contains(event.relatedTarget)) closeMenu();
       }}
     >
       <button
@@ -2933,7 +2968,7 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
           setOpen(true);
         }}
       >{icon}</button>
-      {open && (
+      {open && ReactDOM.createPortal(
         <div
           id={`${id}-menu`}
           ref={menuRef}
@@ -2979,7 +3014,7 @@ function ToolbarActionMenu({ id, label, icon = Icon.more, items, className = '' 
               </span>
             </button>
           ))}
-        </div>
+        </div>, document.querySelector('.app') || document.body
       )}
     </div>
   );
@@ -3041,28 +3076,24 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  const cancelledRef = useRef(false);
   const inputRef = useRef(null);
+  const triggerRef = useRef(null);
   const close = useCallback((restoreFocus = false) => {
     if (savingRef.current) return;
     setOpen(false);
-    if (restoreFocus) triggerRef.current?.focus({ preventScroll: true });
+    if (restoreFocus) window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
   }, []);
-  const { triggerRef, panelRef, position } = useEditorPopover(open, close, 460);
   const start = () => {
     if (disabled || savingRef.current) return;
     setDraft(fileName || '');
     setError('');
+    cancelledRef.current = false;
     setOpen(true);
   };
   useEffect(() => {
-    if (open && position) { inputRef.current?.focus(); inputRef.current?.select(); }
-  }, [open, Boolean(position)]);
-  useLayoutEffect(() => {
-    const input = inputRef.current;
-    if (!open || !input) return;
-    input.style.height = 'auto';
-    input.style.height = `${Math.min(input.scrollHeight, Math.min(300, window.innerHeight * .45))}px`;
-  }, [open, draft, Boolean(position)]);
+    if (open) { inputRef.current?.focus(); inputRef.current?.select(); }
+  }, [open]);
   useEffect(() => {
     if (disabled && !savingRef.current) setOpen(false);
     const key = event => {
@@ -3077,14 +3108,15 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
     return () => window.removeEventListener('keydown', key);
   }, [disabled, fileName]);
   const submit = async event => {
-    event.preventDefault();
-    if (savingRef.current || disabled) return;
+    event?.preventDefault();
+    if (savingRef.current || cancelledRef.current || disabled) return;
     const name = draft.trim();
     if (!name || name.length > 160 || /[\u0000-\u001f\u007f]/.test(name)) {
       setError('수업 이름을 1~160자로 입력해 주세요. 줄바꿈은 사용할 수 없습니다.');
       inputRef.current?.focus();
       return;
     }
+    if (name === fileName) { close(event?.type !== 'blur'); return; }
     savingRef.current = true;
     setSaving(true);
     setError('');
@@ -3094,45 +3126,34 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
         if (result === false) throw new Error('이름을 저장하지 못했습니다. 다시 시도해 주세요.');
       } else setFileName?.(name);
       setOpen(false);
-      triggerRef.current?.focus({ preventScroll: true });
+      if (event?.type !== 'blur') window.requestAnimationFrame(() => triggerRef.current?.focus({ preventScroll: true }));
     } catch (failure) {
       setError(failure?.message || '이름을 저장하지 못했습니다. 다시 시도해 주세요.');
       inputRef.current?.focus();
     } finally { savingRef.current = false; setSaving(false); }
   };
   return <div className="lesson-name-control">
-    <button type="button" className="lesson-name-trigger" ref={triggerRef}
-      aria-label={`수업 이름 변경: ${fileName || '새 세션'}`} aria-haspopup="dialog"
-      aria-expanded={open} aria-controls="lesson-name-dialog" aria-keyshortcuts="F2"
+    {!open ? <button type="button" className="lesson-name-trigger" ref={triggerRef}
+      aria-label={`수업 이름 변경: ${fileName || '새 세션'}`} aria-keyshortcuts="F2"
       title={`${fileName || '새 세션'} · 이름 변경 (F2)`} disabled={disabled || saving} onClick={start}>
       <span className="lesson-name-text">{fileName || '새 세션'}</span>{Icon.pen}<kbd>F2</kbd>
-    </button>
-    {open && ReactDOM.createPortal(<div className="editor-context-popover lesson-name-popover"
-      ref={panelRef} style={position || { visibility: 'hidden' }} role="dialog" id="lesson-name-dialog"
-      aria-labelledby="lesson-name-heading" onBlur={event => {
-        if (isEmbeddedPreviewFocus(event.relatedTarget)) return;
-        if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)
-          && !triggerRef.current?.contains(event.relatedTarget)) close(false);
-      }}>
-      <form onSubmit={submit} aria-busy={saving}>
-        <h3 id="lesson-name-heading">이름 변경</h3>
-        <label htmlFor="lesson-name-input">수업 이름</label>
-        <textarea id="lesson-name-input" ref={inputRef} rows={2} value={draft} maxLength={160}
-          aria-describedby={`lesson-name-help${error ? ' lesson-name-error' : ''}`}
+    </button> : <form className="lesson-name-inline" onSubmit={submit} aria-busy={saving}>
+        <input id="lesson-name-input" type="text" ref={inputRef} value={draft} maxLength={160}
+          aria-label="수업 이름" aria-describedby={error ? 'lesson-name-error' : undefined}
           aria-invalid={Boolean(error)} readOnly={saving}
-          onChange={event => setDraft(event.target.value)} onKeyDown={event => {
-            if (event.key !== 'Enter' || event.nativeEvent?.isComposing || event.isComposing || event.keyCode === 229) return;
-            event.preventDefault(); event.currentTarget.form?.requestSubmit();
+          autoComplete="off" spellCheck={false} title="Enter 저장 · Esc 취소"
+          onBlur={submit}
+          onChange={event => { setDraft(event.target.value); setError(''); }} onKeyDown={event => {
+            if (event.nativeEvent?.isComposing || event.isComposing || event.keyCode === 229) return;
+            if (event.key === 'Escape') {
+              event.preventDefault(); event.stopPropagation(); cancelledRef.current = true; close(true);
+            } else if (event.key === 'Enter') {
+              event.preventDefault(); event.stopPropagation(); void submit(event);
+            }
           }} />
-        <div className="lesson-filename-preview"><span>EDB 저장 파일명</span><strong>{edbFileNameFromSessionName(draft)}</strong></div>
-        <p id="lesson-name-help">원본 파일 이름은 유지됩니다.</p>
-        {error && <p className="editor-context-error" id="lesson-name-error" role="alert">{error}</p>}
-        <div className="editor-context-footer"><small>Enter 저장 · Esc 취소</small>
-          <button type="button" className="btn" onClick={() => close(true)} disabled={saving}>취소</button>
-          <button type="submit" className="btn primary" disabled={saving}>{saving ? '저장 중…' : '이름 저장'}</button>
-        </div>
+        {error && <span className="lesson-name-error" id="lesson-name-error" role="alert">{error}</span>}
       </form>
-    </div>, document.querySelector('.app') || document.body)}
+    }
   </div>;
 }
 
@@ -10014,6 +10035,70 @@ function placementVerticalRoomHint(item, scaleRatio){
     : '상하 여유 공간이 없습니다. 크기를 줄이면 위치를 조절할 수 있어요.';
 }
 
+function useFloatingInspector(enabled) {
+  const panelRef = useRef(null);
+  const dragRef = useRef(null);
+  const [position, setPosition] = useState(null);
+  const clampPosition = useCallback((x, y) => {
+    const panel = panelRef.current;
+    const parent = panel?.offsetParent;
+    if (!parent) return null;
+    return {
+      x: Math.max(12, Math.min(x, parent.clientWidth - panel.offsetWidth - 12)),
+      y: Math.max(76, Math.min(y, parent.clientHeight - panel.offsetHeight - 12)),
+    };
+  }, []);
+  useEffect(() => {
+    if (!enabled) { dragRef.current = null; return; }
+    const onResize = () => {
+      dragRef.current = null;
+      if (window.matchMedia('(max-width: 900px)').matches) return;
+      setPosition(current => {
+        if (!current) return current;
+        const next = clampPosition(current.x, current.y);
+        return next && (next.x !== current.x || next.y !== current.y) ? next : current;
+      });
+    };
+    const observer = new ResizeObserver(onResize);
+    if (panelRef.current) observer.observe(panelRef.current);
+    if (panelRef.current?.parentElement) observer.observe(panelRef.current.parentElement);
+    return () => { observer.disconnect(); dragRef.current = null; };
+  }, [enabled, clampPosition]);
+  const onPointerDown = event => {
+    if (!enabled || event.button !== 0 || window.matchMedia('(max-width: 900px)').matches) return;
+    const panel = panelRef.current;
+    const parent = panel?.offsetParent;
+    if (!parent) return;
+    const rect = panel.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+      left: rect.left - parentRect.left, top: rect.top - parentRect.top };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onPointerMove = event => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setPosition(clampPosition(drag.left + event.clientX - drag.x, drag.top + event.clientY - drag.y));
+  };
+  const endDrag = () => { dragRef.current = null; };
+  const onKeyDown = event => {
+    if (!enabled || window.matchMedia('(max-width: 900px)').matches) return;
+    if (event.key === 'Home') { event.preventDefault(); setPosition(null); return; }
+    const delta = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+    const panel = panelRef.current;
+    if (!delta || !panel) return;
+    event.preventDefault();
+    const step = event.shiftKey ? 40 : 10;
+    setPosition(clampPosition(panel.offsetLeft + delta[0] * step, panel.offsetTop + delta[1] * step));
+  };
+  return {
+    panelRef,
+    style: enabled && position ? { '--focus-panel-left': `${position.x}px`, '--focus-panel-top': `${position.y}px` } : undefined,
+    handleProps: { onPointerDown, onPointerMove, onPointerUp: endDrag, onPointerCancel: endDrag,
+      onLostPointerCapture: endDrag, onKeyDown },
+  };
+}
+
 function SidePanel({
   item, items, activeIndex, setActive,
   setStep, applyToAll, bulk, setBulk,
@@ -10041,6 +10126,7 @@ function SidePanel({
   keepAttachedFigures = false, setKeepAttachedFigures,
   focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
+  const floatingInspector = useFloatingInspector(focusMode);
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
   const [settingsOpen, setSettingsOpen] = useState(readSettingsSectionsOpen);
   const toggleSettingsSection = (id) => {
@@ -10803,7 +10889,7 @@ function SidePanel({
   return (
     <>
     {updateDialog}
-    {panelVisible && <div className={`col right ${view === 'review' ? 'review-context' : ''} ${emptyHome ? 'home-settings' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정"
+    {panelVisible && <div ref={floatingInspector.panelRef} style={floatingInspector.style} className={`col right ${view === 'review' ? 'review-context' : ''} ${emptyHome ? 'home-settings' : ''}`} id="workspace-panel" role="region" aria-label="자료 편집과 설정"
       onKeyDown={emptyHome ? event => { if (event.key === 'Escape' && !event.defaultPrevented) { event.stopPropagation(); closeHomeSettings(); } } : undefined}>
       {emptyHome && (
         <div className="home-settings-heading">
@@ -10813,9 +10899,11 @@ function SidePanel({
       )}
       {focusMode && (
         <div className="focus-panel-heading">
-          <div>
+          <button className="focus-panel-drag-handle" type="button" aria-label="편집 도구 이동"
+            title="끌어서 이동 · 방향키로 이동 · Home으로 위치 초기화" {...floatingInspector.handleProps}>
+            {Icon.grip}
             <strong>편집 도구</strong>
-          </div>
+          </button>
           <button
             className="icon-btn focus-panel-toggle"
             type="button"

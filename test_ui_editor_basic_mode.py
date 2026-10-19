@@ -49,7 +49,7 @@ class TestEditorBasicMode(unittest.TestCase):
         const sandbox = renderSandbox();
         let toggles = 0;
         Object.assign(sandbox, { focusMode: true,
-          item: { id: 'p1' }, activeIndex: 0,
+          item: { id: 'p1' }, activeIndex: 0, floatingInspector: { handleProps: {} },
           problemDisplayName: () => '7번 문제', onToggleFocusPanel: () => toggles++ });
         compile(sandbox, 'globalThis.heading = () => (<>'
           + section('      {focusMode && (',

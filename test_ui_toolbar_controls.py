@@ -38,6 +38,9 @@ const sandbox = {
   },
   useCallback: callback => callback,
   useEffect: effect => { hooks.effects.push(effect); },
+  useLayoutEffect() {},
+  ReactDOM: { createPortal: node => node },
+  document: { querySelector: () => null, body: {} },
   window: {
     addEventListener: (type, fn) => listeners.set(type, fn),
     removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type); },
@@ -45,6 +48,7 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 vm.runInContext(Babel.transform(source.slice(from, to), { presets: ['react'] }).code, sandbox);
+sandbox.usePreviewFocusIsolation = () => {};
 const walk = value => !value ? [] : Array.isArray(value) ? value.flatMap(walk)
   : typeof value === 'object' ? [value, ...walk(value.props?.children)] : [];
 const text = value => !value ? '' : Array.isArray(value) ? value.map(text).join(' ')
@@ -172,9 +176,9 @@ class TestUiToolbarControls(unittest.TestCase):
           const rows = walk(tree).filter(node => node.props.role === 'menuitem');
           const triggerNode = { kind: 'trigger', focus() { focused = this; } };
           const rowNodes = rows.map((row, index) => ({ index, focus() { focused = this; } }));
-          const popupNode = { querySelectorAll: () => rowNodes };
+          const popupNode = { querySelectorAll: () => rowNodes, contains: node => rowNodes.includes(node) };
           const allNodes = [triggerNode, popupNode, ...rowNodes];
-          tree.props.ref.current = { contains: target => allNodes.includes(target) };
+          tree.props.ref.current = { contains: target => target === triggerNode };
           trigger.props.ref.current = triggerNode;
           if (popup) popup.props.ref.current = popupNode;
           hooks.cleanup = hooks.effects.map(effect => effect());
@@ -184,6 +188,9 @@ class TestUiToolbarControls(unittest.TestCase):
         view.trigger.props.onKeyDown(keyEvent('ArrowDown'));
         view = render();
         assert.equal(focused.index, 0, 'opening must focus the first action');
+        view.tree.props.onBlur({ relatedTarget: view.rowNodes[0], currentTarget: view.tree.props.ref.current });
+        listeners.get('pointerdown')({ target: view.rowNodes[0] });
+        view = render(); assert.ok(view.popup, 'moving focus into the portal must keep the menu open');
         for (const [key, expected] of [['ArrowDown', 1], ['End', 2], ['ArrowDown', 0], ['ArrowUp', 2], ['Home', 0]]) {
           const event = keyEvent(key, focused, view.popupNode);
           view.popup.props.onKeyDown(event);
@@ -212,6 +219,78 @@ class TestUiToolbarControls(unittest.TestCase):
         listeners.get('pointerdown')({ target: {} });
         view = render(); assert.equal(view.popup, undefined);
         assert.equal(listeners.size, 0);
+        """)
+
+    def test_inline_rename_saves_once_and_escape_or_composition_does_not_save(self) -> None:
+        run_node(r"""
+        let focused = 0, selected = 0, requests = [], finish;
+        let fileName = '원래 수업';
+        sandbox.window.requestAnimationFrame = callback => callback();
+        const props = { fileName, onRename: name => {
+          requests.push(name);
+          return new Promise(resolve => { finish = () => { fileName = name; resolve(true); }; });
+        } };
+        const event = key => ({ key, type: 'keydown', preventDefault() {}, stopPropagation() {} });
+        function render() {
+          hooks.index = 0; hooks.effects = [];
+          const tree = sandbox.LessonNameEditor({ ...props, fileName });
+          const trigger = walk(tree).find(node => node.props.className === 'lesson-name-trigger');
+          const input = walk(tree).find(node => node.type === 'input');
+          if (trigger) trigger.props.ref.current = { focus() { focused++; } };
+          if (input) input.props.ref.current = { focus() { focused++; }, select() { selected++; } };
+          return { tree, trigger, input };
+        }
+        (async () => {
+          let view = render(); view.trigger.props.onClick(); view = render();
+          assert.ok(view.input, 'the textbox replaces the title in the same component');
+          assert.equal(walk(view.tree).some(node => node.props.role === 'dialog'), false);
+          view.input.props.onChange({ target: { value: '새 이름' } }); view = render();
+          view.input.props.onKeyDown({ ...event('Enter'), nativeEvent: { isComposing: true } });
+          assert.equal(requests.length, 0, 'IME confirmation must not rename');
+          view.input.props.onKeyDown(event('Escape'));
+          await view.input.props.onBlur({ type: 'blur', preventDefault() {} });
+          view = render(); assert.ok(view.trigger); assert.equal(requests.length, 0);
+          view.trigger.props.onClick(); view = render();
+          view.input.props.onChange({ target: { value: '새 이름' } }); view = render();
+          const submit = walk(view.tree).find(node => node.type === 'form').props.onSubmit;
+          const pending = submit({ type: 'submit', preventDefault() {} });
+          await view.input.props.onBlur({ type: 'blur', preventDefault() {} });
+          assert.deepEqual(requests, ['새 이름'], 'Enter followed by blur must produce one request');
+          finish(); await pending;
+          view = render(); assert.ok(view.trigger); assert.ok(text(view.trigger).includes('새 이름'));
+          view.trigger.props.onClick(); view = render();
+          await view.input.props.onBlur({ type: 'blur', preventDefault() {} });
+          assert.equal(requests.length, 1, 'unchanged titles do not write');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_inline_rename_failure_keeps_the_draft_available_for_retry(self) -> None:
+        run_node(r"""
+        sandbox.window.requestAnimationFrame = callback => callback();
+        let fail = true, focused = 0;
+        const props = { fileName: '원래 이름', onRename: async () => { if (fail) throw new Error('연결 확인 후 다시 저장'); return true; } };
+        function render() {
+          hooks.index = 0; hooks.effects = [];
+          const tree = sandbox.LessonNameEditor(props);
+          const input = walk(tree).find(node => node.type === 'input');
+          const trigger = walk(tree).find(node => node.props.className === 'lesson-name-trigger');
+          if (input) input.props.ref.current = { focus() { focused++; }, select() {} };
+          if (trigger) trigger.props.ref.current = { focus() { focused++; } };
+          return { tree, input, trigger, form: walk(tree).find(node => node.type === 'form') };
+        }
+        (async () => {
+          let view = render(); view.trigger.props.onClick(); view = render();
+          view.input.props.onChange({ target: { value: '보존할 초안' } }); view = render();
+          await view.form.props.onSubmit({ type: 'submit', preventDefault() {} });
+          view = render();
+          assert.equal(view.input.props.value, '보존할 초안');
+          assert.equal(view.input.props['aria-invalid'], true);
+          assert.ok(text(view.tree).includes('연결 확인 후 다시 저장'));
+          assert.equal(view.input.props.readOnly, false);
+          assert.equal(focused, 1);
+          fail = false; await view.form.props.onSubmit({ type: 'submit', preventDefault() {} });
+          assert.ok(render().trigger, 'the same draft can be saved after retry');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
 
