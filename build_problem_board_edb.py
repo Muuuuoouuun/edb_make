@@ -116,7 +116,8 @@ PROBLEM_CROP_CONTENT_MIN_TRIM_RATIO = 0.04
 # (and a lone page number below it) only adds board pages. When asked, drop
 # blank rows above and below the content and such a footer; the page width,
 # and so the text size, stays the same.
-PAGE_AS_IS_TRIM_MARGIN_RATIO = 0.008
+PAGE_AS_IS_TRIM_MARGIN_RATIO = 0.004
+PAGE_AS_IS_TRIM_MIN_MARGIN_PX = 6
 PAGE_AS_IS_TRIM_MIN_RATIO = 0.03
 PAGE_AS_IS_FOOTER_ZONE_RATIO = 0.10
 PAGE_AS_IS_FOOTER_MAX_HEIGHT_RATIO = 0.025
@@ -218,6 +219,9 @@ PASSAGE_JOIN_TOP_RULE_MAX_RATIO = 0.32
 PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO = 0.45
 PASSAGE_JOIN_FOOTER_CONTENT_MIN_WIDTH_RATIO = 0.25
 CONTINUOUS_RECORD_GAP_PX = 20.0
+# "페이지 전체 넣기" stacks whole pages back to back with no gap between them;
+# other continuous records, such as full-width passages, keep the gap above.
+WHOLE_PAGE_RECORD_GAP_PX = 0.0
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
@@ -1478,7 +1482,7 @@ def _page_as_is_content_box(image: Image.Image) -> Box | None:
             and int(footer_columns[-1] - footer_columns[0]) + 1 <= width * PAGE_AS_IS_FOOTER_MAX_WIDTH_RATIO
         ):
             bottom = content_bottom
-    margin = max(4, int(round(height * PAGE_AS_IS_TRIM_MARGIN_RATIO)))
+    margin = max(PAGE_AS_IS_TRIM_MIN_MARGIN_PX, int(round(height * PAGE_AS_IS_TRIM_MARGIN_RATIO)))
     top = max(0, top - margin)
     bottom = min(height, bottom + margin)
     if height - (bottom - top) <= height * PAGE_AS_IS_TRIM_MIN_RATIO:
@@ -9349,6 +9353,10 @@ def _page_quality_payload(page: PageModel | None) -> dict[str, Any]:
     }
 
 
+def _continuous_record_gap_px(*, whole_page: bool) -> float:
+    return WHOLE_PAGE_RECORD_GAP_PX if whole_page else CONTINUOUS_RECORD_GAP_PX
+
+
 def _image_record_geometry(
     template: LayoutTemplate,
     *,
@@ -9356,6 +9364,7 @@ def _image_record_geometry(
     base_width_px: float,
     base_height_pages: float,
     reserved_height_pages: float,
+    whole_page: bool = False,
 ) -> dict[str, Any]:
     return {
         "baseDisplayWidthPx": float(base_width_px),
@@ -9364,7 +9373,7 @@ def _image_record_geometry(
         "maxDisplayWidthPx": float(CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX),
         "canvasPageHeightPx": float(CANVAS_WIDTH),
         "topPaddingPages": float(TOP_PADDING_PX / CANVAS_WIDTH),
-        "continuousGapPages": float(CONTINUOUS_RECORD_GAP_PX / CANVAS_WIDTH),
+        "continuousGapPages": float(_continuous_record_gap_px(whole_page=whole_page) / CANVAS_WIDTH),
         "cropFormat": crop_format,
     }
 
@@ -9385,6 +9394,7 @@ def _image_record_geometry_from_placement(
         template, crop_format=crop_format, base_width_px=width / scale,
         base_height_pages=height / scale / CANVAS_WIDTH,
         reserved_height_pages=float(placement.get("actual_content_height_pages") or 0.0),
+        whole_page=bool(placement.get("force_full_page_bounds")),
     )
 
 
@@ -9439,6 +9449,7 @@ def annotate_session_image_record_geometry(
         geometry = _image_record_geometry(
             template, crop_format=crop_format, base_width_px=base_width,
             base_height_pages=base_height, reserved_height_pages=max(MIN_HEIGHT_PAGES, base_height),
+            whole_page=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
         )
         problem["imageRecordGeometry"] = geometry
         problem["image_record_geometry"] = geometry
@@ -11145,7 +11156,7 @@ def build_image_only_records(
             elif template.metadata.get("layout_gap_mode") == "compact":
                 continuous_gap_px = 0.0
             else:
-                continuous_gap_px = CONTINUOUS_RECORD_GAP_PX
+                continuous_gap_px = _continuous_record_gap_px(whole_page=entry.force_full_page_bounds)
             start_y_pages = placement.start_y_pages
             actual_height_pages = rendered_height_px / max(scale_ratio, 0.001) / CANVAS_WIDTH
             rendered_height_pages = rendered_height_px / CANVAS_WIDTH
@@ -11216,6 +11227,7 @@ def build_image_only_records(
                 "record_top_y_pages": round(y_px / CANVAS_WIDTH, 6),
                 "record_bottom_y_pages": round((y_px + rendered_height_px) / CANVAS_WIDTH, 6),
                 "record_gap_px": continuous_gap_px if continuous_flow else 0.0,
+                "force_full_page_bounds": entry.force_full_page_bounds,
                 "rendered_height_pages": round(rendered_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": round(overflow_amount_pages, 6),
