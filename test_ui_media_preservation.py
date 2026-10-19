@@ -18,8 +18,8 @@ def test_inline_figure_toggle_is_controlled_accessible_and_opens_no_dialog():
     assert.deepEqual(changes, [false]);
     assert.equal(input.props.checked, true, 'server state controls the switch until a successful response');
     assert.equal(sandbox.FigureColorToggle({checked: false, busy: true}).children.find(node => node.type === 'input').props.disabled, true);
-    for (const mode of ['grayscale', 'off']) assert.equal(sandbox.keepsFigureColors({preserveMediaMode: mode}), false);
-    for (const mode of ['auto', 'manual', undefined]) assert.equal(sandbox.keepsFigureColors({preserveMediaMode: mode}), true);
+    for (const mode of ['grayscale', 'off', undefined]) assert.equal(sandbox.keepsFigureColors({preserveMediaMode: mode}), false);
+    for (const mode of ['auto', 'manual']) assert.equal(sandbox.keepsFigureColors({preserveMediaMode: mode}), true);
     assert.ok(!source.includes('function MediaPreservationEditor('));
     """)
 

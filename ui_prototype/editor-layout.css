@@ -71,6 +71,12 @@ body:not(.dark) .rail-drag-overlay.editor-basic-mode {
   background: transparent;
 }
 
+/* This wrapper is a layout slot, not a card. Its larger rounded clip used
+   to cut through the toolbar's own rounded border at the upper corners. */
+.main.editor-basic-mode > .col.center.unified-workspace {
+  border-radius: 0;
+}
+
 .main.editor-basic-mode .col-hd {
   min-height: 56px;
   padding: 8px 12px;
@@ -310,16 +316,16 @@ body:not(.dark) .rail-drag-overlay.editor-basic-mode {
   background: transparent;
 }
 
-/* One shared command row, in both basic and focus modes. Secondary actions
-   open overlays and never consume another row of canvas height. */
+/* One shared toolbar in both editor modes. Wrap according to the actual
+   available board width, which also changes when the side panels are open. */
 .main.editor-basic-mode .stage > .stage-unified-toolbar {
   position: relative;
   z-index: 20;
-  flex: 0 0 52px;
+  flex: 0 0 auto;
   min-height: 52px;
-  height: 52px;
+  height: auto;
   min-width: 0;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 6px 10px;
   border-radius: 16px;
@@ -351,13 +357,16 @@ body:not(.dark) .rail-drag-overlay.editor-basic-mode {
 .stage-unified-toolbar .stage-estimate-summary:hover { background: var(--surface-2); }
 .stage-unified-toolbar .stage-estimate-summary:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
 
-.stage-unified-actions,
 .stage-unified-toolbar .stage-preview-controls {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   flex-wrap: nowrap;
   gap: 2px;
+}
+
+.stage-unified-toolbar .stage-unified-actions {
+  display: contents;
 }
 
 .stage-unified-toolbar .stage-preview-controls {
@@ -376,7 +385,7 @@ body:not(.dark) .rail-drag-overlay.editor-basic-mode {
 .stage-unified-toolbar .btn.icon { width: 30px; min-width: 30px; padding: 4px; }
 .stage-unified-toolbar .stage-preview-zoom-value { min-width: 48px; }
 .stage-unified-toolbar .stage-fit-btn { min-width: 40px; }
-.stage-unified-toolbar .stage-smart-move { gap: 5px; }
+.stage-unified-toolbar .stage-smart-move { gap: 5px; margin-left: auto; }
 .stage-unified-toolbar .stage-smart-state { font-size: var(--text-xs); font-weight: 700; }
 .stage-unified-toolbar .stage-smart-move.on { color: var(--accent-ink); background: var(--accent-soft); }
 .stage-unified-toolbar .stage-review-shortcut { color: var(--accent-ink); }
@@ -566,7 +575,7 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   border-color: var(--accent-hover);
 }
 
-.main.editor-basic-mode.left-collapsed:not(.editor-focus-mode):not(.home-mode):not(.review-editor-focus):not(.recognition-page-review-mode) {
+.main.editor-basic-mode.left-collapsed:not(.editor-focus-mode):not(.home-mode):not(.side-panel-hidden):not(.recognition-page-review-mode) {
   grid-template-columns: 72px minmax(0, 1fr) 300px;
 }
 
@@ -574,8 +583,25 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   padding-inline: 6px;
 }
 
-.main.editor-basic-mode.review-editor-focus {
+.main.editor-basic-mode.side-panel-hidden {
   grid-template-columns: 220px minmax(0, 1fr) 0;
+}
+
+.main.editor-basic-mode.left-collapsed.side-panel-hidden {
+  grid-template-columns: 72px minmax(0, 1fr) 0;
+}
+
+/* Settings opened while the first upload is processing. */
+.main.editor-basic-mode.side-panel-hidden:has(> .col.right.home-settings) {
+  grid-template-columns: 220px minmax(0, 1fr) clamp(300px, 25vw, 360px);
+}
+
+.main.editor-basic-mode.side-panel-hidden > .col.right.home-settings {
+  display: flex;
+  width: auto;
+  overflow: hidden;
+  visibility: visible;
+  pointer-events: auto;
 }
 
 .main.editor-basic-mode.home-mode {
@@ -587,6 +613,36 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   display: none;
 }
 
+/* Settings opened from the empty home show beside the dashboard. */
+.main.editor-basic-mode.home-mode:has(> .col.right.home-settings) {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 25vw, 360px);
+}
+
+.main.editor-basic-mode.home-mode > .col.right.home-settings {
+  display: flex;
+}
+
+.home-settings-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Before the first material lands there is no item, so only settings applies. */
+.main.editor-basic-mode > .col.right.home-settings .inspector-pill-tabs {
+  display: none;
+}
+
+@media (max-width: 700px) {
+  .main.editor-basic-mode.home-mode > .col.right.home-settings {
+    order: -1;
+  }
+}
+
 /* Desktop windows may shrink, but this revision does not introduce a mobile
    navigation model. Existing review and collapsed-rail states stay intact. */
 @media (max-width: 1280px) and (min-width: 901px) {
@@ -596,7 +652,7 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
     padding: 10px 14px 14px;
   }
 
-  .main.editor-basic-mode.review-editor-focus {
+  .main.editor-basic-mode.side-panel-hidden {
     grid-template-columns: 208px minmax(0, 1fr) 0;
   }
 
@@ -620,18 +676,6 @@ body:not(.dark) .main.editor-basic-mode .btn.primary:hover:not(:disabled) {
   .app.editor-basic-mode > .topbar:has(.topbar-export-group) {
     padding-inline: 8px;
     column-gap: 4px;
-  }
-
-  .main.editor-basic-mode .stage > .stage-unified-toolbar {
-    flex: 0 0 auto;
-    height: auto;
-    flex-wrap: wrap;
-  }
-
-  .stage-unified-toolbar .stage-unified-actions {
-    min-width: 0;
-    max-width: 100%;
-    flex-wrap: wrap;
   }
 }
 

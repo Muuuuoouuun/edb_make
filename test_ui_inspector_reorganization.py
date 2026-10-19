@@ -115,7 +115,7 @@ class TestInspectorReorganization(unittest.TestCase):
         run_node(INSPECTOR_SETUP + r"""
         const quick = findElement(node => attrText(node,'aria-label') === '선택 자료 빠른 편집');
         const sandbox = renderSandbox(), calls = [];
-        Object.assign(sandbox, {panelBusy:false,session:{},item:{id:'p1'},onEditOriginal:id=>calls.push(['crop',id]),onDownloadItemImage:item=>calls.push(['png',item.id]),onRemoveItem:id=>calls.push(['remove',id]),
+        Object.assign(sandbox, {panelBusy:false,session:{},item:{id:'p1'},view:'board',splitActiveId:null,onSplitItem:id=>calls.push(['split',id]),onEditOriginal:id=>calls.push(['crop',id]),onDownloadItemImage:item=>calls.push(['png',item.id]),onRemoveItem:id=>calls.push(['remove',id]),
           focusManualCrop:()=>calls.push('crop'),setTab:tab=>calls.push(tab),
           document:{getElementById:id=>({focus:()=>calls.push(['focus',id])})}});
         compile(sandbox,'globalThis.quick = () => ('+snippet(quick.node)+');');
@@ -128,6 +128,16 @@ class TestInspectorReorganization(unittest.TestCase):
         buttons.find(node=>text(node).includes('PNG')).props.onClick();
         buttons.find(node=>node.props['aria-label']==='선택 자료 삭제').props.onClick();
         assert.deepEqual(calls.slice(-2),[['png','p1'],['remove','p1']]);
+        const split = buttons.find(node=>text(node).includes('나누기'));
+        split.props.onClick();
+        assert.deepEqual(calls.at(-1),['split','p1']);
+        assert.deepEqual(buttons.map(node=>node.props['aria-label'] || text(node).trim()),
+          ['crop 영역 조정','scissors 나누기','align 크기·간격','download PNG','선택 자료 삭제'],
+          'edit actions first, export next, delete last');
+        sandbox.view='review';
+        assert.equal(walk(sandbox.quick()).find(node=>node.type==='button' && text(node).includes('나누기')).props.disabled,true,
+          'splitting picks a line on the board');
+        sandbox.view='board';
         sandbox.panelBusy=true;
         assert.equal(walk(sandbox.quick()).find(node=>node.type==='button' && text(node).includes('영역 조정')).props.disabled,true);
 

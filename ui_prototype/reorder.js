@@ -231,13 +231,18 @@
     edgePx = 64,
     maxPx = 22,
     holdDurationMs = 0,
-    frameDurationMs = 1000 / 60
+    frameDurationMs = 1000 / 60,
+    maxHoldMultiplier = 2,
+    holdRampMs = 900
   ) {
     const baseDelta = edgeAutoScrollDelta(rect, clientY, edgePx, maxPx);
     if (!baseDelta) return 0;
     const safeHoldMs = Math.max(0, Number(holdDurationMs) || 0);
-    const holdProgress = Math.min(1, safeHoldMs / 900);
-    const holdMultiplier = 1 + holdProgress;
+    const safeRampMs = Math.max(1, Number(holdRampMs) || 900);
+    const safeMaxMultiplier = Math.max(1, Number(maxHoldMultiplier) || 2);
+    // The longer the pointer rests at the edge, the faster the scroll (up to the cap).
+    const holdProgress = Math.min(1, safeHoldMs / safeRampMs);
+    const holdMultiplier = 1 + (safeMaxMultiplier - 1) * holdProgress;
     const safeFrameMs = Math.max(4, Math.min(42, Number(frameDurationMs) || (1000 / 60)));
     const frameMultiplier = safeFrameMs / (1000 / 60);
     const magnitude = Math.max(1, Math.round(Math.abs(baseDelta) * holdMultiplier * frameMultiplier));

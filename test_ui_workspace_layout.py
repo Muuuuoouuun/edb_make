@@ -128,7 +128,7 @@ class TestCompactRailAndBoundaries(unittest.TestCase):
         run_node(RENDER_SETUP + r"""
         const sandbox = renderSandbox();
         let uploads = 0, preserved, dropped;
-        Object.assign(sandbox, { editScope:null, hasSessionItems: true, pendingFiles: [], dropZoneActive: false,
+        Object.assign(sandbox, { PRIMARY_MODIFIER_LABEL: 'Ctrl', editScope:null, hasSessionItems: true, pendingFiles: [], dropZoneActive: false,
           addSample: () => uploads++, bulkApply: step => { preserved = step; },
           setDropZoneActive() {}, handleFiles: files => { dropped = files; } });
         compile(sandbox, 'globalThis.actions = () => (<>'

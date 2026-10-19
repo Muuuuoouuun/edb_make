@@ -9,7 +9,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 import app_server
-from build_problem_board_edb import _ProblemAssetTask, _build_image_only_record_image, _render_problem_asset, run_problem_export
+from build_problem_board_edb import _ProblemAssetTask, _build_image_only_record_image, _render_problem_asset, _resolve_chalk_color, run_problem_export
 from edb_builder import CROP_FORMAT_V1
 from structured_schema import Box, Subject
 from test_raster_media_preservation import color_worksheet
@@ -24,6 +24,7 @@ def media_session(tmp_path):
     return {"output_dir": str(tmp_path / "out"),
         "pages": [{"id": "page1", "sourceImageUri": source.as_uri(), "problemIds": ["p7"]}],
         "problems": [{"id": "p7", "title": "7", "subject": "math", "step": "s2",
+            "preserveMediaMode": "auto",
             "sourcePageId": "page1", "sourceFileName": "math.png", "imagePath": source.as_uri(),
             "boardRenderPath": source.as_uri(),
             "bbox": {"left": 0, "top": 0, "width": 1100, "height": 700}}]}
@@ -301,3 +302,33 @@ def test_attachment_grayscale_option_is_applied_during_recognition_and_saved(tmp
     value = pixel(problem, point)
     assert value[0] == value[1] == value[2] and 100 < value[0] < 120
     assert_encoded_pixel(session, point, value)
+
+
+def test_default_attachment_removes_background_without_restoring_detected_media(tmp_path):
+    source = tmp_path / "science.png"
+    color_worksheet().save(source)
+    result = run_problem_export(source, output_dir=tmp_path / "output", subject_name="science",
+        ocr="none", ai_fallback="off", input_intent="single-problem", processing_step="s2",
+        skip_deskew=True, skip_crop=True, export_edb=False, sync_ui=False)
+    session = json.loads(result["ui_session_path"].read_text())
+    problem = session["problems"][0]
+    assert problem["preserveMediaMode"] == "off"
+    assert problem["preserveMediaRegions"] == []
+    offset = problem["cropSourceOffset"]
+    point = (480 - offset["left"], 280 - offset["top"])
+    value = pixel(problem, point)
+    assert value[:3] != (210, 65, 75)
+    assert_encoded_pixel(session, point, value)
+
+
+def test_bulk_toggle_off_removes_white_pdf_patch_and_survives_reload(media_session):
+    problem = media_session["problems"][0]
+    problem["subject"] = "science"
+    problem["preserveMediaRegions"] = [{"kind": "image", "source": "pdf_image_block",
+        "bbox": {"left": 300, "top": 100, "width": 450, "height": 400}}]
+    updated = app_server._mutate_preserve_media_many(media_session, ["p7"], "off")
+    problem = json.loads(json.dumps(updated))["problems"][0]
+    assert problem["preserveMediaMode"] == "off"
+    assert problem["preserveMediaRegions"] == []
+    assert pixel(problem, (320, 120))[3] == 0
+    assert_encoded_pixel(updated, (320, 120), _resolve_chalk_color("charcoal") + (0,))

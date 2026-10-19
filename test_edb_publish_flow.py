@@ -6292,11 +6292,14 @@ class TestEdbPublishFlow(unittest.TestCase):
             applied_scale = placements[0]["placement_scale_ratio"]
             self.assertGreater(applied_scale, problem_board.PLACEMENT_SCALE_MAX)
             self.assertLessEqual(applied_scale, problem_board.PLACEMENT_FIT_WIDTH_SCALE_MAX)
+            # Whole pages stack back to back ("페이지 전체 넣기" has no gap).
             expected_span = round(
                 placements[0]["actual_content_height_pages"] * applied_scale
-                + problem_board.CONTINUOUS_RECORD_GAP_PX / problem_board.CANVAS_WIDTH,
+                + problem_board.WHOLE_PAGE_RECORD_GAP_PX / problem_board.CANVAS_WIDTH,
                 6,
             )
+            self.assertEqual(0.0, problem_board.WHOLE_PAGE_RECORD_GAP_PX)
+            self.assertEqual(0.0, placements[0]["record_gap_px"])
             self.assertEqual(0.0, placements[0]["start_y_pages"])
             self.assertAlmostEqual(expected_span, placements[0]["snapped_next_start_y_pages"], places=5)
             self.assertAlmostEqual(expected_span, placements[1]["start_y_pages"], places=5)

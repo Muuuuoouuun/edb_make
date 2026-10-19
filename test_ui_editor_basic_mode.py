@@ -49,7 +49,7 @@ class TestEditorBasicMode(unittest.TestCase):
         const sandbox = renderSandbox();
         let toggles = 0;
         Object.assign(sandbox, { focusMode: true,
-          item: { id: 'p1' }, activeIndex: 0,
+          item: { id: 'p1' }, activeIndex: 0, floatingInspector: { handleProps: {} },
           problemDisplayName: () => '7번 문제', onToggleFocusPanel: () => toggles++ });
         compile(sandbox, 'globalThis.heading = () => (<>'
           + section('      {focusMode && (',
@@ -83,7 +83,7 @@ class TestEditorBasicMode(unittest.TestCase):
         focus_style = (ROOT / 'ui_prototype' / 'editor-focus.css').read_text(encoding='utf-8')
         self.assertIn('.main.editor-basic-mode:not(.editor-focus-mode) .focus-panel-heading', focus_style)
         self.assertIn('grid-template-columns: 220px minmax(0, 1fr) 300px', STYLE)
-        self.assertIn('.main.editor-basic-mode.review-editor-focus', STYLE)
+        self.assertIn('.main.editor-basic-mode.side-panel-hidden', STYLE)
         self.assertIn('.main.editor-basic-mode.left-collapsed', STYLE)
         self.assertIn('.main.editor-basic-mode.home-mode > .col.right', STYLE)
         self.assertNotIn('home-settings-open', STYLE)
@@ -142,7 +142,8 @@ class TestEditorBasicMode(unittest.TestCase):
           reorderBusy:false, filterActive:false, PRIMARY_MODIFIER_NAME:'Control',
           ALTERNATE_MODIFIER_NAME:'Alt', problemDisplayName:it=>it.name,
           reviewStatusClass:()=> 'status-normal', problemSourceLabel:()=> '원본 1쪽',
-          TileImage:()=>null, suppressClickRef:{current:false}, selectedItemCount:0,
+          TileImage:()=>null, railThumbClass:()=>'is-board', RAIL_THUMB_PREVIEW_MAX_DIMENSION:256,
+          suppressClickRef:{current:false}, selectedItemCount:0,
           railRowHandlersRef:{current:sandbox},
           selectRailItem:(id,e)=>calls.push(['select',id,e.ctrlKey]),
           applyRailSelectionKeyboard:()=>false,
