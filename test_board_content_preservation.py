@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 import app_server
 from build_problem_board_edb import _build_image_only_record_image, _extract_problem_cutout
 from image_reconstruction_backend import board_render_has_missing_tail
+from raster_media import detect_color_media_regions
 
 
 def boxed_question():
@@ -40,7 +41,7 @@ def legacy_problem(tmp_path):
                "imagePath": raw.as_uri(), "boardRenderPath": board.as_uri(),
                "sourcePageId": "page1", "sourceFileName": "physics.png",
                "bbox": {"left": 0, "top": 0, "width": 600, "height": 1000},
-               "preserveMediaMode": "auto"}
+               "preserveMediaMode": "auto", "preserveMediaRegions": detect_color_media_regions(source)}
     app_server._build_guarded_board_payload.cache_clear()
     return source, raw, board, problem
 
@@ -155,3 +156,4 @@ def test_final_encoded_edb_also_recovers_tail_from_legacy_render(legacy_problem,
         board_theme="green", crop_format=crop_format, target_image_width_px=0, continuous_flow=False)
     with Image.open(io.BytesIO(encoded.image_bytes)) as image:
         assert_complete_tail(image)
+        assert image.convert("RGBA").getpixel((round(image.width / 2), round(image.height * 0.23))) == (60, 120, 210, 255)

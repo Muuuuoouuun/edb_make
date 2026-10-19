@@ -3565,8 +3565,6 @@ def _build_guarded_board_payload(
     regions = options["regions"]
     if options["mode"] == "off":
         regions = []
-    elif options["mode"] in {"auto", "grayscale"} and not regions and options["role"] != "child_question":
-        regions = _lazy_call("raster_media", "detect_color_media_regions", source)
     if options["mode"] == "grayscale":
         regions = [{**region, "renderMode": "grayscale"} for region in regions]
     task = _lazy_attr("build_problem_board_edb", "_ProblemAssetTask")(
@@ -3600,7 +3598,6 @@ def _guarded_board_payload(
         "subject": str(problem.get("subject") or "unknown"),
         "sourceName": str(problem.get("sourceFileName") or ""),
         "mode": _media_mode(problem),
-        "role": problem.get("passageRole") or problem.get("passage_role") or (problem.get("metadata") or {}).get("passage_role"),
         "regions": problem.get("preserveMediaRegions") or problem.get("preserve_media_regions") or [],
         "theme": board_theme,
     }
