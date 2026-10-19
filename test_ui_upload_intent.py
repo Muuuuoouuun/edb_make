@@ -63,7 +63,7 @@ class TestUiUploadIntent(unittest.TestCase):
           for (const mode of ['recognize', 'register', 'manual-split']) {
             for (const keep of [true, false]) {
               const {request} = await runQueue(mode, 'multi-problem', keep);
-              assert.equal(request.options.preserveMediaMode, keep ? 'auto' : 'grayscale');
+              assert.equal(request.options.preserveMediaMode, keep ? 'auto' : 'off');
             }
           }
         })().catch(error => { console.error(error); process.exitCode = 1; });
