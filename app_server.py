@@ -3575,6 +3575,7 @@ def _build_guarded_board_payload(
         subject=resolve_subject(options["subject"]),
         source_hints=(options["sourceName"],),
         text_priority=_problem_prefers_text_preservation(options["subject"], options["sourceName"]),
+        preserve_media_mode=options["mode"],
         rendered_media_regions=regions,
     )
     image = _lazy_call("build_problem_board_edb", "_build_problem_board_asset", source, task)
@@ -5555,8 +5556,8 @@ def _crop_refreshes_board_render(problem: dict[str, Any]) -> bool:
 
 
 def _media_mode(problem: dict[str, Any]) -> str:
-    mode = problem.get("preserveMediaMode", problem.get("preserve_media_mode", "auto"))
-    return mode if mode in {"auto", "manual", "off", "grayscale"} else "auto"
+    mode = problem.get("preserveMediaMode", problem.get("preserve_media_mode", "off"))
+    return mode if mode in {"auto", "manual", "off", "grayscale"} else "off"
 
 
 def _set_media_regions(problem: dict[str, Any], regions: list[dict[str, Any]]) -> None:
@@ -5713,6 +5714,7 @@ def _render_board_crop_from_raw(
                 subject=resolve_subject((problem or {}).get("subject")),
                 source_hints=(str((problem or {}).get("sourceFileName") or ""),),
                 text_priority=_problem_prefers_text_preservation((problem or {}).get("subject"), (problem or {}).get("sourceFileName")),
+                preserve_media_mode=_media_mode(problem or {}),
                 rendered_media_regions=(problem or {}).get("preserveMediaRegions") or [],
             )
             _lazy_call("build_problem_board_edb", "_render_problem_board_asset", image, task)
@@ -5778,7 +5780,7 @@ def _mutate_preserve_media(session: dict[str, Any], problem_id: str, mode: str, 
 
 
 def _mutate_preserve_media_many(session: dict[str, Any], problem_ids: list[str], mode: str) -> dict[str, Any]:
-    if mode not in {"auto", "grayscale"} or not problem_ids:
+    if mode not in {"auto", "grayscale", "off"} or not problem_ids:
         raise ValueError("그림 색상 설정과 적용할 자료를 선택해 주세요.")
     updated = _clone_jsonish(session)
     for problem_id in dict.fromkeys(problem_ids):
@@ -12163,7 +12165,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     crop_format=crop_format,
                     input_intent=input_intent,
-                    preserve_media_mode=str(payload.get("preserveMediaMode") or "auto"),
+                    preserve_media_mode=str(payload.get("preserveMediaMode") or "off"),
                     page_tile_mode=str(
                         payload.get("pageTileMode")
                         or payload.get("page_tile_mode")

@@ -1929,7 +1929,7 @@ class ProblemEntry:
     input_intent: str | None = None
     force_full_page_bounds: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
-    preserve_media_mode: str = "auto"
+    preserve_media_mode: str = "off"
     crop_source_offset: dict[str, int] | None = None
     source_segments: list[dict[str, Any]] = field(default_factory=list)
     board_render_preprocessed: bool = False
@@ -1957,7 +1957,7 @@ class _ProblemAssetTask:
     source_hints: tuple[str, ...] = ()
     source_media_regions: tuple[dict[str, Any], ...] = ()
     detect_color_media: bool = False
-    preserve_media_mode: str = "auto"
+    preserve_media_mode: str = "off"
     render_board_asset: bool = True
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
     rendered_source_offset: dict[str, int] | None = None
@@ -2333,7 +2333,7 @@ def _build_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> Im
     # Monochrome math line art stays chalk. Substantial color media is restored
     # last from the immutable source, including for math documents.
     regions = stage2_media_regions(
-        crop, task.rendered_media_regions,
+        crop, task.rendered_media_regions if task.preserve_media_mode != "off" else [],
         chalk_math=_stage2_prefers_chalk_math_media(
             task.subject, PROCESSING_STEP_CHALK, *task.source_hints,
         ),
@@ -2496,7 +2496,9 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             task.bounds,
             column_index=(task.segment_column_indices or (None,))[0],
         )
-    if task.detect_color_media and not task.rendered_media_regions:
+    if task.preserve_media_mode == "off":
+        task.rendered_media_regions = []
+    if task.preserve_media_mode != "off" and task.detect_color_media and not task.rendered_media_regions:
         task.rendered_media_regions = detect_color_media_regions(crop)
     if task.preserve_media_mode == "grayscale":
         task.rendered_media_regions = [{**region, "renderMode": "grayscale"} for region in task.rendered_media_regions]
@@ -6154,11 +6156,11 @@ def build_problem_entries(
     board_theme: str = DEFAULT_BOARD_THEME,
     content_target: str = "all",
     render_board_assets: bool = True,
-    preserve_media_mode: str = "auto",
+    preserve_media_mode: str = "off",
     timings: dict[str, int] | None = None,
 ) -> list[ProblemEntry]:
-    if preserve_media_mode not in {"auto", "grayscale"}:
-        raise ValueError("preserve_media_mode must be auto or grayscale")
+    if preserve_media_mode not in {"auto", "grayscale", "off"}:
+        raise ValueError("preserve_media_mode must be auto, grayscale or off")
     entries_started_at = time.perf_counter()
     crop_dir = output_dir / "problem_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
@@ -6447,7 +6449,7 @@ def build_problem_entries(
                             for region in (prepared_page.metadata.get("pdf_media_regions") or [])
                             if isinstance(region, dict)
                         ]
-                        if reuse_full_page_asset and _problem_allows_selective_media_preservation(problem)
+                        if reuse_full_page_asset and preserve_media_mode != "off" and _problem_allows_selective_media_preservation(problem)
                         else []
                     ),
                     source_segments=passage_source_segments,
@@ -9508,7 +9510,7 @@ def build_ui_session(
                 "sourceFileName": source_path.name,
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
                 "preserveMediaRegions": list(placement.get("preserve_media_regions") or []),
-                "preserveMediaMode": placement.get("preserve_media_mode") or "auto",
+                "preserveMediaMode": placement.get("preserve_media_mode") or "off",
                 "preserve_media_regions": list(placement.get("preserve_media_regions") or []),
                 "cropSourceOffset": placement.get("crop_source_offset"),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
@@ -10801,14 +10803,20 @@ def _build_image_only_record_image(
             board_theme=board_theme,
             text_priority=text_priority,
         )
-    elif dark_board and chalk_math_media and not entry.board_render_preprocessed:
+    elif (
+        dark_board
+        and processing_step == PROCESSING_STEP_CHALK
+        and (chalk_math_media or entry.preserve_media_mode == "off")
+        and not entry.board_render_preprocessed
+    ):
         # Older sessions may already contain a Stage-2 board render whose
         # detected figure was restored as an opaque source patch. Rebuild the
         # chalk cutout from the immutable crop so those legacy white boxes do
         # not survive a fresh EDB export.
         board_image = _extract_problem_cutout(
-            _enhance_problem_crop(crop_image),
+            _enhance_problem_crop(crop_image, text_priority=text_priority),
             chalk_color=chalk_color,
+            text_priority=text_priority,
         )
         if crop_format == CROP_FORMAT_V1 and board_image.size != crop_image.size:
             board_image = board_image.resize(crop_image.size, Image.Resampling.LANCZOS)
@@ -10858,6 +10866,7 @@ def _build_image_only_record_image(
     if (
         dark_board
         and processing_step != PROCESSING_STEP_RECONSTRUCT
+        and entry.preserve_media_mode != "off"
         and entry.preserve_media_regions
     ):
         # Text-priority exports rebuild and normalize the cutout at final size.
@@ -11791,7 +11800,7 @@ def run_problem_export(
     content_target: str = "all",
     input_notes: str | None = None,
     processing_step: str | None = None,
-    preserve_media_mode: str = "auto",
+    preserve_media_mode: str = "off",
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
     ai_fallback_provider: str = "gemini",

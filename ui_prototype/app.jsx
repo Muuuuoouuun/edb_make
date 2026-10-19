@@ -10038,7 +10038,7 @@ function SidePanel({
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
   onEditOriginal, onDownloadItemImage, onRemoveItem,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
-  keepAttachedFigures = true, setKeepAttachedFigures,
+  keepAttachedFigures = false, setKeepAttachedFigures,
   focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
   const [tab, setTab] = useStoredPreference(RIGHT_PANEL_TAB_KEY, 'item', value => RIGHT_PANEL_TABS.includes(value));
@@ -10618,7 +10618,7 @@ function SidePanel({
               <p className="settings-hint">자료를 추가하면 이 방식으로 바로 처리합니다</p>
               <SplitModePicker splitMode={splitMode} setSplitMode={setSplitMode} disabled={queueBusy} />
               {setKeepAttachedFigures && <FigureColorToggle checked={keepAttachedFigures} busy={queueBusy}
-                label="첨부한 자료 속 그림 원본 유지" note="새로 추가하는 자료에 적용 · 끄면 그림만 흑백 처리"
+                label="첨부한 자료 속 그림 원본 유지" note="새로 추가하는 자료에 적용 · 끄면 그림까지 배경 제거"
                 onChange={setKeepAttachedFigures} />}
             </SettingsSection>
             <SettingsSection id="keys" title="AI 사용·연결" summary={aiConnectionLabel} open={settingsOpen.keys} onToggle={toggleSettingsSection}>
@@ -10983,7 +10983,7 @@ function SidePanel({
 
                 <FigureColorToggle checked={keepsFigureColors(item)} busy={panelBusy || !session}
                   label="문제 속 그림 원본 유지"
-                  onChange={enabled => mutateSession?.('preserve-media', { problemIds: [item.id], mode: enabled ? 'auto' : 'grayscale' })} />
+                  onChange={enabled => mutateSession?.('preserve-media', { problemIds: [item.id], mode: enabled ? 'auto' : 'off' })} />
 
                 <p className="panel-scope-note" hidden={!panelSaveState.dirty && !itemNeedsCheck}>
                   선택 1개 · 처리 방식은 아래 적용 버튼으로 저장합니다.
@@ -11294,8 +11294,8 @@ function SidePanel({
             {/* The whole-session figure policy stays reachable for saved items. */}
             <FigureColorToggle checked={items.every(keepsFigureColors)} busy={panelBusy || !session || !items.length}
               label="전체 자료 속 그림 원본 유지"
-              note={items.some(keepsFigureColors) && !items.every(keepsFigureColors) ? '일부 자료는 흑백 처리 중 · 전체 설정 변경' : '전체 자료에 즉시 저장 · 칠판용 방식에 적용'}
-              onChange={enabled => mutateSession?.('preserve-media', { problemIds: items.map(candidate => candidate.id), mode: enabled ? 'auto' : 'grayscale' })} />
+              note={items.some(keepsFigureColors) && !items.every(keepsFigureColors) ? '일부 자료는 배경 제거 중 · 전체 설정 변경' : '전체 자료에 즉시 저장 · 칠판용 방식에 적용'}
+              onChange={enabled => mutateSession?.('preserve-media', { problemIds: items.map(candidate => candidate.id), mode: enabled ? 'auto' : 'off' })} />
             {showItemConfirmBar && <>
             {remainingReviewItems.length>0 ? <label className={`inspector-remaining-card ${bulk?'on':''}`}>
               <span className="inspector-remaining-icon">{Icon.check}</span><span><strong>남은 {remainingReviewItems.length}개에도 적용</strong><small>‘{stepLabel(item.step)}’ 방식으로 함께 확인</small></span>
@@ -11601,14 +11601,14 @@ function SidePanel({
 
 function FigureColorToggle({ checked, busy = false, label, note, onChange }){
   return <label className="figure-color-toggle">
-    <span><strong>{label}</strong><small>{note || (checked ? '문제 중간·아래 그림의 원래 색상 유지 · 칠판용에 적용' : '그림의 명암을 유지한 흑백 처리 · 칠판용에 적용')}</small></span>
+    <span><strong>{label}</strong><small>{note || (checked ? '문제 중간·아래 그림의 원래 색상 유지 · 칠판용에 적용' : '그림까지 배경 제거 · 칠판용에 적용')}</small></span>
     <input type="checkbox" role="switch" aria-label={label} checked={checked} disabled={busy}
       onChange={event => onChange?.(event.target.checked)} />
   </label>;
 }
 
 function keepsFigureColors(item){
-  return !['off', 'grayscale'].includes(item?.preserveMediaMode);
+  return ['auto', 'manual'].includes(item?.preserveMediaMode);
 }
 
 function HomeUpdateDialog({ open, onClose, busy, versionLine, statusLabel, children }){
@@ -12271,7 +12271,7 @@ function SplitModePicker({ splitMode, setSplitMode, disabled, compact = false, i
   );
 }
 
-function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false, showActions = true, keepAttachedFigures = true, setKeepAttachedFigures }){
+function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewError, splitMode, setSplitMode, pendingCount = 1, imageOnly = false, showActions = true, keepAttachedFigures = false, setKeepAttachedFigures }){
   const [objectUrl, setObjectUrl] = useState('');
   const [previewError, setPreviewError] = useState('');
   const isImagePreview = canPreviewImageFile(file);
@@ -12322,7 +12322,7 @@ function PendingFilePreview({ file, queueBusy, processQueuedFiles, onPreviewErro
   return (
     <div className="pending-preview-panel">
       {setKeepAttachedFigures ? <FigureColorToggle checked={keepAttachedFigures} busy={queueBusy}
-        label="첨부한 자료 속 그림 원본 유지" note="문제 인식 후 칠판용에 적용 · 끄면 그림만 흑백 처리"
+        label="첨부한 자료 속 그림 원본 유지" note="문제 인식 후 칠판용에 적용 · 끄면 그림까지 배경 제거"
         onChange={setKeepAttachedFigures} /> : null}
       <div className="pending-preview-head">
         <span className="pending-preview-icon">{isImagePreview ? Icon.scan : Icon.fileText}</span>
@@ -13389,7 +13389,7 @@ function mapProblemToItem(problem, idx, rawSession = null){
       ? Number(problem.boardRowHeightPages ?? problem.board_row_height_pages)
       : null,
     manualCrop,
-    preserveMediaMode: problem.preserveMediaMode || problem.preserve_media_mode || 'auto',
+    preserveMediaMode: problem.preserveMediaMode || problem.preserve_media_mode || 'off',
     preserveMediaRegions: problem.preserveMediaRegions || problem.preserve_media_regions || [],
   };
 }
@@ -15863,7 +15863,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       sourceMode: 'auto',
       source_mode: 'auto',
       subject: 'unknown',
-      preserveMediaMode: options.preserveMediaMode || 'auto',
+      preserveMediaMode: options.preserveMediaMode || 'off',
       ocr: options.ocr || 'auto',
       edbName,
       exportEdb: Object.prototype.hasOwnProperty.call(options, 'exportEdb') ? !!options.exportEdb : !options.preview,
@@ -16511,7 +16511,7 @@ function App(){
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiToggleBusy, setAiToggleBusy] = useState(false);
-  const [keepAttachedFigures, setKeepAttachedFigures] = useStoredPreference('edb-keep-attached-figures', true, isStoredBoolean);
+  const [keepAttachedFigures, setKeepAttachedFigures] = useStoredPreference('edb-keep-attached-figures-background-v2', false, isStoredBoolean);
   const [splitMode, setSplitModeState] = useState(readStoredSplitMode);
   const inputIntent = normalizeSplitMode(splitMode) === 'recognize' ? 'multi-problem' : 'page-as-is';
   const setSplitMode = useCallback((value) => {
@@ -18154,7 +18154,7 @@ function App(){
       });
       try {
         const incomingSession = await postExport(files, aiFallback, resolvedInputIntent, {
-          preserveMediaMode: keepAttachedFigures ? 'auto' : 'grayscale',
+          preserveMediaMode: keepAttachedFigures ? 'auto' : 'off',
           signal: job.controller.signal,
           preview: true,
           edbName: fileName,
@@ -18230,7 +18230,7 @@ function App(){
     try {
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
         signal: job.controller.signal,
-        preserveMediaMode: keepAttachedFigures ? 'auto' : 'grayscale',
+        preserveMediaMode: keepAttachedFigures ? 'auto' : 'off',
         edbName: fileName,
         ocr: recognitionOcr,
         aiEnabled,
