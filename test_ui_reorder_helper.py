@@ -370,6 +370,24 @@ class TestUiReorderHelper(unittest.TestCase):
             """
         )
 
+    def test_board_edge_auto_scroll_ramps_further_when_asked(self) -> None:
+        run_node(
+            """
+            const { acceleratedEdgeAutoScrollDelta } = require('./ui_prototype/reorder.js');
+            const rect = { top: 150, bottom: 978, height: 828 };
+            const base = acceleratedEdgeAutoScrollDelta(rect, 968, 96, 26, 0, 1000 / 60, 5, 1400);
+            const half = acceleratedEdgeAutoScrollDelta(rect, 968, 96, 26, 700, 1000 / 60, 5, 1400);
+            const full = acceleratedEdgeAutoScrollDelta(rect, 968, 96, 26, 1400, 1000 / 60, 5, 1400);
+            const later = acceleratedEdgeAutoScrollDelta(rect, 968, 96, 26, 5000, 1000 / 60, 5, 1400);
+            if (!(base >= 20 && half > base && full >= base * 4.5 && later === full)) {
+              throw new Error(`board ramp should reach ~5x and cap: ${base}/${half}/${full}/${later}`);
+            }
+            // Default arguments keep the existing 2x ramp for other lists.
+            const legacy = acceleratedEdgeAutoScrollDelta(rect, 968, 96, 26, 900, 1000 / 60);
+            if (legacy > base * 2 + 1) throw new Error(`default ramp changed: ${legacy} vs ${base}`);
+            """
+        )
+
     def test_problem_display_name_hides_noisy_split_file_names(self) -> None:
         run_node(
             r"""

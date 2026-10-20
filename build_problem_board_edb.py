@@ -112,6 +112,17 @@ TEXT_PRIORITY_SOURCE_EDGE_MIN_ACTIVE_ROWS = 8
 PROBLEM_CROP_CONTENT_INK_THRESHOLD = 232
 PROBLEM_CROP_CONTENT_MARGIN_Y_PX = 6
 PROBLEM_CROP_CONTENT_MIN_TRIM_RATIO = 0.04
+# "페이지 전체 넣기" keeps whole pages, but the blank paper under the last line
+# (and a lone page number below it) only adds board pages. When asked, drop
+# blank rows above and below the content and such a footer; the page width,
+# and so the text size, stays the same.
+PAGE_AS_IS_TRIM_MARGIN_RATIO = 0.004
+PAGE_AS_IS_TRIM_MIN_MARGIN_PX = 6
+PAGE_AS_IS_TRIM_MIN_RATIO = 0.03
+PAGE_AS_IS_FOOTER_ZONE_RATIO = 0.10
+PAGE_AS_IS_FOOTER_MAX_HEIGHT_RATIO = 0.025
+PAGE_AS_IS_FOOTER_MIN_GAP_RATIO = 0.03
+PAGE_AS_IS_FOOTER_MAX_WIDTH_RATIO = 0.35
 PROBLEM_EDGE_INK_SCAN_PX = 18
 PROBLEM_EDGE_INK_DARK_THRESHOLD = 236
 PROBLEM_EDGE_INK_MIN_DARK_PIXELS = 6
@@ -208,6 +219,9 @@ PASSAGE_JOIN_TOP_RULE_MAX_RATIO = 0.32
 PASSAGE_JOIN_FOOTER_BLANK_MIN_START_RATIO = 0.45
 PASSAGE_JOIN_FOOTER_CONTENT_MIN_WIDTH_RATIO = 0.25
 CONTINUOUS_RECORD_GAP_PX = 20.0
+# "페이지 전체 넣기" stacks whole pages back to back with no gap between them;
+# other continuous records, such as full-width passages, keep the gap above.
+WHOLE_PAGE_RECORD_GAP_PX = 0.0
 PASSAGE_REVIEW_REASON_LABELS = {
     "cross_page_passage_group": "페이지 이어짐",
     "hwp_text_fallback_problem": "HWP 텍스트 fallback",
@@ -1440,6 +1454,42 @@ def _trim_problem_crop_to_content(
     return image.crop((0, top, image.width, bottom))
 
 
+def _page_as_is_content_box(image: Image.Image) -> Box | None:
+    """Full-width box around a page's content without its blank top/bottom.
+
+    Returns None when nothing worth trimming is found, including tinted scans
+    whose background is darker than the ink threshold.
+    """
+    if np is None or image.width <= 0 or image.height <= 0:
+        return None
+    dark = np.asarray(image.convert("L"), dtype=np.uint8) < PROBLEM_CROP_CONTENT_INK_THRESHOLD
+    rows = np.flatnonzero(dark.any(axis=1))
+    if rows.size == 0:
+        return None
+    height, width = dark.shape
+    top = int(rows[0])
+    bottom = int(rows[-1]) + 1
+    breaks = np.flatnonzero(np.diff(rows) > 1)
+    if breaks.size:
+        footer_top = int(rows[breaks[-1] + 1])
+        content_bottom = int(rows[breaks[-1]]) + 1
+        footer_columns = np.flatnonzero(dark[footer_top:bottom].any(axis=0))
+        if (
+            footer_top >= height * (1.0 - PAGE_AS_IS_FOOTER_ZONE_RATIO)
+            and bottom - footer_top <= height * PAGE_AS_IS_FOOTER_MAX_HEIGHT_RATIO
+            and footer_top - content_bottom >= height * PAGE_AS_IS_FOOTER_MIN_GAP_RATIO
+            and footer_columns.size
+            and int(footer_columns[-1] - footer_columns[0]) + 1 <= width * PAGE_AS_IS_FOOTER_MAX_WIDTH_RATIO
+        ):
+            bottom = content_bottom
+    margin = max(PAGE_AS_IS_TRIM_MIN_MARGIN_PX, int(round(height * PAGE_AS_IS_TRIM_MARGIN_RATIO)))
+    top = max(0, top - margin)
+    bottom = min(height, bottom + margin)
+    if height - (bottom - top) <= height * PAGE_AS_IS_TRIM_MIN_RATIO:
+        return None
+    return Box(left=0.0, top=float(top), width=float(width), height=float(bottom - top))
+
+
 def _pad_problem_crop_edges(
     image: Image.Image,
     *,
@@ -1928,8 +1978,11 @@ class ProblemEntry:
     processing_step: str = PROCESSING_STEP_RAW
     input_intent: str | None = None
     force_full_page_bounds: bool = False
+    # Set when "가로 맞춤" (fit width) turned a problem or passage into a
+    # continuous record; it is not a whole source page and keeps its gap.
+    fit_width_converted: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
-    preserve_media_mode: str = "auto"
+    preserve_media_mode: str = "off"
     crop_source_offset: dict[str, int] | None = None
     source_segments: list[dict[str, Any]] = field(default_factory=list)
     board_render_preprocessed: bool = False
@@ -1957,7 +2010,7 @@ class _ProblemAssetTask:
     source_hints: tuple[str, ...] = ()
     source_media_regions: tuple[dict[str, Any], ...] = ()
     detect_color_media: bool = False
-    preserve_media_mode: str = "auto"
+    preserve_media_mode: str = "off"
     render_board_asset: bool = True
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
     rendered_source_offset: dict[str, int] | None = None
@@ -2333,7 +2386,7 @@ def _build_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> Im
     # Monochrome math line art stays chalk. Substantial color media is restored
     # last from the immutable source, including for math documents.
     regions = stage2_media_regions(
-        crop, task.rendered_media_regions,
+        crop, task.rendered_media_regions if task.preserve_media_mode != "off" else [],
         chalk_math=_stage2_prefers_chalk_math_media(
             task.subject, PROCESSING_STEP_CHALK, *task.source_hints,
         ),
@@ -2496,7 +2549,9 @@ def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
             task.bounds,
             column_index=(task.segment_column_indices or (None,))[0],
         )
-    if task.detect_color_media and not task.rendered_media_regions:
+    if task.preserve_media_mode == "off":
+        task.rendered_media_regions = []
+    if task.preserve_media_mode != "off" and task.detect_color_media and not task.rendered_media_regions:
         task.rendered_media_regions = detect_color_media_regions(crop)
     if task.preserve_media_mode == "grayscale":
         task.rendered_media_regions = [{**region, "renderMode": "grayscale"} for region in task.rendered_media_regions]
@@ -6154,11 +6209,12 @@ def build_problem_entries(
     board_theme: str = DEFAULT_BOARD_THEME,
     content_target: str = "all",
     render_board_assets: bool = True,
-    preserve_media_mode: str = "auto",
+    preserve_media_mode: str = "off",
+    trim_page_whitespace: bool = False,
     timings: dict[str, int] | None = None,
 ) -> list[ProblemEntry]:
-    if preserve_media_mode not in {"auto", "grayscale"}:
-        raise ValueError("preserve_media_mode must be auto or grayscale")
+    if preserve_media_mode not in {"auto", "grayscale", "off"}:
+        raise ValueError("preserve_media_mode must be auto, grayscale or off")
     entries_started_at = time.perf_counter()
     crop_dir = output_dir / "problem_crops"
     crop_dir.mkdir(parents=True, exist_ok=True)
@@ -6296,9 +6352,24 @@ def build_problem_entries(
                 force_full_page_bounds
                 and str(problem.metadata.get("input_intent") or page.metadata.get("input_intent") or "") == "page-as-is"
             )
+            page_as_is_trimmed = False
             if force_full_page_bounds:
                 blocks = list(page.sorted_blocks())
                 merged_box = Box(left=0.0, top=0.0, width=float(page.width_px), height=float(page.height_px))
+                content_box = (
+                    _page_as_is_content_box(prepared_page.image)
+                    if preserve_page_as_is and trim_page_whitespace
+                    else None
+                )
+                if content_box is not None:
+                    scale_y = float(page.height_px) / max(1, prepared_page.image.height)
+                    merged_box = Box(
+                        left=0.0,
+                        top=content_box.top * scale_y,
+                        width=float(page.width_px),
+                        height=content_box.height * scale_y,
+                    )
+                    page_as_is_trimmed = True
             else:
                 boxes = [block.bbox for block in blocks]
                 metadata_box = _problem_metadata_bbox(problem, page)
@@ -6403,6 +6474,7 @@ def build_problem_entries(
             source_asset_path = Path(prepared_page.source_path).resolve()
             reuse_full_page_asset = (
                 preserve_page_as_is
+                and not page_as_is_trimmed
                 and source_asset_path.is_file()
                 and prepared_page.image.size == prepared_page.original_size
             )
@@ -6447,7 +6519,7 @@ def build_problem_entries(
                             for region in (prepared_page.metadata.get("pdf_media_regions") or [])
                             if isinstance(region, dict)
                         ]
-                        if reuse_full_page_asset and _problem_allows_selective_media_preservation(problem)
+                        if reuse_full_page_asset and preserve_media_mode != "off" and _problem_allows_selective_media_preservation(problem)
                         else []
                     ),
                     source_segments=passage_source_segments,
@@ -6919,6 +6991,8 @@ def recrop_problem(
     page_image: Image.Image,
     bbox: Box,
     crop_path: Path,
+    *,
+    source_offset_output: dict[str, int] | None = None,
 ) -> tuple[int, int]:
     """Re-crop a problem from its source page image for split/merge mutations.
 
@@ -6927,17 +7001,28 @@ def recrop_problem(
     AI (Step 2) workflow. Callers that need a board_render_path can reuse the
     crop_path itself; the board renderer will composite onto the dark theme
     at EDB build time.
+
+    When ``source_offset_output`` is given it receives the page position of
+    the crop's top-left pixel (after trimming and padding), the same
+    ``cropSourceOffset`` contract the pipeline crops use, so a later board
+    split maps its cut through the trimmed and padded crop exactly.
     """
-    crop = page_image.crop(
-        _integer_crop_rect_for_box(
-            bbox,
-            image_width=page_image.width,
-            image_height=page_image.height,
-        )
+    crop_rect = _integer_crop_rect_for_box(
+        bbox,
+        image_width=page_image.width,
+        image_height=page_image.height,
     )
-    crop = _trim_source_page_chrome(crop)
-    crop = _trim_problem_crop_to_content(crop)
+    crop = page_image.crop(crop_rect)
+    crop, horizontal_trim_px = _trim_source_page_chrome_with_offset(crop, preserve_horizontal_bounds=False)
+    vertical_trim: list[int] = []
+    crop = _trim_problem_crop_to_content(crop, offset_output=vertical_trim)
     crop = _pad_problem_crop_edges(crop)
+    if source_offset_output is not None:
+        source_offset_output.clear()
+        source_offset_output.update({
+            "left": int(crop_rect[0] + horizontal_trim_px),
+            "top": int(crop_rect[1] + (vertical_trim[0] if vertical_trim else 0) - PROBLEM_CROP_TOP_SAFE_PADDING_PX),
+        })
     crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(crop_path)
     return crop.size
@@ -9284,6 +9369,63 @@ def _page_quality_payload(page: PageModel | None) -> dict[str, Any]:
     }
 
 
+def _continuous_record_gap_px(*, whole_page: bool) -> float:
+    return WHOLE_PAGE_RECORD_GAP_PX if whole_page else CONTINUOUS_RECORD_GAP_PX
+
+
+def _is_whole_page_record(
+    *,
+    input_intent: str | None,
+    force_full_page_bounds: bool,
+    fit_width_converted: bool = False,
+    passage_role: str | None = None,
+) -> bool:
+    """True only for a "페이지 전체 넣기" page, which stacks with no gap.
+
+    ``force_full_page_bounds`` alone is not enough: single-problem intent,
+    marker-document continuation pages and fit-width passages set it too, and
+    those continuous records keep the normal gap.
+    """
+    return (
+        bool(force_full_page_bounds)
+        and _normalize_input_intent(input_intent) == "page-as-is"
+        and not fit_width_converted
+        and str(passage_role or "").strip() != "passage_fragment"
+    )
+
+
+def _entry_is_whole_page(entry: "ProblemEntry") -> bool:
+    return _is_whole_page_record(
+        input_intent=entry.input_intent,
+        force_full_page_bounds=entry.force_full_page_bounds,
+        fit_width_converted=entry.fit_width_converted,
+    )
+
+
+def problem_payload_fit_width_converted(problem: Mapping[str, Any]) -> bool:
+    """A session problem that is a continuous record but not a whole page.
+
+    Newer sessions carry ``fitWidthConverted``; older ones are recognised by
+    their shared-passage role, since a passage is never a whole source page.
+    """
+    metadata = problem.get("metadata") if isinstance(problem.get("metadata"), Mapping) else {}
+    if problem.get("fitWidthConverted") or problem.get("fit_width_converted"):
+        return True
+    role = (
+        problem.get("passageRole") or problem.get("passage_role")
+        or metadata.get("passageRole") or metadata.get("passage_role") or ""
+    )
+    return str(role).strip() == "passage_fragment"
+
+
+def problem_payload_is_whole_page(problem: Mapping[str, Any]) -> bool:
+    return _is_whole_page_record(
+        input_intent=str(problem.get("inputIntent") or problem.get("input_intent") or ""),
+        force_full_page_bounds=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
+        fit_width_converted=problem_payload_fit_width_converted(problem),
+    )
+
+
 def _image_record_geometry(
     template: LayoutTemplate,
     *,
@@ -9291,6 +9433,7 @@ def _image_record_geometry(
     base_width_px: float,
     base_height_pages: float,
     reserved_height_pages: float,
+    whole_page: bool = False,
 ) -> dict[str, Any]:
     return {
         "baseDisplayWidthPx": float(base_width_px),
@@ -9299,7 +9442,7 @@ def _image_record_geometry(
         "maxDisplayWidthPx": float(CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX),
         "canvasPageHeightPx": float(CANVAS_WIDTH),
         "topPaddingPages": float(TOP_PADDING_PX / CANVAS_WIDTH),
-        "continuousGapPages": float(CONTINUOUS_RECORD_GAP_PX / CANVAS_WIDTH),
+        "continuousGapPages": float(_continuous_record_gap_px(whole_page=whole_page) / CANVAS_WIDTH),
         "cropFormat": crop_format,
     }
 
@@ -9320,6 +9463,14 @@ def _image_record_geometry_from_placement(
         template, crop_format=crop_format, base_width_px=width / scale,
         base_height_pages=height / scale / CANVAS_WIDTH,
         reserved_height_pages=float(placement.get("actual_content_height_pages") or 0.0),
+        whole_page=(
+            bool(placement["whole_page_record"])
+            if placement.get("whole_page_record") is not None
+            else _is_whole_page_record(
+                input_intent=str(placement.get("input_intent") or ""),
+                force_full_page_bounds=bool(placement.get("force_full_page_bounds")),
+            )
+        ),
     )
 
 
@@ -9374,6 +9525,7 @@ def annotate_session_image_record_geometry(
         geometry = _image_record_geometry(
             template, crop_format=crop_format, base_width_px=base_width,
             base_height_pages=base_height, reserved_height_pages=max(MIN_HEIGHT_PAGES, base_height),
+            whole_page=problem_payload_is_whole_page(problem),
         )
         problem["imageRecordGeometry"] = geometry
         problem["image_record_geometry"] = geometry
@@ -9508,7 +9660,7 @@ def build_ui_session(
                 "sourceFileName": source_path.name,
                 "boardRenderPath": _to_file_uri(placement.get("board_render_path")),
                 "preserveMediaRegions": list(placement.get("preserve_media_regions") or []),
-                "preserveMediaMode": placement.get("preserve_media_mode") or "auto",
+                "preserveMediaMode": placement.get("preserve_media_mode") or "off",
                 "preserve_media_regions": list(placement.get("preserve_media_regions") or []),
                 "cropSourceOffset": placement.get("crop_source_offset"),
                 "actualHeightPages": float(placement["actual_content_height_pages"]),
@@ -10155,6 +10307,7 @@ def placement_inputs(
                 "reserve_scaled_height": _entry_preserves_legacy_placement_scale(entry) or normalize_placement_extra_slots(entry.placement_extra_slots) > 0,
                 "input_intent": entry.input_intent,
                 "force_full_page_bounds": entry.force_full_page_bounds,
+                "whole_page_record": _entry_is_whole_page(entry),
             },
         )
         for entry in problem_entries
@@ -10706,6 +10859,106 @@ def _v1_default_display_width_px(template: LayoutTemplate) -> float:
     return max(legacy_width, min(V1_DEFAULT_DISPLAY_WIDTH_PX, max_width))
 
 
+CHALK_CUTOUT_CACHE_DIRNAME = ".chalk_cutout_cache"
+# Bump when the cutout pipeline changes in a way the code hash below misses.
+CHALK_CUTOUT_CACHE_VERSION = "1"
+CHALK_CUTOUT_CACHE_MAX_FILES = 1500
+_CHALK_CUTOUT_CACHE_SALT: str | None = None
+
+
+def _chalk_cutout_cache_salt() -> str:
+    """Invalidate cached cutouts whenever the code or the app build changes."""
+    global _CHALK_CUTOUT_CACHE_SALT
+    if _CHALK_CUTOUT_CACHE_SALT is None:
+        import sys
+
+        parts = [CHALK_CUTOUT_CACHE_VERSION, str(getattr(Image, "__version__", "")), str(getattr(np, "__version__", ""))]
+        try:
+            parts.append(hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        except OSError:
+            # Frozen builds may not ship readable sources: every new build
+            # still changes the executable itself.
+            try:
+                stat = Path(sys.executable).stat()
+                parts.append(f"frozen:{stat.st_size}:{stat.st_mtime_ns}")
+            except OSError:
+                parts.append("frozen")
+        _CHALK_CUTOUT_CACHE_SALT = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    return _CHALK_CUTOUT_CACHE_SALT
+
+
+def _prune_chalk_cutout_cache(cache_dir: Path) -> None:
+    """Keep the per-session cache bounded; drop the least recently written."""
+    try:
+        files = [path for path in cache_dir.glob("*.png") if path.is_file()]
+        if len(files) <= CHALK_CUTOUT_CACHE_MAX_FILES:
+            return
+        files.sort(key=lambda path: path.stat().st_mtime)
+        for path in files[: len(files) - CHALK_CUTOUT_CACHE_MAX_FILES]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _cached_chalk_cutout(
+    crop_path: Path,
+    crop_image: Image.Image,
+    *,
+    chalk_color: tuple[int, int, int],
+    text_priority: bool,
+) -> Image.Image:
+    """Chalk cutout of ``crop_image``, reused across exports of the same crop.
+
+    The result is identical to rebuilding: the key covers the crop pixels, the
+    chalk tone, the text-priority path, the library versions and this
+    module's code. Any cache failure falls back to building the cutout.
+    """
+    def build() -> Image.Image:
+        return _extract_problem_cutout(
+            _enhance_problem_crop(crop_image, text_priority=text_priority),
+            chalk_color=chalk_color,
+            text_priority=text_priority,
+        )
+
+    try:
+        digest = hashlib.sha256()
+        digest.update(_chalk_cutout_cache_salt().encode("ascii"))
+        digest.update(repr((tuple(int(c) for c in chalk_color), bool(text_priority), crop_image.mode, crop_image.size)).encode("ascii"))
+        digest.update(crop_image.tobytes())
+        cache_path = Path(crop_path).parent / CHALK_CUTOUT_CACHE_DIRNAME / f"{digest.hexdigest()[:40]}.png"
+    except OSError:
+        return build()
+    try:
+        with Image.open(cache_path) as cached:
+            cached.load()
+            return cached.copy()
+    except (OSError, ValueError):
+        pass
+    cutout = build()
+    temp_path: Path | None = None
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temp_name = tempfile.mkstemp(prefix=".cutout-", suffix=".png", dir=cache_path.parent)
+        os.close(handle)
+        temp_path = Path(temp_name)
+        cutout.save(temp_path, format="PNG", compress_level=1, optimize=False)
+        os.replace(temp_path, cache_path)
+        temp_path = None
+        _prune_chalk_cutout_cache(cache_path.parent)
+    except (OSError, ValueError):
+        pass
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+    return cutout
+
+
 def _build_image_only_record_image(
     placement: Any,
     entry: ProblemEntry,
@@ -10801,14 +11054,22 @@ def _build_image_only_record_image(
             board_theme=board_theme,
             text_priority=text_priority,
         )
-    elif dark_board and chalk_math_media and not entry.board_render_preprocessed:
+    elif (
+        dark_board
+        and processing_step == PROCESSING_STEP_CHALK
+        and (chalk_math_media or entry.preserve_media_mode == "off")
+        and not entry.board_render_preprocessed
+    ):
         # Older sessions may already contain a Stage-2 board render whose
         # detected figure was restored as an opaque source patch. Rebuild the
         # chalk cutout from the immutable crop so those legacy white boxes do
-        # not survive a fresh EDB export.
-        board_image = _extract_problem_cutout(
-            _enhance_problem_crop(crop_image),
+        # not survive a fresh EDB export. The rebuild is cached by crop
+        # content, so exporting the same lesson again skips this pass.
+        board_image = _cached_chalk_cutout(
+            crop_path,
+            crop_image,
             chalk_color=chalk_color,
+            text_priority=text_priority,
         )
         if crop_format == CROP_FORMAT_V1 and board_image.size != crop_image.size:
             board_image = board_image.resize(crop_image.size, Image.Resampling.LANCZOS)
@@ -10858,6 +11119,7 @@ def _build_image_only_record_image(
     if (
         dark_board
         and processing_step != PROCESSING_STEP_RECONSTRUCT
+        and entry.preserve_media_mode != "off"
         and entry.preserve_media_regions
     ):
         # Text-priority exports rebuild and normalize the cutout at final size.
@@ -11073,7 +11335,7 @@ def build_image_only_records(
             elif template.metadata.get("layout_gap_mode") == "compact":
                 continuous_gap_px = 0.0
             else:
-                continuous_gap_px = CONTINUOUS_RECORD_GAP_PX
+                continuous_gap_px = _continuous_record_gap_px(whole_page=_entry_is_whole_page(entry))
             start_y_pages = placement.start_y_pages
             actual_height_pages = rendered_height_px / max(scale_ratio, 0.001) / CANVAS_WIDTH
             rendered_height_pages = rendered_height_px / CANVAS_WIDTH
@@ -11144,6 +11406,8 @@ def build_image_only_records(
                 "record_top_y_pages": round(y_px / CANVAS_WIDTH, 6),
                 "record_bottom_y_pages": round((y_px + rendered_height_px) / CANVAS_WIDTH, 6),
                 "record_gap_px": continuous_gap_px if continuous_flow else 0.0,
+                "force_full_page_bounds": entry.force_full_page_bounds,
+                "whole_page_record": _entry_is_whole_page(entry),
                 "rendered_height_pages": round(rendered_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": round(overflow_amount_pages, 6),
@@ -11791,7 +12055,8 @@ def run_problem_export(
     content_target: str = "all",
     input_notes: str | None = None,
     processing_step: str | None = None,
-    preserve_media_mode: str = "auto",
+    preserve_media_mode: str = "off",
+    trim_page_whitespace: bool = False,
     ai_fallback_enabled: bool = False,
     ai_fallback: str | None = None,
     ai_fallback_provider: str = "gemini",
@@ -11919,6 +12184,7 @@ def run_problem_export(
         board_theme=resolved_board_theme,
         content_target=resolved_content_target,
         preserve_media_mode=preserve_media_mode,
+        trim_page_whitespace=trim_page_whitespace,
     )
     if not problem_entries and resolved_content_target == "shared-passages":
         raise ValueError("여러 문항이 함께 쓰는 공통 지문을 찾지 못했습니다")

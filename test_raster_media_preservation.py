@@ -93,6 +93,7 @@ def test_math_preview_and_encoded_image_retain_color_with_chalk_outside(tmp_path
         crop_path=tmp_path / "crop.png", board_render_path=tmp_path / "board.png",
         chalk_color=(238, 238, 226), trim_edge_guides=False, pad_edges=False,
         subject=Subject.MATH, source_media_regions=tuple(regions), detect_color_media=True,
+        preserve_media_mode="auto",
     )
     _render_problem_asset(task)
     assert len(task.rendered_media_regions) == 1
@@ -109,6 +110,7 @@ def test_math_preview_and_encoded_image_retain_color_with_chalk_outside(tmp_path
         blocks=[], actual_height_pages=1, overflow_allowed=False, reading_heavy=False,
         risk_flags=[], processing_step="s2", board_render_preprocessed=True,
         preserve_media_regions=json.loads(json.dumps(task.rendered_media_regions)),
+        preserve_media_mode="auto",
     )
     placement = SimpleNamespace(metadata={"crop_path": str(task.crop_path),
                                           "board_render_path": str(task.board_render_path)})
@@ -126,7 +128,7 @@ def test_new_image_recognition_carries_detected_media_to_saved_session(tmp_path)
     color_worksheet().save(source)
     result = run_problem_export(source, output_dir=tmp_path / "output", subject_name="math",
         ocr="none", ai_fallback="off", input_intent="single-problem", processing_step="s2",
-        skip_deskew=True, skip_crop=True, export_edb=False, sync_ui=False)
+        skip_deskew=True, skip_crop=True, export_edb=False, sync_ui=False, preserve_media_mode="auto")
     session = json.loads(result["ui_session_path"].read_text())
     assert len(session["problems"]) == 1
     regions = session["problems"][0]["preserveMediaRegions"]
@@ -143,6 +145,7 @@ def test_restoration_changes_no_pixels_outside_the_detected_region(tmp_path):
         crop_path=tmp_path / "enabled-crop.png", board_render_path=tmp_path / "enabled.png",
         chalk_color=(238, 238, 226), trim_edge_guides=False, pad_edges=False,
         subject=Subject.MATH, detect_color_media=True,
+        preserve_media_mode="auto",
     )
     disabled = replace(enabled, crop_path=tmp_path / "disabled-crop.png",
                        board_render_path=tmp_path / "disabled.png", detect_color_media=False,
