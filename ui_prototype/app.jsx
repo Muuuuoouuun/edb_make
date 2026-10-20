@@ -1224,6 +1224,12 @@ function fitWidthContinuousPageItem(item, options = {}){
     hasOption('scaleRatio') ? options.scaleRatio : PLACEMENT_FIT_WIDTH_SCALE_RATIO,
     PLACEMENT_FIT_WIDTH_SCALE_RATIO
   );
+  // Only a "페이지 전체 넣기" page is a whole page that stacks with no gap.
+  // A problem or passage stretched to full width keeps the record gap.
+  const wasWholePage = itemUsesContinuousPageFlow(item)
+    && Boolean(item.forceFullPageBounds || item.force_full_page_bounds);
+  next.fitWidthConverted = Boolean(item.fitWidthConverted || item.fit_width_converted || !wasWholePage);
+  next.fit_width_converted = next.fitWidthConverted;
   next.inputIntent = 'page-as-is';
   next.input_intent = 'page-as-is';
   next.placementMode = 'continuous-page-as-is';
@@ -8890,19 +8896,7 @@ function BoardStage({
     const content = contentRef.current;
     if (!content?.getBoundingClientRect || !Array.isArray(layout.positions) || !Number.isFinite(clientY)) return null;
     const y = clientY - content.getBoundingClientRect().top;
-    const others = layout.items
-      .map((item, index) => ({ item, position: layout.positions[index] }))
-      .filter(({ item, position }) => position && String(item.id) !== String(drag.id));
-    if (!others.length) return null;
-    const visualTop = position => position.top
-      + (position.yRatio || 0) * Math.max(0, position.rowHeightPages - position.renderedHeightPages) * pageH;
-    const first = others[0];
-    const last = others[others.length - 1];
-    if (y < visualTop(first.position)) return { id: first.item.id, mode: 'reorder', position: 'before' };
-    if (y > visualTop(last.position) + last.position.renderedHeightPages * pageH) {
-      return { id: last.item.id, mode: 'reorder', position: 'after' };
-    }
-    return null;
+    return smartBoardEndInsertionTarget(layout.items, layout.positions, y, pageH, drag.id);
   };
 
   const updateBoardDropTarget = (clientX, clientY, sourceId, force = false) => {
@@ -9725,6 +9719,29 @@ function BoardTile({ it, p, i, contentW, pageH, isSelected, isActive, isPosition
 }
 const MemoBoardTile = React.memo(BoardTile);
 
+// Smart move dropped on blank board space: only above every other problem or
+// below every other problem counts as "move to the front/end". In 2- and
+// 3-column layouts the problem that comes first or last in order is not
+// always the top- or bottom-most tile, so the whole board is measured; an
+// empty slot between or beside problems stays a free placement move.
+function smartBoardEndInsertionTarget(items, positions, y, pageH, draggedId){
+  if (!Array.isArray(items) || !Array.isArray(positions) || !Number.isFinite(y)) return null;
+  const others = items
+    .map((item, index) => ({ item, position: positions[index] }))
+    .filter(({ item, position }) => item && position && String(item.id) !== String(draggedId));
+  if (!others.length) return null;
+  const pageHeight = Number.isFinite(pageH) && pageH > 0 ? pageH : 0;
+  const visualTop = position => (Number(position.top) || 0)
+    + (Number(position.yRatio) || 0)
+      * Math.max(0, (Number(position.rowHeightPages) || 0) - (Number(position.renderedHeightPages) || 0)) * pageHeight;
+  const visualBottom = position => visualTop(position) + (Number(position.renderedHeightPages) || 0) * pageHeight;
+  const boardTop = Math.min(...others.map(({ position }) => visualTop(position)));
+  const boardBottom = Math.max(...others.map(({ position }) => visualBottom(position)));
+  if (y < boardTop) return { id: others[0].item.id, mode: 'reorder', position: 'before' };
+  if (y > boardBottom) return { id: others[others.length - 1].item.id, mode: 'reorder', position: 'after' };
+  return null;
+}
+
 function BoardTileContents({ it, p, i, smartMove, isJustMoved, moveDirection, hasPageChrome }){
   const tileBounds = boardItemVisualBounds(it);
   const tileClassinStartPage = classinBoardPageNumberAtOffset(tileBounds.start);
@@ -9804,6 +9821,24 @@ function steppedBoardSplitRatio(ratio, candidates, direction){
   const next = direction > 0 ? ordered.find(center => center > ratio + 0.001) : [...ordered].reverse().find(center => center < ratio - 0.001);
   return next ?? Math.max(BOARD_SPLIT_EDGE_RATIO, Math.min(1 - BOARD_SPLIT_EDGE_RATIO, ratio + direction * 0.02));
 }
+// Split keys (Enter, arrows) act only while the split itself has focus: the
+// overlay, its tile, or nothing in particular (the page body). Typing in an
+// input, a dialog, or any other control keeps its own keys. Esc still cancels
+// the split from another button, unless a menu is open to take that Esc.
+function boardSplitKeyBelongsToOverlay(event, overlay){
+  if (!event || event.defaultPrevented || event.isComposing || event.keyCode === 229) return false;
+  if (event.altKey || event.ctrlKey || event.metaKey) return false;
+  const target = event.target;
+  if (isEditableKeyboardTarget(target)) return false;
+  const doc = overlay?.ownerDocument || (typeof document === 'undefined' ? null : document);
+  if (doc?.querySelector?.('dialog[open], [aria-modal="true"]:not([hidden])')) return false;
+  if (!target || target === doc || target === doc?.body || target === doc?.documentElement) return true;
+  if (event.key === 'Escape' && !doc?.querySelector?.('[role="menu"]:not([hidden])')) return true;
+  if (!overlay) return false;
+  if (overlay === target || overlay.contains?.(target)) return true;
+  const tile = overlay.closest?.('.stage-tile');
+  return Boolean(tile && tile === target);
+}
 function BoardSplitOverlay({ item, onConfirm, onCancel }){
   const overlayRef = useRef(null);
   const [candidates, setCandidates] = useState([]);
@@ -9843,11 +9878,19 @@ function BoardSplitOverlay({ item, onConfirm, onCancel }){
     if (overlay) observer?.observe(overlay);
     return () => { observer?.disconnect(); image?.removeEventListener('load', update); };
   }, [measure]);
+  // The board re-renders often (autosave, selection) and passes fresh inline
+  // callbacks, so keep them in a ref: focusing and listening happen once per
+  // split, and focus is never pulled back from an input the user moved to.
+  const callbacksRef = useRef({ onConfirm, onCancel });
+  callbacksRef.current = { onConfirm, onCancel };
   useEffect(() => {
-    overlayRef.current?.focus({ preventScroll: true });
+    const overlay = overlayRef.current;
+    overlay?.focus({ preventScroll: true });
     const onKeyDown = event => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onCancel?.(); return; }
-      if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); onConfirm?.(latestRef.current.ratio); return; }
+      if (!boardSplitKeyBelongsToOverlay(event, overlay)) return;
+      const { onConfirm: confirm, onCancel: cancel } = callbacksRef.current;
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancel?.(); return; }
+      if (event.key === 'Enter') { event.preventDefault(); event.stopPropagation(); confirm?.(latestRef.current.ratio); return; }
       if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
         event.preventDefault();
         event.stopPropagation();
@@ -9857,7 +9900,7 @@ function BoardSplitOverlay({ item, onConfirm, onCancel }){
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, [onCancel, onConfirm]);
+  }, []);
   const ratioAt = event => {
     const current = measure();
     const own = overlayRef.current?.getBoundingClientRect();
@@ -13199,6 +13242,8 @@ function applyItemStateToProblem(problem, item){
   next.input_intent = next.inputIntent;
   next.forceFullPageBounds = Boolean(item.forceFullPageBounds || next.forceFullPageBounds || next.force_full_page_bounds);
   next.force_full_page_bounds = next.forceFullPageBounds;
+  next.fitWidthConverted = Boolean(item.fitWidthConverted || next.fitWidthConverted || next.fit_width_converted);
+  next.fit_width_converted = next.fitWidthConverted;
   if (item.placementMode || next.placementMode || next.placement_mode) {
     next.placementMode = item.placementMode || next.placementMode || next.placement_mode;
     next.placement_mode = next.placementMode;
@@ -14015,6 +14060,7 @@ function mapProblemToItem(problem, idx, rawSession = null){
     supplementalItem: Boolean(problem.supplementalItem || problem.supplemental_item || problem.metadata?.supplementalItem || problem.metadata?.supplemental_item),
     inputIntent: problemInputIntent ? normalizeInputIntent(problemInputIntent) : null,
     forceFullPageBounds: Boolean(problem.forceFullPageBounds || problem.force_full_page_bounds),
+    fitWidthConverted: Boolean(problem.fitWidthConverted || problem.fit_width_converted),
     placementMode: problemPlacementMode,
     startYPages: startYPages ?? 0,
     snappedNextStartYPages: snappedNextStartYPages ?? null,

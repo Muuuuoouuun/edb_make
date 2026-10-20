@@ -1978,6 +1978,9 @@ class ProblemEntry:
     processing_step: str = PROCESSING_STEP_RAW
     input_intent: str | None = None
     force_full_page_bounds: bool = False
+    # Set when "가로 맞춤" (fit width) turned a problem or passage into a
+    # continuous record; it is not a whole source page and keeps its gap.
+    fit_width_converted: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
     preserve_media_mode: str = "off"
     crop_source_offset: dict[str, int] | None = None
@@ -6988,6 +6991,8 @@ def recrop_problem(
     page_image: Image.Image,
     bbox: Box,
     crop_path: Path,
+    *,
+    source_offset_output: dict[str, int] | None = None,
 ) -> tuple[int, int]:
     """Re-crop a problem from its source page image for split/merge mutations.
 
@@ -6996,17 +7001,28 @@ def recrop_problem(
     AI (Step 2) workflow. Callers that need a board_render_path can reuse the
     crop_path itself; the board renderer will composite onto the dark theme
     at EDB build time.
+
+    When ``source_offset_output`` is given it receives the page position of
+    the crop's top-left pixel (after trimming and padding), the same
+    ``cropSourceOffset`` contract the pipeline crops use, so a later board
+    split maps its cut through the trimmed and padded crop exactly.
     """
-    crop = page_image.crop(
-        _integer_crop_rect_for_box(
-            bbox,
-            image_width=page_image.width,
-            image_height=page_image.height,
-        )
+    crop_rect = _integer_crop_rect_for_box(
+        bbox,
+        image_width=page_image.width,
+        image_height=page_image.height,
     )
-    crop = _trim_source_page_chrome(crop)
-    crop = _trim_problem_crop_to_content(crop)
+    crop = page_image.crop(crop_rect)
+    crop, horizontal_trim_px = _trim_source_page_chrome_with_offset(crop, preserve_horizontal_bounds=False)
+    vertical_trim: list[int] = []
+    crop = _trim_problem_crop_to_content(crop, offset_output=vertical_trim)
     crop = _pad_problem_crop_edges(crop)
+    if source_offset_output is not None:
+        source_offset_output.clear()
+        source_offset_output.update({
+            "left": int(crop_rect[0] + horizontal_trim_px),
+            "top": int(crop_rect[1] + (vertical_trim[0] if vertical_trim else 0) - PROBLEM_CROP_TOP_SAFE_PADDING_PX),
+        })
     crop_path.parent.mkdir(parents=True, exist_ok=True)
     crop.save(crop_path)
     return crop.size
@@ -9357,6 +9373,59 @@ def _continuous_record_gap_px(*, whole_page: bool) -> float:
     return WHOLE_PAGE_RECORD_GAP_PX if whole_page else CONTINUOUS_RECORD_GAP_PX
 
 
+def _is_whole_page_record(
+    *,
+    input_intent: str | None,
+    force_full_page_bounds: bool,
+    fit_width_converted: bool = False,
+    passage_role: str | None = None,
+) -> bool:
+    """True only for a "페이지 전체 넣기" page, which stacks with no gap.
+
+    ``force_full_page_bounds`` alone is not enough: single-problem intent,
+    marker-document continuation pages and fit-width passages set it too, and
+    those continuous records keep the normal gap.
+    """
+    return (
+        bool(force_full_page_bounds)
+        and _normalize_input_intent(input_intent) == "page-as-is"
+        and not fit_width_converted
+        and str(passage_role or "").strip() != "passage_fragment"
+    )
+
+
+def _entry_is_whole_page(entry: "ProblemEntry") -> bool:
+    return _is_whole_page_record(
+        input_intent=entry.input_intent,
+        force_full_page_bounds=entry.force_full_page_bounds,
+        fit_width_converted=entry.fit_width_converted,
+    )
+
+
+def problem_payload_fit_width_converted(problem: Mapping[str, Any]) -> bool:
+    """A session problem that is a continuous record but not a whole page.
+
+    Newer sessions carry ``fitWidthConverted``; older ones are recognised by
+    their shared-passage role, since a passage is never a whole source page.
+    """
+    metadata = problem.get("metadata") if isinstance(problem.get("metadata"), Mapping) else {}
+    if problem.get("fitWidthConverted") or problem.get("fit_width_converted"):
+        return True
+    role = (
+        problem.get("passageRole") or problem.get("passage_role")
+        or metadata.get("passageRole") or metadata.get("passage_role") or ""
+    )
+    return str(role).strip() == "passage_fragment"
+
+
+def problem_payload_is_whole_page(problem: Mapping[str, Any]) -> bool:
+    return _is_whole_page_record(
+        input_intent=str(problem.get("inputIntent") or problem.get("input_intent") or ""),
+        force_full_page_bounds=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
+        fit_width_converted=problem_payload_fit_width_converted(problem),
+    )
+
+
 def _image_record_geometry(
     template: LayoutTemplate,
     *,
@@ -9394,7 +9463,14 @@ def _image_record_geometry_from_placement(
         template, crop_format=crop_format, base_width_px=width / scale,
         base_height_pages=height / scale / CANVAS_WIDTH,
         reserved_height_pages=float(placement.get("actual_content_height_pages") or 0.0),
-        whole_page=bool(placement.get("force_full_page_bounds")),
+        whole_page=(
+            bool(placement["whole_page_record"])
+            if placement.get("whole_page_record") is not None
+            else _is_whole_page_record(
+                input_intent=str(placement.get("input_intent") or ""),
+                force_full_page_bounds=bool(placement.get("force_full_page_bounds")),
+            )
+        ),
     )
 
 
@@ -9449,7 +9525,7 @@ def annotate_session_image_record_geometry(
         geometry = _image_record_geometry(
             template, crop_format=crop_format, base_width_px=base_width,
             base_height_pages=base_height, reserved_height_pages=max(MIN_HEIGHT_PAGES, base_height),
-            whole_page=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
+            whole_page=problem_payload_is_whole_page(problem),
         )
         problem["imageRecordGeometry"] = geometry
         problem["image_record_geometry"] = geometry
@@ -10231,6 +10307,7 @@ def placement_inputs(
                 "reserve_scaled_height": _entry_preserves_legacy_placement_scale(entry) or normalize_placement_extra_slots(entry.placement_extra_slots) > 0,
                 "input_intent": entry.input_intent,
                 "force_full_page_bounds": entry.force_full_page_bounds,
+                "whole_page_record": _entry_is_whole_page(entry),
             },
         )
         for entry in problem_entries
@@ -10782,6 +10859,106 @@ def _v1_default_display_width_px(template: LayoutTemplate) -> float:
     return max(legacy_width, min(V1_DEFAULT_DISPLAY_WIDTH_PX, max_width))
 
 
+CHALK_CUTOUT_CACHE_DIRNAME = ".chalk_cutout_cache"
+# Bump when the cutout pipeline changes in a way the code hash below misses.
+CHALK_CUTOUT_CACHE_VERSION = "1"
+CHALK_CUTOUT_CACHE_MAX_FILES = 1500
+_CHALK_CUTOUT_CACHE_SALT: str | None = None
+
+
+def _chalk_cutout_cache_salt() -> str:
+    """Invalidate cached cutouts whenever the code or the app build changes."""
+    global _CHALK_CUTOUT_CACHE_SALT
+    if _CHALK_CUTOUT_CACHE_SALT is None:
+        import sys
+
+        parts = [CHALK_CUTOUT_CACHE_VERSION, str(getattr(Image, "__version__", "")), str(getattr(np, "__version__", ""))]
+        try:
+            parts.append(hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
+        except OSError:
+            # Frozen builds may not ship readable sources: every new build
+            # still changes the executable itself.
+            try:
+                stat = Path(sys.executable).stat()
+                parts.append(f"frozen:{stat.st_size}:{stat.st_mtime_ns}")
+            except OSError:
+                parts.append("frozen")
+        _CHALK_CUTOUT_CACHE_SALT = hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    return _CHALK_CUTOUT_CACHE_SALT
+
+
+def _prune_chalk_cutout_cache(cache_dir: Path) -> None:
+    """Keep the per-session cache bounded; drop the least recently written."""
+    try:
+        files = [path for path in cache_dir.glob("*.png") if path.is_file()]
+        if len(files) <= CHALK_CUTOUT_CACHE_MAX_FILES:
+            return
+        files.sort(key=lambda path: path.stat().st_mtime)
+        for path in files[: len(files) - CHALK_CUTOUT_CACHE_MAX_FILES]:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _cached_chalk_cutout(
+    crop_path: Path,
+    crop_image: Image.Image,
+    *,
+    chalk_color: tuple[int, int, int],
+    text_priority: bool,
+) -> Image.Image:
+    """Chalk cutout of ``crop_image``, reused across exports of the same crop.
+
+    The result is identical to rebuilding: the key covers the crop pixels, the
+    chalk tone, the text-priority path, the library versions and this
+    module's code. Any cache failure falls back to building the cutout.
+    """
+    def build() -> Image.Image:
+        return _extract_problem_cutout(
+            _enhance_problem_crop(crop_image, text_priority=text_priority),
+            chalk_color=chalk_color,
+            text_priority=text_priority,
+        )
+
+    try:
+        digest = hashlib.sha256()
+        digest.update(_chalk_cutout_cache_salt().encode("ascii"))
+        digest.update(repr((tuple(int(c) for c in chalk_color), bool(text_priority), crop_image.mode, crop_image.size)).encode("ascii"))
+        digest.update(crop_image.tobytes())
+        cache_path = Path(crop_path).parent / CHALK_CUTOUT_CACHE_DIRNAME / f"{digest.hexdigest()[:40]}.png"
+    except OSError:
+        return build()
+    try:
+        with Image.open(cache_path) as cached:
+            cached.load()
+            return cached.copy()
+    except (OSError, ValueError):
+        pass
+    cutout = build()
+    temp_path: Path | None = None
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        handle, temp_name = tempfile.mkstemp(prefix=".cutout-", suffix=".png", dir=cache_path.parent)
+        os.close(handle)
+        temp_path = Path(temp_name)
+        cutout.save(temp_path, format="PNG", compress_level=1, optimize=False)
+        os.replace(temp_path, cache_path)
+        temp_path = None
+        _prune_chalk_cutout_cache(cache_path.parent)
+    except (OSError, ValueError):
+        pass
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
+    return cutout
+
+
 def _build_image_only_record_image(
     placement: Any,
     entry: ProblemEntry,
@@ -10886,9 +11063,11 @@ def _build_image_only_record_image(
         # Older sessions may already contain a Stage-2 board render whose
         # detected figure was restored as an opaque source patch. Rebuild the
         # chalk cutout from the immutable crop so those legacy white boxes do
-        # not survive a fresh EDB export.
-        board_image = _extract_problem_cutout(
-            _enhance_problem_crop(crop_image, text_priority=text_priority),
+        # not survive a fresh EDB export. The rebuild is cached by crop
+        # content, so exporting the same lesson again skips this pass.
+        board_image = _cached_chalk_cutout(
+            crop_path,
+            crop_image,
             chalk_color=chalk_color,
             text_priority=text_priority,
         )
@@ -11156,7 +11335,7 @@ def build_image_only_records(
             elif template.metadata.get("layout_gap_mode") == "compact":
                 continuous_gap_px = 0.0
             else:
-                continuous_gap_px = _continuous_record_gap_px(whole_page=entry.force_full_page_bounds)
+                continuous_gap_px = _continuous_record_gap_px(whole_page=_entry_is_whole_page(entry))
             start_y_pages = placement.start_y_pages
             actual_height_pages = rendered_height_px / max(scale_ratio, 0.001) / CANVAS_WIDTH
             rendered_height_pages = rendered_height_px / CANVAS_WIDTH
@@ -11228,6 +11407,7 @@ def build_image_only_records(
                 "record_bottom_y_pages": round((y_px + rendered_height_px) / CANVAS_WIDTH, 6),
                 "record_gap_px": continuous_gap_px if continuous_flow else 0.0,
                 "force_full_page_bounds": entry.force_full_page_bounds,
+                "whole_page_record": _entry_is_whole_page(entry),
                 "rendered_height_pages": round(rendered_height_px / CANVAS_WIDTH, 6),
                 "overflow_allowed": placement.overflow_allowed,
                 "overflow_amount_pages": round(overflow_amount_pages, 6),

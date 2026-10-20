@@ -409,7 +409,8 @@ class TestUiBoardDrag(unittest.TestCase):
           top: index * 240, yRatio: 0, rowHeightPages: 1.2, renderedHeightPages: .8,
         }));
         sandbox.contentRef.current.getBoundingClientRect = () => ({ width: 800, top: -sandbox.scrollRef.current.scrollTop });
-        vm.runInContext(section('  const findSmartBoardDropTarget =', '  const updateBoardDropTarget ='), sandbox);
+        vm.runInContext(section('  const findSmartBoardDropTarget =', '  const updateBoardDropTarget =')
+          + section('function smartBoardEndInsertionTarget(', 'function BoardTileContents('), sandbox);
         sandbox.smartMove = true;
         const thirdPlacement = { top: 480, startPages: 2.4, snappedNext: 3.6, xRatio: 0, yRatio: 0, columnCount: 1 };
 
