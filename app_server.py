@@ -3509,6 +3509,12 @@ def _write_classin_limited_edb_files_streamed_local(
         chunks = split_problem_entries_for_classin_page_limit(
             problem_entries, template, max_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
         )
+    max_entries = int(_lazy_attr("build_problem_board_edb", "MAX_ENCODED_ENTRIES_PER_PART"))
+    chunks = [
+        chunk[first:first + max_entries]
+        for chunk in chunks
+        for first in range(0, len(chunk), max_entries)
+    ]
     parts: list[dict[str, Any]] = []
     for index, chunk in enumerate(chunks):
         part_template = _template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)

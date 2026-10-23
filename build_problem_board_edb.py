@@ -96,6 +96,7 @@ V1_LAYOUT_MAX_HEIGHT_PAGES = 1.08
 V1_DEFAULT_DISPLAY_WIDTH_PX = 540.0
 ONE_PROBLEM_SLOT_HEIGHT_PAGES = 1.2
 CLASSIN_MAX_BOARD_PAGE_COUNT = 50
+MAX_ENCODED_ENTRIES_PER_PART = 20
 CHOICE_BOTTOM_SAFE_PADDING_PX = 44.0
 PROBLEM_CROP_TOP_SAFE_PADDING_PX = 36
 PROBLEM_CROP_BOTTOM_SAFE_PADDING_PX = 52
@@ -10808,6 +10809,14 @@ def plan_classin_limited_edb_parts(
         tail_weights=tails,
         balance_min_part_count=3,
     )
+    # A visually short document can still contain many expensive image records.
+    # Keep encoding and the resulting EDB payload bounded independently of the
+    # ClassIn page limit.
+    ranges = [
+        (chunk_start, min(chunk_start + MAX_ENCODED_ENTRIES_PER_PART, end), estimated_pages)
+        for start, end, estimated_pages in ranges
+        for chunk_start in range(start, end, MAX_ENCODED_ENTRIES_PER_PART)
+    ]
     part_count = len(ranges)
     parts: list[dict[str, Any]] = []
     for part_index, (start, end, estimated_pages) in enumerate(ranges, start=1):
@@ -11774,7 +11783,7 @@ def build_records(
 
 
 def _use_bounded_record_export(problem_entries: Sequence[ProblemEntry]) -> bool:
-    return len(problem_entries) > CLASSIN_MAX_BOARD_PAGE_COUNT or any(
+    return len(problem_entries) > MAX_ENCODED_ENTRIES_PER_PART or any(
         bool(getattr(entry.prepared_page, "disk_backed", False)) for entry in problem_entries
     )
 
