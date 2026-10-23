@@ -160,6 +160,9 @@ def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, 
                 "계속 필요하면 여러 EDB로 나누어 제작해 주세요.",
             ],
         )
+    classified = _classified_processing_error(exc) if isinstance(exc, Exception) else None
+    if classified is not None:
+        return {**classified, "operation": "session_publish", "stage": stage}
     definitions = {
         "prepare": ("publish_output_unavailable", "제작 파일을 저장할 폴더를 준비하지 못했습니다"),
         "build": ("publish_build_failed", "EDB 제작 데이터 생성에 실패했습니다"),
@@ -437,6 +440,11 @@ APP_UPDATE_CONFIG_ERROR_KEY = "_configError"
 # Frontend uploads files as base64 inside JSON, so a 1 MB limit rejects many
 # normal PDFs/photos before parsing or AI recognition can start.
 MAX_JSON_BODY_BYTES = 64 * 1024 * 1024
+MAX_UPLOAD_FILE_BYTES = 512 * 1024 * 1024
+MAX_UPLOAD_BATCH_BYTES = 2 * 1024 * 1024 * 1024
+UPLOAD_STREAM_CHUNK_BYTES = 1024 * 1024
+UPLOAD_DISK_RESERVE_BYTES = 64 * 1024 * 1024
+SUPPORTED_UPLOAD_SUFFIXES = {".pdf", ".hwp", ".hwpx", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 MAX_UPDATE_FEED_BYTES = 262_144
 MAX_UPDATE_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024
 UPDATE_PIN_MIN_LENGTH = 4
@@ -551,6 +559,46 @@ class RequestPayloadTooLarge(Exception):
         self.content_length = content_length
         self.limit = limit
         super().__init__(f"request body is {content_length} bytes; limit is {limit} bytes")
+
+
+class UploadRequestError(ValueError):
+    def __init__(self, code: str, message: str, *, status: HTTPStatus = HTTPStatus.BAD_REQUEST, **context: Any) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status = status
+        self.context = context
+
+
+def _format_capacity_bytes(value: int) -> str:
+    if value >= 1024 * 1024 * 1024:
+        return f"{value / (1024 * 1024 * 1024):.2f} GB"
+    return f"{value / (1024 * 1024):.1f} MB"
+
+
+def _validate_source_capacity(paths: list[Path]) -> None:
+    total = 0
+    seen: set[Path] = set()
+    for path in paths:
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        size = resolved.stat().st_size
+        if size > MAX_UPLOAD_FILE_BYTES:
+            raise UploadRequestError(
+                "upload_file_too_large",
+                f"파일 '{path.name}'의 용량 {_format_capacity_bytes(size)}가 파일당 한도 {_format_capacity_bytes(MAX_UPLOAD_FILE_BYTES)}를 넘었습니다.",
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                sourceFile=path.name, receivedBytes=size, maxBytes=MAX_UPLOAD_FILE_BYTES,
+            )
+        total += size
+    if total > MAX_UPLOAD_BATCH_BYTES:
+        raise UploadRequestError(
+            "upload_batch_too_large",
+            f"자료의 전체 용량 {_format_capacity_bytes(total)}가 한 번에 등록할 수 있는 한도 {_format_capacity_bytes(MAX_UPLOAD_BATCH_BYTES)}를 넘었습니다.",
+            status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            receivedBytes=total, maxBytes=MAX_UPLOAD_BATCH_BYTES,
+        )
 
 
 class AppUpdateError(RuntimeError):
@@ -2381,6 +2429,11 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
 
     return {
         "ok": True,
+        "pdfRenderer": {
+            "available": preprocess.fitz is not None,
+            "bundled": bool(getattr(sys, "frozen", False)),
+            "importError": preprocess._PDF_RENDERER_IMPORT_ERROR,
+        },
         "hangul": {
             "status": status,
             "label": label,
@@ -2419,12 +2472,162 @@ def cached_runtime_diagnostics(*, force_refresh: bool = False) -> dict[str, Any]
     return _clone_jsonish(snapshot)
 
 
+def _processing_error_context(exc: BaseException) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        for attribute, key in (
+            ("source_file", "sourceFile"), ("file_name", "sourceFile"),
+            ("page_start", "pageStart"), ("page_end", "pageEnd"),
+            ("page_number", "pageNumber"),
+        ):
+            value = getattr(current, attribute, None)
+            if value is not None:
+                context.setdefault(key, str(value) if isinstance(value, Path) else value)
+        current = getattr(current, "cause", None) or current.__cause__
+    if context.get("sourceFile"):
+        context.setdefault("fileName", Path(str(context["sourceFile"])).name)
+    return context
+
+
+def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
+    message = str(exc)
+    context = _processing_error_context(exc)
+    causes: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and all(current is not item for item in causes):
+        causes.append(current)
+        current = getattr(current, "cause", None) or current.__cause__
+    combined = " ".join(str(item) for item in causes).lower()
+    native_cv2_causes = [item for item in causes if type(item).__module__ == "cv2"]
+    native_memory_exhausted = any(
+        _preprocess_module()._is_pdf_resource_error(item) for item in native_cv2_causes
+    )
+    if isinstance(exc, UploadRequestError):
+        code, kind, summary = exc.code, "upload_failed", message
+        context.update(exc.context)
+        steps = ["파일을 여러 개로 나누거나 PDF를 압축한 뒤 다시 등록해 주세요."] if "too_large" in code else ["원본 파일을 다시 선택해 등록해 주세요."]
+        retryable = code == "upload_incomplete"
+    elif any(type(item).__name__ in {"DecompressionBombError", "DecompressionBombWarning"} for item in causes):
+        code, kind = "input_image_too_large", "image_resolution_too_large"
+        summary = "이미지 해상도가 처리 가능한 픽셀 수를 초과했습니다. 파일의 MB 용량과는 다른 이미지 크기 제한입니다."
+        steps = ["이미지 해상도를 낮추거나 여러 이미지로 나누어 등록해 주세요."]
+        retryable = False
+    elif any(isinstance(item, PermissionError) or isinstance(item, OSError) and _is_windows_file_busy(item) for item in causes):
+        code, kind = "runtime_storage_access_denied", "storage_access_denied"
+        summary = "작업 폴더에 파일을 저장하지 못했습니다. 파일 잠금 또는 폴더 쓰기 권한을 확인해 주세요."
+        steps = ["해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.", "OneDrive 동기화 상태와 Windows 보안의 제어된 폴더 액세스 알림을 확인해 주세요.", "계속 실패하면 쓰기 가능한 작업 폴더에서 다시 실행한 뒤 오류 상세를 복사해 신고해 주세요."]
+        retryable = True
+    elif (
+        any(isinstance(item, MemoryError) or isinstance(item, OSError) and (item.errno == errno.ENOMEM or getattr(item, "winerror", None) in {8, 14, 1455}) for item in causes)
+        or native_memory_exhausted
+        or getattr(exc, "code", "") == "pdf_resource_exhausted"
+        or (not native_cv2_causes and any(
+            signal in combined for signal in ("out of memory", "cannot allocate memory", "malloc failed", "memory allocation failed")
+        ))
+    ):
+        code, kind = "processing_memory_exhausted", "memory_exhausted"
+        summary = "처리할 자료가 사용 가능한 메모리보다 커서 작업을 완료하지 못했습니다."
+        steps = ["다른 프로그램을 닫아 메모리를 확보해 주세요.", "PDF를 더 작은 페이지 묶음으로 나누거나 이미지 해상도를 낮춘 뒤 다시 시도해 주세요."]
+        retryable = False
+    elif any(isinstance(item, OSError) and (
+        item.errno == errno.ENOSPC or getattr(item, "winerror", None) == 112
+        or any(signal in str(item).lower() for signal in ("disk full", "no space left on device", "not enough space on the disk"))
+    ) for item in causes):
+        code, kind = "runtime_storage_full", "storage_full"
+        summary = "디스크의 남은 용량이 부족해 원본 또는 변환 파일을 저장하지 못했습니다."
+        steps = ["작업 폴더가 있는 디스크의 여유 공간을 확보해 주세요.", "파일을 나누어 다시 등록해 주세요. 기존 편집 내용과 원본은 유지됩니다."]
+        retryable = False
+        for item in causes:
+            if getattr(item, "available_bytes", None) is not None:
+                context["availableBytes"] = item.available_bytes
+            if getattr(item, "required_bytes", None) is not None:
+                context["requiredBytes"] = item.required_bytes
+        if "availableBytes" in context and "requiredBytes" in context:
+            summary += f" 필요 공간 {_format_capacity_bytes(context['requiredBytes'])}, 남은 공간 {_format_capacity_bytes(context['availableBytes'])}."
+    elif isinstance(exc, FileExistsError):
+        code, kind = "output_directory_exists", "storage_conflict"
+        summary = "같은 작업 폴더가 이미 있어 덮어쓰지 않았습니다. 기존 파일은 그대로 유지됩니다."
+        steps = ["다른 출력 폴더를 선택하거나 잠시 후 작업을 다시 시도해 주세요."]
+        retryable = True
+    elif "bundled pymupdf" in combined or "pymupdf is required to render pdf" in combined:
+        code, kind = "pdf_renderer_unavailable", "app_dependency_missing"
+        summary = "앱 내부의 PDF 변환 기능을 불러오지 못했습니다. 파일 용량 문제가 아닌 프로그램 설치 오류입니다."
+        steps = ["최신 설치파일로 앱을 다시 설치해 주세요. 별도 Python 설치는 필요하지 않습니다.", "계속 실패하면 아래 오류 상세를 복사해 버그 리포트로 보내 주세요."]
+        retryable = False
+    elif "password protected" in combined or "password-protected" in combined or "encrypted pdf" in combined:
+        code, kind = "pdf_password_protected", "invalid_document"
+        summary = "암호로 보호된 PDF여서 페이지를 읽을 수 없습니다."
+        steps = ["권한이 있는 PDF 프로그램에서 암호를 해제하거나 새 PDF로 내보낸 뒤 등록해 주세요."]
+        retryable = False
+    elif "exceeds classin's 50-page limit" in combined:
+        code, kind = "single_problem_too_tall", "document_layout_limit"
+        summary = "한 문항이 ClassIn 칠판 50페이지를 넘어 한 파일에 넣을 수 없습니다."
+        steps = ["해당 문항을 ‘나누기’로 여러 영역으로 나누어 주세요.", "원본 페이지를 유지하려면 ‘페이지 전체 넣기’로 다시 등록하면 길이에 맞춰 자동 분할합니다."]
+        retryable = False
+    elif "failed to open pdf document" in combined or any(type(item).__name__ in {"FileDataError", "EmptyFileError"} for item in causes):
+        code, kind = "pdf_invalid_document", "invalid_document"
+        summary = "PDF가 손상되었거나 올바른 PDF 형식이 아니어서 읽을 수 없습니다."
+        steps = ["PDF 뷰어에서 원본이 열리는지 확인해 주세요.", "원본을 다시 다운로드하거나 PDF로 다시 저장한 뒤 등록해 주세요."]
+        retryable = False
+    elif getattr(exc, "code", "") == "pdf_page_processing_failed":
+        code, kind = "pdf_page_processing_failed", "app_internal_error"
+        summary = "PDF 페이지를 처리하던 중 프로그램 오류가 발생했습니다. 용량 초과로 확인된 오류는 아닙니다."
+        steps = ["아래 파일명과 페이지 범위, 오류 상세를 복사해 버그 리포트로 보내 주세요.", "원본 파일과 기존 편집 내용은 유지됩니다."]
+        retryable = False
+    elif isinstance(exc, (ImportError, ModuleNotFoundError)):
+        code, kind = "app_dependency_missing", "app_dependency_missing"
+        summary = "앱 실행에 필요한 내부 구성 요소를 불러오지 못했습니다. 프로그램 설치 오류입니다."
+        steps = ["최신 설치파일로 다시 설치해 주세요.", "계속 실패하면 오류 상세를 복사해 신고해 주세요."]
+        retryable = False
+    elif not isinstance(exc, (ValueError, FileNotFoundError, PermissionError, OSError)) and not any(
+        signal in message for signal in ("HWP/HWPX", "valid HWP", "valid HWPX", "한컴오피스")
+    ):
+        code, kind = "app_internal_error", "app_internal_error"
+        summary = "프로그램 내부 오류로 작업을 완료하지 못했습니다. 파일 용량 초과로 확인된 오류는 아닙니다."
+        steps = ["오류 상세를 복사해 버그 리포트로 보내 주세요.", "앱을 다시 실행한 뒤 같은 작업을 시도해 주세요. 기존 편집 내용은 유지됩니다."]
+        retryable = True
+    else:
+        return None
+    payload = {
+        "ok": False, "code": code, "errorKind": kind, "error": summary,
+        "detail": f"{type(exc).__name__}: {message}", "retryable": retryable,
+        "recoverySteps": steps, **context,
+    }
+    cause_code = getattr(exc, "code", None)
+    if cause_code and cause_code != code:
+        payload["causeCode"] = cause_code
+    return payload
+
+
+def _export_error_status(exc: Exception, payload: dict[str, Any]) -> HTTPStatus:
+    if isinstance(exc, UploadRequestError):
+        return exc.status
+    code = payload.get("code")
+    if code == "runtime_storage_full":
+        return HTTPStatus.INSUFFICIENT_STORAGE
+    if code == "processing_memory_exhausted":
+        return HTTPStatus.SERVICE_UNAVAILABLE
+    if code == "output_directory_exists":
+        return HTTPStatus.CONFLICT
+    if code in {"app_internal_error", "app_dependency_missing", "pdf_renderer_unavailable", "pdf_page_processing_failed", "runtime_storage_error"}:
+        return HTTPStatus.INTERNAL_SERVER_ERROR
+    return HTTPStatus.BAD_REQUEST
+
+
 def _export_error_payload(exc: Exception) -> dict[str, Any]:
+    classified = _classified_processing_error(exc)
+    if classified is not None:
+        return classified
     message = str(exc)
     payload: dict[str, Any] = {
         "ok": False,
         "error": message,
         "errorKind": "export_failed",
+        "detail": f"{type(exc).__name__}: {message}",
+        **_processing_error_context(exc),
     }
     if isinstance(exc, PermissionError) or (
         isinstance(exc, OSError) and _is_windows_file_busy(exc)
@@ -2466,6 +2669,27 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
             "또는 HWP/HWPX를 PDF로 변환할 수 있는 로컬 변환기를 설치한 뒤 다시 실행해 주세요.",
             "암호, 배포용, DRM, 복사 방지 문서라면 보호를 해제하거나 권한 있는 PDF 내보내기를 사용해 주세요.",
         ]
+    elif "code" not in payload:
+        if isinstance(exc, FileNotFoundError):
+            payload.update({
+                "code": "input_file_missing", "errorKind": "invalid_input",
+                "error": "원본 파일을 찾을 수 없습니다. 파일이 이동되거나 삭제되었는지 확인해 주세요.",
+                "retryable": False, "recoverySteps": ["원본 파일을 다시 선택해 등록해 주세요."],
+            })
+        elif isinstance(exc, ValueError):
+            payload.update({
+                "code": "invalid_input", "errorKind": "invalid_input",
+                "error": f"입력 자료 또는 처리 요청을 처리하지 못했습니다. 원인: {message}",
+                "retryable": False,
+                "recoverySteps": ["아래 오류 상세를 확인해 원본 파일이나 선택한 옵션을 점검해 주세요.", "같은 정상 파일에서도 반복되면 오류 상세를 복사해 신고해 주세요."],
+            })
+        elif isinstance(exc, OSError):
+            payload.update({
+                "code": "runtime_storage_error", "errorKind": "storage_error",
+                "error": f"파일을 읽거나 저장하는 중 운영체제 오류가 발생했습니다. 원인: {message}",
+                "retryable": True,
+                "recoverySteps": ["원본 파일과 작업 폴더에 접근할 수 있는지 확인해 주세요.", "반복되면 오류 상세를 복사해 신고해 주세요."],
+            })
     return payload
 
 
@@ -3149,6 +3373,62 @@ def _first_placement_over_page_limit(placements: list[dict[str, Any]], max_pages
     return None
 
 
+def _write_classin_limited_edb_files_streamed_local(
+    problem_entries: list[Any], template: LayoutTemplate, output_dir: Path,
+    edb_name: str, *, record_mode: str, text_confidence_threshold: float,
+    dark_board: bool, board_theme: str, crop_format: str,
+    existing_placements: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Plan without encoded bytes, then write one ClassIn part at a time."""
+    geometry = existing_placements
+    if geometry is None:
+        _records, geometry, _header = build_records(
+            problem_entries, template, output_dir=output_dir, record_mode=record_mode,
+            text_confidence_threshold=text_confidence_threshold, dark_board=dark_board,
+            board_theme=board_theme, crop_format=crop_format, generate_records=False,
+        )
+    advances, tails = _classin_rendered_flow_metrics(problem_entries, geometry)
+    if advances and not template.metadata.get("preserve_source_layout"):
+        ranges = balanced_classin_part_ranges(advances, tail_weights=tails, balance_min_part_count=3)
+        chunks = [problem_entries[first:last] for first, last, _pages in ranges]
+    else:
+        chunks = split_problem_entries_for_classin_page_limit(
+            problem_entries, template, max_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT,
+        )
+    parts: list[dict[str, Any]] = []
+    for index, chunk in enumerate(chunks):
+        part_template = _template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
+        part_records, placements, header_flag = build_records(
+            chunk, part_template, record_mode=record_mode, output_dir=output_dir,
+            text_confidence_threshold=text_confidence_threshold, dark_board=dark_board,
+            board_theme=board_theme, crop_format=crop_format,
+            reserve_image_layout_height=True, expand_board_capacity=False,
+        )
+        _validate_record_page_count_hints(placements, expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT)
+        if not part_template.metadata.get("preserve_source_layout"):
+            _validate_sequential_record_placements(placements)
+        flow_end = _placement_summaries_flow_end_pages(placements)
+        if flow_end > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+            raise ValueError(f"ClassIn part {index + 1} exceeds the 50-page limit after rendering ({flow_end:.3f} pages)")
+        path = output_dir / _edb_part_file_name(edb_name, index, len(chunks))
+        write_edb(path, build_edb(part_records, header_flag=header_flag,
+            version=version_string_for_crop_format(crop_format), page_count_hint=CLASSIN_MAX_BOARD_PAGE_COUNT))
+        ids = [entry.problem_id for entry in chunk]
+        parts.append({
+            "partIndex": index + 1, "part_index": index + 1,
+            "partCount": len(chunks), "part_count": len(chunks),
+            "edbFileName": path.name, "edb_file_name": path.name,
+            "edbPath": str(path.resolve()), "edb_path": str(path.resolve()),
+            "recordCount": len(part_records), "record_count": len(part_records),
+            "placementCount": len(placements), "placement_count": len(placements),
+            "pageCountHint": CLASSIN_MAX_BOARD_PAGE_COUNT, "page_count_hint": CLASSIN_MAX_BOARD_PAGE_COUNT,
+            "flowEndPages": flow_end, "flow_end_pages": flow_end,
+            "problemIds": ids, "problem_ids": ids, "placements": placements,
+        })
+        del part_records
+    return parts
+
+
 def _write_classin_limited_edb_files_local(
     problem_entries: list[Any],
     template: LayoutTemplate,
@@ -3163,7 +3443,15 @@ def _write_classin_limited_edb_files_local(
     existing_records: list[Any] | None = None,
     existing_placements: list[dict[str, Any]] | None = None,
     existing_header_flag: int | None = None,
+    stream_records: bool = False,
 ) -> list[dict[str, Any]]:
+    if stream_records:
+        return _write_classin_limited_edb_files_streamed_local(
+            problem_entries, template, output_dir, edb_name, record_mode=record_mode,
+            text_confidence_threshold=text_confidence_threshold, dark_board=dark_board,
+            board_theme=board_theme, crop_format=crop_format,
+            existing_placements=existing_placements,
+        )
     chunks = split_problem_entries_for_classin_page_limit(
         problem_entries,
         template,
@@ -10042,8 +10330,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(
                 {
                     "ok": False,
-                    "error": "upload payload is too large",
+                    "error": f"업로드 요청 용량 {_format_capacity_bytes(exc.content_length)}가 전송 한도 {_format_capacity_bytes(exc.limit)}를 넘었습니다. 파일을 한 개씩 다시 등록해 주세요.",
                     "code": "payload_too_large",
+                    "errorKind": "upload_too_large",
+                    "retryable": False,
                     "maxBytes": exc.limit,
                     "receivedBytes": exc.content_length,
                     "recoverySteps": [
@@ -10056,6 +10346,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _dispatch_post(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/uploads":
+            self._run_artifact_job(self._handle_upload)
+            return
         if parsed.path == "/api/export":
             self._run_artifact_job(self._handle_export)
             return
@@ -10392,6 +10685,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 dark_board=True,
                 board_theme=session.get("board_theme") or DEFAULT_BOARD_THEME,
                 crop_format=crop_format,
+                generate_records=False,
             )
         except Exception as exc:  # noqa: BLE001 — report the exact pipeline stage
             _discard_staged_publish(staging_dir)
@@ -10417,6 +10711,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 existing_records=records,
                 existing_placements=placements,
                 existing_header_flag=header_flag,
+                stream_records=True,
             )
             if not staged_edb_parts:
                 raise ValueError("no EDB parts were generated")
@@ -10428,6 +10723,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 final_dir,
             )
             edb_path = Path(str(edb_parts[0]["edbPath"]))
+            record_count = int(staged_edb_validation.get("recordCountActual") or len(records))
         except Exception as exc:  # noqa: BLE001
             _discard_staged_publish(staging_dir)
             _log_operation_exception("session_publish.write_edb", exc)
@@ -10560,7 +10856,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 edb_parts=edb_parts,
                 ui_session=new_session,
                 summary={
-                    "record_count": len(records),
+                    "record_count": record_count,
                     "record_mode": "image-only",
                     "crop_format": crop_format,
                     "board_theme": session.get("board_theme") or DEFAULT_BOARD_THEME,
@@ -10716,7 +11012,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             edb_path=Path(str(staged_edb_parts[0]["edbPath"])),
             output_dir=staging_dir,
             edb_validation=staged_edb_validation,
-            record_count=len(records),
+            record_count=record_count,
             core_problem_count=core_problem_count,
             supplemental_item_count=supplemental_item_count,
             classin_handoff_path=staged_handoff_path,
@@ -11885,6 +12181,111 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         with path.open("rb") as source:
             shutil.copyfileobj(source, self.wfile, length=1024 * 1024)
 
+    def _handle_upload(self) -> None:
+        if not _request_is_same_origin(self.headers) or not _browser_write_request_is_trusted(self.headers):
+            self.close_connection = True
+            self._send_json(
+                {"ok": False, "code": "cross_origin_rejected", "error": "다른 사이트에서 보낸 파일 등록 요청을 허용하지 않습니다."},
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        try:
+            path, metadata = self._save_streamed_upload()
+        except Exception as exc:
+            self.close_connection = True
+            payload = _export_error_payload(exc)
+            self._send_json(payload, status=_export_error_status(exc, payload))
+            return
+        self._send_json({"ok": True, "sourcePath": str(path.resolve()), **metadata}, status=HTTPStatus.CREATED)
+
+    def _save_streamed_upload(self) -> tuple[Path, dict[str, Any]]:
+        raw_length = str(self.headers.get("Content-Length") or "").strip()
+        if self.headers.get("Transfer-Encoding") or not raw_length.isdecimal() or len(raw_length) > 20:
+            raise UploadRequestError("upload_invalid_length", "파일 크기를 확인하지 못했습니다. 원본 파일을 다시 선택해 주세요.")
+        content_length = int(raw_length)
+        file_name = unquote(str(self.headers.get("X-File-Name") or "upload.bin"))
+        file_name = re.split(r"[\\/]", file_name)[-1]
+        if not file_name or any(ord(character) < 32 for character in file_name):
+            raise UploadRequestError("upload_invalid_name", "파일 이름이 올바르지 않습니다. 파일 이름을 바꾼 뒤 다시 등록해 주세요.")
+        context = {"sourceFile": file_name, "fileName": file_name}
+        if content_length > MAX_UPLOAD_FILE_BYTES:
+            raise UploadRequestError(
+                "upload_file_too_large",
+                f"파일 '{file_name}'의 용량 {_format_capacity_bytes(content_length)}가 파일당 한도 {_format_capacity_bytes(MAX_UPLOAD_FILE_BYTES)}를 넘었습니다.",
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                receivedBytes=content_length, maxBytes=MAX_UPLOAD_FILE_BYTES, **context,
+            )
+        if content_length == 0:
+            raise UploadRequestError("upload_empty_file", "빈 파일은 등록할 수 없습니다. 원본 파일을 확인해 주세요.", **context)
+        if Path(file_name).suffix.lower() not in SUPPORTED_UPLOAD_SUFFIXES:
+            raise UploadRequestError("upload_unsupported_type", "지원하지 않는 파일 형식입니다. PDF, HWP/HWPX 또는 이미지 파일을 선택해 주세요.", **context)
+        content_type = str(self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if content_type != "application/octet-stream":
+            raise UploadRequestError("upload_invalid_content_type", "파일 전송 형식을 확인하지 못했습니다. 파일을 다시 등록해 주세요.", **context)
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        free_bytes = shutil.disk_usage(UPLOAD_DIR).free
+        required_bytes = content_length + UPLOAD_DISK_RESERVE_BYTES
+        if free_bytes < required_bytes:
+            error = OSError(errno.ENOSPC, f"파일 '{file_name}'을 저장하려면 {_format_capacity_bytes(required_bytes)}가 필요하지만 디스크에 {_format_capacity_bytes(free_bytes)}만 남아 있습니다.")
+            error.available_bytes = free_bytes
+            error.required_bytes = required_bytes
+            error.source_file = file_name
+            raise error
+        staged_path: Path | None = None
+        try:
+            descriptor, raw_path = tempfile.mkstemp(prefix=".upload-stream.", suffix=".tmp", dir=str(UPLOAD_DIR))
+            staged_path = Path(raw_path)
+            digest = hashlib.sha256()
+            remaining = content_length
+            with os.fdopen(descriptor, "wb") as destination:
+                while remaining:
+                    try:
+                        data = self.rfile.read(min(UPLOAD_STREAM_CHUNK_BYTES, remaining))
+                    except (ConnectionError, TimeoutError) as exc:
+                        raise UploadRequestError(
+                            "upload_incomplete", "파일 전송 연결이 끊겨 등록하지 못했습니다. 원본 파일을 다시 등록해 주세요.",
+                            receivedBytes=content_length - remaining, expectedBytes=content_length, **context,
+                        ) from exc
+                    if not data:
+                        raise UploadRequestError(
+                            "upload_incomplete", "파일 전송이 중간에 끊겨 등록하지 못했습니다. 원본 파일을 다시 등록해 주세요.",
+                            receivedBytes=content_length - remaining, expectedBytes=content_length, **context,
+                        )
+                    destination.write(data)
+                    digest.update(data)
+                    remaining -= len(data)
+                destination.flush()
+                os.fsync(destination.fileno())
+            content_digest = digest.hexdigest()
+            target_name = _managed_upload_target_name(file_name, content_digest, upload_dir=UPLOAD_DIR)
+            target = UPLOAD_DIR / target_name
+            for candidate in sorted(UPLOAD_DIR.glob(f"{content_digest}_*{Path(target_name).suffix}")):
+                if _file_matches_digest(candidate, content_digest, content_length):
+                    return candidate, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
+            try:
+                _replace_file_with_retry(staged_path, target)
+            except OSError as exc:
+                if not _is_windows_file_busy(exc):
+                    raise
+                if _file_matches_digest(target, content_digest, content_length):
+                    return target, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
+                target = UPLOAD_DIR / _managed_upload_target_name(
+                    f"retry-{uuid.uuid4().hex[:8]}-{file_name}", content_digest, upload_dir=UPLOAD_DIR,
+                )
+                _replace_file_with_retry(staged_path, target)
+            staged_path = None
+            _fsync_parent_directory(target)
+            return target, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
+        except OSError as exc:
+            exc.source_file = file_name
+            raise
+        finally:
+            if staged_path is not None:
+                try:
+                    staged_path.unlink()
+                except OSError:
+                    pass
+
     def _save_uploaded_file(self, payload: dict[str, Any]) -> Path:
         file_name = payload.get("fileName") or "upload.bin"
         file_data_base64 = payload.get("fileDataBase64")
@@ -11936,6 +12337,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         *,
         session: dict[str, Any] | None = None,
     ) -> list[Path]:
+        def checked(paths: list[Path]) -> list[Path]:
+            _validate_source_capacity(paths)
+            return paths
+
         reuse_session_sources = _coerce_bool(
             payload.get("reuseSessionSources")
             if "reuseSessionSources" in payload
@@ -11946,7 +12351,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             resolved_paths = _session_reextract_source_paths(session)
             if not resolved_paths:
                 raise FileNotFoundError("current session has no preserved source files available for re-extraction")
-            return resolved_paths
+            return checked(resolved_paths)
 
         file_payloads = payload.get("files")
         if isinstance(file_payloads, list) and file_payloads:
@@ -11961,7 +12366,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if not path.exists():
                     raise FileNotFoundError(f"sourcePath does not exist: {path}")
                 resolved_paths.append(path.resolve())
-            return resolved_paths
+            return checked(resolved_paths)
 
         source_paths = payload.get("sources") or payload.get("sourcePaths")
         if isinstance(source_paths, list) and source_paths:
@@ -11973,7 +12378,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if not path.exists():
                     raise FileNotFoundError(f"sourcePath does not exist: {path}")
                 resolved_paths.append(path.resolve())
-            return resolved_paths
+            return checked(resolved_paths)
 
         source_path = payload.get("source") or payload.get("sourcePath") or payload.get("source_path")
         if source_path:
@@ -11982,8 +12387,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 raise FileNotFoundError(f"sourcePath does not exist: {source_path}")
             if not path.exists():
                 raise FileNotFoundError(f"sourcePath does not exist: {path}")
-            return [path.resolve()]
-        return [self._save_uploaded_file(payload).resolve()]
+            return checked([path.resolve()])
+        return checked([self._save_uploaded_file(payload).resolve()])
 
     def _resolve_output_dir(self, payload: dict[str, Any], source_paths: list[Path]) -> Path:
         requested = payload.get("output_dir") or payload.get("outputDir")
@@ -12183,7 +12588,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             if export_cleanup_dir is not None:
                 _discard_staged_publish(export_cleanup_dir)
-            self._send_json(_export_error_payload(exc), status=HTTPStatus.BAD_REQUEST)
+            error_payload = _export_error_payload(exc)
+            self._send_json(error_payload, status=_export_error_status(exc, error_payload))
             return
 
         session = result["ui_session"]

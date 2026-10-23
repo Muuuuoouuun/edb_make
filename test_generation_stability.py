@@ -79,7 +79,8 @@ class TestPreviewFailureCleanup(unittest.TestCase):
             with patch.object(app_server, "run_problem_export", side_effect=fail_export):
                 handler._handle_export()
 
-            self.assertEqual(HTTPStatus.BAD_REQUEST, responses[0][1]["status"])
+            self.assertEqual(HTTPStatus.INSUFFICIENT_STORAGE, responses[0][1]["status"])
+            self.assertEqual("runtime_storage_full", responses[0][0]["code"])
             self.assertFalse((root / "preview").exists())
             self.assertEqual(b"previous-success", active.read_bytes())
 
@@ -114,7 +115,8 @@ class TestPreviewFailureCleanup(unittest.TestCase):
                 handler._handle_export()
 
             generate.assert_not_called()
-            self.assertEqual(HTTPStatus.BAD_REQUEST, responses[0][1]["status"])
+            self.assertEqual(HTTPStatus.CONFLICT, responses[0][1]["status"])
+            self.assertEqual("output_directory_exists", responses[0][0]["code"])
             self.assertEqual(b"previous-success", sentinel.read_bytes())
 
 

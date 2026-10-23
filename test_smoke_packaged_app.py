@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import os
 import hashlib
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 
-from scripts.smoke_packaged_app import _ProcessTreeGuard, _smoke_ui_stylesheets, _validate_ui_stylesheet
+from scripts.smoke_packaged_app import _ProcessTreeGuard, _smoke_ui_stylesheets, _validate_ui_stylesheet, _isolated_smoke_environment
 from scripts.verify_frontend_package import EXTRA_UI_STYLESHEETS
 
 
@@ -57,6 +58,30 @@ class TestPackagedStylesheetSmoke(unittest.TestCase):
 
 
 class TestPackagedSmokeProcessTree(unittest.TestCase):
+    def test_direct_script_loads_edb_parser_without_repository_on_pythonpath(self) -> None:
+        script = Path(__file__).resolve().parent / "scripts" / "smoke_packaged_app.py"
+        with tempfile.TemporaryDirectory() as unrelated_cwd:
+            result = subprocess.run(
+                [sys.executable, "-I", "-c",
+                 "import runpy, sys; ns = runpy.run_path(sys.argv[1]); "
+                 "assert callable(ns['parse_edb'])", str(script)],
+                cwd=unrelated_cwd, capture_output=True, text=True, timeout=15,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_windows_environment_case_does_not_break_python_free_launch(self) -> None:
+        for key in ("SystemRoot", "SYSTEMROOT", "systemroot"):
+            with self.subTest(key=key), patch.dict(os.environ, {
+                key: "C:/Windows", "PATH": "C:/Python311", "VIRTUAL_ENV": "C:/venv",
+                "PYTHONPATH": "C:/dev", "ANTHROPIC_API_KEY": "test-placeholder",
+            }, clear=True):
+                environment = _isolated_smoke_environment(Path("app-home"), Path("empty"), windows=True)
+                self.assertEqual("C:/Windows", environment["SYSTEMROOT"])
+                self.assertNotIn("Python311", environment["PATH"])
+                self.assertIn("System32", environment["PATH"])
+                for name in ("VIRTUAL_ENV", "PYTHONPATH", "ANTHROPIC_API_KEY"):
+                    self.assertNotIn(name, environment)
+
     def test_unicode_space_cwd_and_clean_process_exit(self) -> None:
         with tempfile.TemporaryDirectory(prefix="edb-smoke-test-") as raw_temp:
             launch_dir = Path(raw_temp) / "한글 경로 with spaces" / "실행 위치"
