@@ -9,8 +9,9 @@ unhwp==0.5.1
 rhwp-python==0.7.0
 six
 
-# Optional OCR package only. Requires separate Tesseract installation on Windows.
-# pytesseract
+# Gallery photo labels use local OCR. Tesseract + kor/eng language data must
+# also be installed on the machine (or use the optional PaddleOCR path).
+pytesseract>=0.3.13,<0.4
 
 # Optional heavier OCR path.
 # paddleocr

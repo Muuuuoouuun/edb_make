@@ -3,6 +3,7 @@
   "policy": "Every requirements-release.lock component must have an exact-version entry and reviewed license disposition.",
   "components": [
     {"name":"Pillow","version":"12.2.0","licenseExpression":"MIT-CMU","disposition":"notice"},
+    {"name":"pytesseract","version":"0.3.13","licenseExpression":"Apache-2.0","disposition":"notice"},
     {"name":"PyMuPDF","version":"1.27.2.3","licenseExpression":"LicenseRef-Artifex-Commercial-OR-AGPL-3.0-only","disposition":"legal-approval-required"},
     {"name":"numpy","version":"2.4.6","licenseExpression":"BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0","disposition":"notice"},
     {"name":"opencv-python-headless","version":"4.13.0.92","licenseExpression":"Apache-2.0","disposition":"notice"},

@@ -264,7 +264,7 @@ def extract_pdf_problem_markers(page, scale, data=None):
             ).strip()
             if looks_like_pdf_print_date_header(text):
                 continue
-            match = re.match(r"^([1-9][0-9]?)\.\s*", text)
+            match = re.match(r"^([1-9][0-9]{0,2})\.\s*", text)
             if not match:
                 continue
             if looks_like_decimal_continuation(text, match):
@@ -3349,13 +3349,13 @@ def _extract_pdf_problem_markers(
             ).strip()
             if _looks_like_pdf_print_date_header(text):
                 continue
-            match = re.match(r"^([1-9][0-9]?)\.\s*", text)
+            match = re.match(r"^([1-9][0-9]{0,2})\.\s*", text)
             if not match:
                 continue
             if _looks_like_decimal_continuation(text, match):
                 continue
             number = int(match.group(1))
-            if not 1 <= number <= 99:
+            if not 1 <= number <= 999:
                 continue
             bbox = line.get("bbox")
             if not bbox or len(bbox) != 4:
@@ -3493,7 +3493,7 @@ def _looks_like_pdf_problem_stem_line(text: str) -> bool:
         return False
     if _looks_like_pdf_print_date_header(normalized):
         return False
-    if re.match(r"^([1-9][0-9]?)\.\s*", normalized):
+    if re.match(r"^([1-9][0-9]{0,2})\.\s*", normalized):
         return False
     if normalized[:1] in {"①", "②", "③", "④", "⑤", "ㄱ", "ㄴ", "ㄷ", "ㄹ", "◦", "○", "*"}:
         return False

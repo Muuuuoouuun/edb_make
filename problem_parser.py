@@ -1,4 +1,4 @@
-"""Parser-only entry point for the web trial.
+"""Parser-only entry point for the web trial and desktop gallery.
 
 Runs the same recognition path as the desktop problem export but stops
 after problem crops: no placement, EDB, or UI session, and board cutouts only on request.
@@ -151,6 +151,13 @@ class ParsedProblem:
     image: Image.Image
     # Chalk-on-transparent cutout (RGBA) when parse_problems(render_board_assets=True); else None.
     board_image: Image.Image | None = None
+    # The question's owning page can differ from the first crop region when a
+    # shared passage from an earlier page is prepended to the question image.
+    source_page_id: str | None = None
+    # Keep recognition evidence separate from generated titles/sequence numbers.
+    number_source: str = ""
+    passage_role: str = ""
+    passage_range: dict[str, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -220,6 +227,8 @@ def _leading_pages_copy(source: Path, work_dir: Path, max_pages: int | None) -> 
     ``garbage=4`` matters: without it PyMuPDF keeps the dropped pages' fonts
     and the copy stays as large as the original.
     """
+    if source.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+        return source, 1
     with fitz.open(source, filetype="pdf") as doc:
         page_count = doc.page_count
         if max_pages is None or page_count <= max_pages:
@@ -239,8 +248,9 @@ def parse_problems(
     ocr_mode: str = "none",
     ai_fallback_config: dict[str, Any] | None = None,
     render_board_assets: bool = False,
+    preserve_source_pixels: bool = False,
 ) -> ParseResult:
-    """Recognize problems in a text-layer PDF.
+    """Recognize problems in a PDF or a single supported image.
 
     The trial calls this with the defaults: no OCR, no AI, no board rendering.
     The bench oracle passes ``ocr_mode="auto"`` and a forced AI repair config
@@ -255,6 +265,9 @@ def parse_problems(
     returned as ``ParsedProblem.board_image`` (RGBA); the trial's board preview
     is composited from them. Off by default: it costs about +60% of the asset
     stage and +0.1-0.35 GB RSS.
+
+    ``preserve_source_pixels`` skips board-oriented edge/badge cleanup for the
+    desktop's plain PNG crops, where colored figures can resemble page chrome.
     """
     # Deferred so requests rejected by inspect_pdf never load OpenCV and the pipeline.
     from build_problem_board_edb import build_pages, build_problem_entries, resolve_subject
@@ -288,9 +301,14 @@ def parse_problems(
         work_dir,
         LayoutTemplate(name="academy-default"),
         render_board_assets=render_board_assets,
+        preserve_source_pixels=preserve_source_pixels,
         timings=timing_ms,
     )
     load_started_at = time.perf_counter()
+    metadata_by_id = {
+        problem.unit_id: problem.metadata
+        for page in page_models for problem in page.problems
+    }
     problems = [
         ParsedProblem(
             problem_id=entry.problem_id,
@@ -300,6 +318,10 @@ def parse_problems(
             risk_flags=list(entry.risk_flags),
             image=_load_detached_rgb(entry.crop_path),
             board_image=_load_detached_rgba(entry.board_render_path) if render_board_assets else None,
+            source_page_id=entry.source_page_id,
+            number_source=str(metadata_by_id.get(entry.problem_id, {}).get("problem_number_source") or ""),
+            passage_role=str(metadata_by_id.get(entry.problem_id, {}).get("passage_role") or ""),
+            passage_range=metadata_by_id.get(entry.problem_id, {}).get("passage_range"),
         )
         for entry in entries
     ]

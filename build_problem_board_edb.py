@@ -6301,6 +6301,7 @@ def build_problem_entries(
     render_board_assets: bool = True,
     preserve_media_mode: str = "off",
     trim_page_whitespace: bool = False,
+    preserve_source_pixels: bool = False,
     timings: dict[str, int] | None = None,
 ) -> list[ProblemEntry]:
     if preserve_media_mode not in {"auto", "grayscale", "off"}:
@@ -6545,7 +6546,7 @@ def build_problem_entries(
                         block_by_id,
                         min_bottom=min_bottom,
                     )
-                if not explicit_passage_range:
+                if not explicit_passage_range and not preserve_source_pixels:
                     merged_box = _trim_box_bottom_page_chrome(
                         prepared_page.image,
                         merged_box,
@@ -6626,7 +6627,7 @@ def build_problem_entries(
                         chalk_color=chalk_color,
                         text_payload=text_fallback_payload or None,
                         text_title=problem_title if text_fallback_payload else None,
-                        trim_edge_guides=not preserve_page_as_is,
+                        trim_edge_guides=not preserve_page_as_is and not preserve_source_pixels,
                         preserve_horizontal_bounds=passage_fragment_problem,
                         protect_horizontal_bounds=trusted_pdf_marker_problem,
                         horizontal_safe_padding_px=(
@@ -6639,7 +6640,7 @@ def build_problem_entries(
                             prepared_page.source_path,
                             problem_title,
                         ),
-                        pad_edges=not preserve_page_as_is,
+                        pad_edges=not preserve_page_as_is and not preserve_source_pixels,
                         subject=problem.subject,
                         source_hints=(
                             prepared_page.source_path,
