@@ -10809,14 +10809,16 @@ def plan_classin_limited_edb_parts(
         tail_weights=tails,
         balance_min_part_count=3,
     )
-    # A visually short document can still contain many expensive image records.
-    # Keep encoding and the resulting EDB payload bounded independently of the
-    # ClassIn page limit.
-    ranges = [
-        (chunk_start, min(chunk_start + MAX_ENCODED_ENTRIES_PER_PART, end), estimated_pages)
-        for start, end, estimated_pages in ranges
-        for chunk_start in range(start, end, MAX_ENCODED_ENTRIES_PER_PART)
-    ]
+    # A long PDF may have many inexpensive-looking placements while each page
+    # still carries an image. Bound those batches without changing the part
+    # layout of a single source page split into many small problem entries.
+    distinct_source_pages = len({id(entry.prepared_page) for entry in problem_entries if entry.prepared_page is not None})
+    if distinct_source_pages > MAX_ENCODED_ENTRIES_PER_PART:
+        ranges = [
+            (chunk_start, min(chunk_start + MAX_ENCODED_ENTRIES_PER_PART, end), estimated_pages)
+            for start, end, estimated_pages in ranges
+            for chunk_start in range(start, end, MAX_ENCODED_ENTRIES_PER_PART)
+        ]
     part_count = len(ranges)
     parts: list[dict[str, Any]] = []
     for part_index, (start, end, estimated_pages) in enumerate(ranges, start=1):
