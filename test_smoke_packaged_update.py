@@ -18,7 +18,7 @@ class NativeUpdateHarness(unittest.TestCase):
     def test_pinned_bytes_required_before_install(self):
         with TemporaryDirectory() as temp:
             path = Path(temp) / 'Setup.exe'; path.write_bytes(b'original')
-            self.assertEqual(path, require_artifact(path, hashlib.sha256(b'original').hexdigest()))
+            self.assertEqual(path.resolve(), require_artifact(path, hashlib.sha256(b'original').hexdigest()))
             path.write_bytes(b'changed')
             with self.assertRaisesRegex(RuntimeError, 'pinned'):
                 require_artifact(path, hashlib.sha256(b'original').hexdigest())
