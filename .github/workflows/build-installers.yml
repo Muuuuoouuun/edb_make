@@ -1,5 +1,9 @@
 name: Build Installers
 
+permissions:
+  contents: read
+  actions: read
+
 on:
   workflow_dispatch:
     inputs:
@@ -20,6 +24,11 @@ on:
         required: true
         type: boolean
         default: true
+      verify_update_from_028:
+        description: "Verify real PIN/download/install/restart from the pinned 0.2.8 test build"
+        required: false
+        type: boolean
+        default: false
       license_compliance_approved:
         description: "Confirm distribution rights/notices were reviewed for AGPL and other bundled dependencies"
         required: true
@@ -449,6 +458,43 @@ jobs:
           MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
           RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
 
+      - name: Verify actual PIN update from 0.2.8 on macOS
+        if: inputs.verify_update_from_028
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          MACOS_ARCH: ${{ inputs.macos_arch }}
+        run: |
+          baseline_root="$RUNNER_TEMP/edb-update-baseline"
+          if [[ "$MACOS_ARCH" == "x64" ]]; then
+            baseline_run=39938897913
+            baseline_sha=6a8a871bbbb882286dcf3d66967c1ce8d9c852b90781a9cc1b98b1faea0fb829
+          else
+            baseline_run=39938842927
+            baseline_sha=fbc7a74f466e83b13ffb1b488a1de9d653e77204505b4f9361c93fb7d6098970
+          fi
+          gh run download "$baseline_run" --repo "$GITHUB_REPOSITORY" --name macos-installer --dir "$baseline_root"
+          .venv/bin/python -m unittest -q test_smoke_packaged_update test_windows_update_helper_diagnostics
+          target_sha="$(.venv/bin/python -c 'import hashlib; print(hashlib.file_digest(open("dist/ClassInEDBMVP-macOS.dmg", "rb"), "sha256").hexdigest())')"
+          .venv/bin/python scripts/smoke_packaged_update.py \
+            --platform macos --arch "$MACOS_ARCH" \
+            --baseline-artifact "$baseline_root/ClassInEDBMVP-macOS.dmg" \
+            --baseline-version 0.2.8 --baseline-sha256 "$baseline_sha" \
+            --target-artifact dist/ClassInEDBMVP-macOS.dmg \
+            --target-version "$RELEASE_VERSION" --target-sha256 "$target_sha" \
+            --output dist/update-smoke.json
+
+      - name: Preserve macOS updater diagnostics
+        if: ${{ always() && inputs.verify_update_from_028 }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-update-diagnostics
+          path: |
+            dist/update-smoke.json
+            dist/update-smoke-logs
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Enforce public macOS trust policy
         if: inputs.production_release
         run: |
@@ -487,6 +533,7 @@ jobs:
             dist/macos-release-evidence.json
             dist/package-size.json
             dist/release-metadata
+            dist/update-smoke.json
 
   windows:
     name: Windows Setup
@@ -807,6 +854,63 @@ jobs:
           WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
           RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
 
+      - name: Audit shipped PIN and update channel configuration
+        if: inputs.verify_update_from_028
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EDB_AUDIT_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
+        run: |
+          $auditRoot = Join-Path $env:RUNNER_TEMP "edb-update-config-audit"
+          New-Item -ItemType Directory -Force -Path $auditRoot | Out-Null
+          $oldInstaller = Join-Path $auditRoot "ClassInEDBMVP-0.2.4-Setup.exe"
+          .\.venv\Scripts\python.exe -c "import subprocess,sys; f=open(sys.argv[1],'wb'); subprocess.run(['gh','api','-H','Accept: application/octet-stream',sys.argv[2]],stdout=f,check=True)" $oldInstaller "repos/$env:GITHUB_REPOSITORY/releases/assets/647652086"
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the original 0.2.4 draft installer" }
+          if ((Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne "462a7d00d4511dba2ec0969cfeff2de7e8cc1cfd0d8a5e2d83ce6060898b412e") {
+            throw "Original 0.2.4 installer SHA-256 mismatch"
+          }
+          $oldInstallDir = Join-Path $auditRoot "installed original 0.2.4"
+          $install = Start-Process -FilePath $oldInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="' + $oldInstallDir + '"')) -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Original 0.2.4 configuration inspection install failed" }
+          .\.venv\Scripts\python.exe scripts\audit_packaged_update_config.py $oldInstallDir --output dist\update-config-0.2.4.json
+          if ($LASTEXITCODE -ne 0) { throw "Original updater configuration audit failed" }
+          .\.venv\Scripts\python.exe scripts\audit_packaged_update_config.py dist\ClassInEDBMVP --output dist\update-config-target.json
+          if ($LASTEXITCODE -ne 0) { throw "Target updater configuration audit failed" }
+
+      - name: Verify actual PIN update from 0.2.8 on Windows
+        if: inputs.verify_update_from_028
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $baselineRoot = Join-Path $env:RUNNER_TEMP "edb-update-baseline"
+          gh run download 39938842927 --repo $env:GITHUB_REPOSITORY --name windows-installer --dir $baselineRoot
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the pinned update baseline" }
+          .\.venv\Scripts\python.exe -m unittest -q test_smoke_packaged_update test_windows_update_helper_diagnostics
+          if ($LASTEXITCODE -ne 0) { throw "Native updater guard regressions failed" }
+          $targetSha = (Get-FileHash -LiteralPath "dist\ClassInEDBMVP-Setup.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          .\.venv\Scripts\python.exe scripts\smoke_packaged_update.py `
+            --platform windows --arch x64 `
+            --baseline-artifact (Join-Path $baselineRoot "ClassInEDBMVP-Setup.exe") `
+            --baseline-version 0.2.8 --baseline-sha256 1c6e85a9a4be4640cd0490901754db9ec1938d0eca0ab53d0bfe6b91f73a9b53 `
+            --target-artifact dist\ClassInEDBMVP-Setup.exe `
+            --target-version $env:RELEASE_VERSION --target-sha256 $targetSha `
+            --output dist\update-smoke.json
+          if ($LASTEXITCODE -ne 0) { throw "Actual PIN update transition failed" }
+
+      - name: Preserve Windows updater diagnostics
+        if: ${{ always() && inputs.verify_update_from_028 }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-update-diagnostics
+          path: |
+            dist/update-smoke.json
+            dist/update-smoke-logs
+            dist/update-config-*.json
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Enforce public Windows Authenticode trust policy
         if: inputs.production_release
         shell: pwsh
@@ -860,6 +964,8 @@ jobs:
             dist/windows-release-evidence.json
             dist/package-size.json
             dist/release-metadata
+            dist/update-smoke.json
+            dist/update-config-*.json
 
   update-feed:
     name: Update Feed

@@ -7,6 +7,7 @@ from test_ui_home_flows import NODE_SETUP, run_node
 
 UPDATE_SETUP = NODE_SETUP + r"""
 const pendingRequests = [];
+const fetchOptions = [];
 const busyStates = [];
 const storedInfo = [];
 const toasts = [];
@@ -21,7 +22,7 @@ const sandbox = {
   updateCheckInFlightRef: { current: false },
   setUpdateBusy: value => busyStates.push(value),
   setUpdateInfo: value => storedInfo.push(value),
-  fetchAppUpdateStatus: () => new Promise((resolve, reject) => pendingRequests.push({ resolve, reject })),
+  fetchAppUpdateStatus: options => { fetchOptions.push(options); return new Promise((resolve, reject) => pendingRequests.push({ resolve, reject })); },
   showToast: message => toasts.push(message),
   showSimpleErrorToast: (error, message) => errors.push({ error, message }),
   isUpdateArchitectureMismatch: () => false,
@@ -89,6 +90,7 @@ class TestUiUpdateEntry(unittest.TestCase):
           assert.equal(sandbox.updateCheckInFlightRef.current, true);
           assert.deepEqual(busyStates, [true]);
           assert.equal(pendingRequests.length, 1);
+          assert.equal(fetchOptions[0].refresh, true, 'explicit checks must bypass the server status cache');
           assert.equal(await sandbox.checkForUpdates(), null);
           assert.equal(await sandbox.checkForUpdates({ silent: true }), null);
           assert.equal(pendingRequests.length, 1, 'repeat clicks must share the in-flight guard');
@@ -104,6 +106,7 @@ class TestUiUpdateEntry(unittest.TestCase):
           assert.equal(errors.length, 0);
           const second = sandbox.checkForUpdates({ silent: true });
           assert.equal(pendingRequests.length, 2, 'a completed check must permit a fresh check');
+          assert.equal(fetchOptions[1].refresh, false, 'silent modal checks may reuse the cached feed');
           pendingRequests[1].resolve({ channelStatus: 'up_to_date' });
           await second;
           assert.equal(toasts.length, 1, 'silent refresh must not add a toast');
@@ -121,7 +124,9 @@ class TestUiUpdateEntry(unittest.TestCase):
           assert.equal(errors.length, 1);
           assert.equal(errors[0].error, failure);
           assert.equal(errors[0].message, '업데이트 확인 실패');
-          assert.equal(storedInfo.length, 0);
+          assert.equal(storedInfo.length, 1);
+          assert.equal(storedInfo[0].channelStatus, 'error');
+          assert.equal(storedInfo[0].updateAvailable, false);
           assert.equal(sandbox.updateCheckInFlightRef.current, false);
           assert.deepEqual(busyStates, [true, false]);
           const silent = sandbox.checkForUpdates({ silent: true });
@@ -130,6 +135,8 @@ class TestUiUpdateEntry(unittest.TestCase):
           assert.equal(errors.length, 1, 'silent checks must not display failure toasts');
           assert.equal(toasts.length, 0);
           assert.equal(warnings.length, 2);
+          assert.equal(storedInfo.length, 2, 'silent failures must also replace stale update availability');
+          assert.match(storedInfo[1].error, /still unavailable/);
           assert.equal(sandbox.updateCheckInFlightRef.current, false);
           assert.deepEqual(busyStates, [true, false, true, false]);
           const retry = sandbox.checkForUpdates();
@@ -209,6 +216,100 @@ class TestUiUpdateEntry(unittest.TestCase):
         assert.equal(processed.length, 0);
         assert.equal(render({ file: null }), null);
         """)
+
+class TestUpdateInstallSafety(unittest.TestCase):
+    def test_explicit_update_fetch_requests_cache_refresh_but_default_fetch_does_not(self):
+        run_node(NODE_SETUP + r"""
+        const urls=[];
+        const sandbox={fetch:async url=>{urls.push(url);return {};},expectOkJson:async()=>({ok:true})};
+        vm.createContext(sandbox);
+        vm.runInContext(section('async function fetchAppUpdateStatus(', 'function appUpdateArtifactSnapshot('),sandbox);
+        (async()=>{
+          await sandbox.fetchAppUpdateStatus();await sandbox.fetchAppUpdateStatus({refresh:false});
+          await sandbox.fetchAppUpdateStatus({refresh:true});
+          assert.deepEqual(urls,['/api/app/update','/api/app/update','/api/app/update?refresh=1']);
+        })().catch(error=>{console.error(error);process.exitCode=1;});
+        """)
+
+    def test_dirty_processing_placement_and_active_review_block_install_requests(self):
+        run_node(NODE_SETUP + r"""
+        const sandbox = {
+          useCallback:fn=>fn, updateBusy:false,updateInstallBusy:false,
+          updateInfo:{updateAvailable:true,automaticUpdateEnabled:true,automaticUpdateReady:true,
+            downloadUrl:'https://example.test/setup.exe',sha256:'a'.repeat(64),sizeBytes:123,
+            arch:'x64',latest:{version:'0.2.5',artifactType:'setup-exe'}},
+          reviewEditorActive:false,recognitionReview:null,sessionEditState:{dirty:false},
+          hasPendingSessionConflict:false,pendingFiles:[],initialSessionLoaded:true,initialSessionError:null,
+          loading:null,mutating:false,hasRunningBackgroundJobs:false,confirmingRecognition:false,
+          publishBusy:false,downloadBusy:false,resetBusy:false,mutatingRef:{current:false},
+          checkForUpdates:async()=>null,setUpdateInstallBusy:()=>{},showSimpleErrorToast:()=>{},
+          messages:[],showToast:message=>sandbox.messages.push(message),calls:[],
+          postAppUpdateInstall:async(...args)=>{sandbox.calls.push(args);return {targetVersion:'0.2.5'};},
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(section('function appUpdateArtifactSnapshot(', 'async function postAppUpdateInstall('),sandbox);
+        const setup = section('  const updateInstallBlockedReason =', '  const sourcePageCount =')
+          + section('  const installUpdateVersion =', '  const refreshSessionHistory =')
+          + '\nglobalThis.install=installUpdateVersion;globalThis.blocked=updateInstallBlockedReason;';
+        const derive = ()=>vm.runInContext('{'+setup+'}',sandbox);
+        (async()=>{
+          for (const changes of [{sessionEditState:{dirty:true}}, {reviewEditorActive:true}, {recognitionReview:{}}]) {
+            sandbox.sessionEditState={dirty:false};sandbox.reviewEditorActive=false;sandbox.recognitionReview=null;
+            Object.assign(sandbox,changes);derive();
+            assert.ok(sandbox.blocked);assert.equal(await sandbox.install('1234',sandbox.appUpdateArtifactSnapshot(sandbox.updateInfo)),false);
+          }
+          assert.equal(sandbox.calls.length,0,'unsaved changes and review drafts cannot request app shutdown');
+          sandbox.reviewEditorActive=false;sandbox.recognitionReview=null;derive();
+          const snapshot=sandbox.appUpdateArtifactSnapshot(sandbox.updateInfo);
+          assert.equal(await sandbox.install('1234',snapshot),true);
+          assert.equal(sandbox.calls.length,1);assert.equal(sandbox.calls[0][1],snapshot);
+          sandbox.updateInfo.latest.version='0.2.6';
+          assert.equal(await sandbox.install('1234',snapshot),false,'confirmation must not authorize changed update metadata');
+          assert.equal(sandbox.calls.length,1);assert.match(sandbox.messages.at(-1),/정보가 바뀌/);
+        })().catch(error=>{console.error(error);process.exitCode=1;});
+        """)
+
+    def test_confirmation_freezes_artifact_before_prompt_and_post_includes_snapshot(self):
+        run_node(NODE_SETUP + r"""
+        const info={downloadUrl:'https://example.test/a.exe',sha256:'a'.repeat(64),sizeBytes:23,arch:'x64',latest:{version:'0.2.5',artifactType:'setup-exe'}};
+        const sandbox={updatePinDraft:'1234',updateAutomaticReady:true,updateActionBusy:false,
+          updateInstallSafetyReason:'',updateInfo:info,setUpdatePinDraft:()=>{},requests:[],prompts:[],
+          onInstallUpdate:(...args)=>{sandbox.requests.push(args);return false;},
+          window:{confirm:message=>{sandbox.prompts.push(message);info.latest.version='0.2.6';info.sha256='b'.repeat(64);return true;}},
+          fetch:async(url,options)=>{sandbox.wire={url,body:JSON.parse(options.body)};return {};},expectOkJson:async()=>({}),
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(section('function appUpdateArtifactSnapshot(', 'function isUpdateArchitectureMismatch(')
+          +section('  const requestUpdateInstall =', '  const remainingReviewItems =')+'\nglobalThis.request=requestUpdateInstall;',sandbox);
+        (async()=>{
+          sandbox.request();await flush();
+          assert.match(sandbox.prompts[0],/0\.2\.5/);
+          const [pin,snapshot]=sandbox.requests[0];
+          assert.equal(Object.isFrozen(snapshot),true);assert.equal(snapshot.version,'0.2.5');assert.equal(snapshot.sha256,'a'.repeat(64));
+          await sandbox.postAppUpdateInstall(pin,snapshot);
+          assert.deepEqual(sandbox.wire.body,{pin:'1234',expectedUpdate:{version:'0.2.5',downloadUrl:'https://example.test/a.exe',sha256:'a'.repeat(64),sizeBytes:23,arch:'x64',artifactType:'setup-exe'}});
+          sandbox.cropChanged=true;sandbox.updateInstallBlockedReason='';
+          vm.runInContext('{'+section('  const updateInstallSafetyReason =','  const requestUpdateInstall =')
+            +'globalThis.updateInstallSafetyReason=updateInstallSafetyReason;}',sandbox);
+          assert.match(sandbox.updateInstallSafetyReason,/자르기 여백/);sandbox.request();
+          assert.equal(sandbox.prompts.length,1,'blocked draft must not even ask for installation confirmation');
+        })().catch(error=>{console.error(error);process.exitCode=1;});
+        """)
+
+    def test_failed_silent_recheck_replaces_old_green_state_and_invalid_config_is_error(self):
+        run_node(UPDATE_SETUP + r"""
+        (async()=>{
+          storedInfo.push({channelStatus:'up_to_date',updateAvailable:true,automaticUpdateReady:true});
+          const checking=sandbox.checkForUpdates({silent:true});
+          pendingRequests[0].reject(new Error('network disconnected'));await checking;
+          const state=storedInfo.at(-1);
+          assert.equal(state.channelStatus,'error');assert.equal(state.updateAvailable,false);
+          assert.equal(state.automaticUpdateReady,false);assert.equal(state.downloadUrl,undefined);
+          assert.match(state.error,/network disconnected/);assert.equal(toasts.length,0);
+          assert.match(vm.runInContext("updateStatusToast({channelStatus:'invalid_config',error:'bad hash'})",sandbox),/설정 오류.*bad hash/);
+        })().catch(error=>{console.error(error);process.exitCode=1;});
+        """)
+
 
 class TestUnifiedUpdateDialog(unittest.TestCase):
     def test_modal_restores_focus_traps_tab_and_does_not_send_edit_shortcuts_to_canvas(self):

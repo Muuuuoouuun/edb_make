@@ -9909,7 +9909,7 @@ function SidePanel({
   onClassinReviewComplete,
   onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
+  updateInfo, updateBusy, updateInstallBusy, updateInstallBlockedReason = '', onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
@@ -10172,6 +10172,8 @@ function SidePanel({
               ? '미설정'
               : updateStatus === 'error'
                 ? '오류'
+                : updateStatus === 'invalid_config'
+                  ? '설정 오류'
                 : updateStatus === 'invalid_feed'
                   ? '피드 오류'
                   : updateStatus === 'unsupported_platform'
@@ -10183,27 +10185,31 @@ function SidePanel({
         ? 'accent'
         : updateStatus === 'up_to_date'
           ? 'ok'
-          : updateStatus === 'error' || updateStatus === 'invalid_feed'
+          : updateStatus === 'error' || updateStatus === 'invalid_feed' || updateStatus === 'invalid_config'
             ? 'danger'
             : 'neutral';
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
-  const requestUpdateInstall = () => {
-    if (!updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
-    const targetVersion = updateInfo?.latest?.version || '새 버전';
-    const confirmed = window.confirm(
-      `${targetVersion} 업데이트를 설치할까요?\n검증이 끝나면 앱이 종료되고 현재 설치 위치에 적용됩니다.`
-    );
-    if (!confirmed) return;
-    Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
-      if (installed) setUpdatePinDraft('');
-    });
-  };
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
+  const updateInstallSafetyReason = updateInstallBlockedReason || (cropChanged
+    ? '업데이트 전에 변경한 자르기 여백을 적용하거나 초기화해 주세요.'
+    : '');
+  const requestUpdateInstall = () => {
+    if (!updatePinDraft || !updateAutomaticReady || updateActionBusy || updateInstallSafetyReason) return;
+    const expectedUpdate = appUpdateArtifactSnapshot(updateInfo);
+    const targetVersion = expectedUpdate.version || '새 버전';
+    const confirmed = window.confirm(
+      `${targetVersion} 업데이트를 설치할까요?\n검증이 끝나면 앱이 종료되고 현재 설치 위치에 적용됩니다.`
+    );
+    if (!confirmed) return;
+    Promise.resolve(onInstallUpdate?.(updatePinDraft, expectedUpdate)).then(installed => {
+      if (installed) setUpdatePinDraft('');
+    });
+  };
   const remainingReviewItems = items.filter(candidate=>candidate.id!==item?.id && ['check_needed','failed'].includes(candidate.reviewStatus));
   const remainingApplyIds = item ? [item.id,...remainingReviewItems.map(candidate=>candidate.id)] : [];
   const showItemConfirmBar = view !== 'review' && !!item && (itemNeedsCheck || panelSaveState.dirty);
@@ -10406,6 +10412,7 @@ function SidePanel({
         </button>
       </div>
       {updateInfo?.updateAvailable && <div className="update-install-card">
+        {updateInstallSafetyReason && <div className="runtime-note warn" role="status">{updateInstallSafetyReason}</div>}
         <div className="lbl">
           관리자 PIN 업데이트
           <small>
@@ -10428,7 +10435,7 @@ function SidePanel({
             disabled={updateActionBusy || !updateAutomaticEnabled}
             onChange={event => setUpdatePinDraft(event.target.value.replace(/\D/g, '').slice(0, 12))}
             onKeyDown={event => {
-              if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
+              if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy || updateInstallSafetyReason) return;
               event.preventDefault();
               requestUpdateInstall();
             }}
@@ -10448,14 +10455,14 @@ function SidePanel({
         <button
           className="btn primary update-install-button"
           type="button"
-          disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4}
-          title={!updateAutomaticEnabled
+          disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4 || Boolean(updateInstallSafetyReason)}
+          title={updateInstallSafetyReason || (!updateAutomaticEnabled
             ? '이 배포본에 업데이트 PIN이 설정되지 않았습니다'
             : !updateInfo?.updateAvailable
               ? '업데이트 확인 후 새 버전이 있을 때 사용할 수 있습니다'
               : !updateAutomaticReady
                 ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
-                : 'PIN 확인 후 새 버전을 덮어씁니다'}
+                : 'PIN 확인 후 새 버전을 덮어씁니다')}
           onClick={requestUpdateInstall}
         >
           {updateInstallBusy ? '검증·설치 준비 중...' : '관리자 PIN 확인 후 업데이트'}
@@ -16076,17 +16083,29 @@ async function submitBugReport(payload){
   return expectOkJson(resp, '리포트 전송 실패');
 }
 
-async function fetchAppUpdateStatus(){
-  const resp = await fetch('/api/app/update');
+async function fetchAppUpdateStatus({ refresh = false } = {}){
+  const resp = await fetch(refresh ? '/api/app/update?refresh=1' : '/api/app/update');
   const json = await expectOkJson(resp, '업데이트 확인 실패');
   return json;
 }
 
-async function postAppUpdateInstall(pin){
+function appUpdateArtifactSnapshot(info){
+  const latest = info?.latest || {};
+  return Object.freeze({
+    version: String(latest.version || ''),
+    downloadUrl: String(info?.downloadUrl || latest.downloadUrl || ''),
+    sha256: String(info?.sha256 || latest.sha256 || ''),
+    sizeBytes: Number(info?.sizeBytes || latest.sizeBytes || 0),
+    arch: String(latest.arch || info?.arch || ''),
+    artifactType: String(latest.artifactType || ''),
+  });
+}
+
+async function postAppUpdateInstall(pin, expectedUpdate){
   const resp = await fetch('/api/app/update/install', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin }),
+    body: JSON.stringify({ pin, expectedUpdate }),
   });
   return expectOkJson(resp, '자동 업데이트 시작 실패');
 }
@@ -16583,6 +16602,19 @@ function App(){
     () => deriveSessionEditState(session, items, fileName, boardColumns, layoutGapMode, mutating || publishBusy || confirmingRecognition),
     [session, items, fileName, boardColumns, layoutGapMode, mutating, publishBusy, confirmingRecognition]
   );
+  const updateInstallBlockedReason = reviewEditorActive || recognitionReview
+    ? '업데이트 전에 현재 영역 편집을 적용하거나 취소해 주세요.'
+    : sessionEditState.dirty
+      ? '업데이트 전에 수업의 배치·처리 방식 변경을 저장해 주세요.'
+      : hasPendingSessionConflict
+        ? '최신 수업 상태를 확인한 뒤 업데이트해 주세요.'
+        : pendingFiles.length
+          ? '대기 중인 자료를 처리하거나 목록에서 제거한 뒤 업데이트해 주세요.'
+          : !initialSessionLoaded && !initialSessionError
+            ? '저장된 수업을 불러오는 작업이 끝난 뒤 업데이트해 주세요.'
+            : loading || mutating || hasRunningBackgroundJobs || confirmingRecognition || publishBusy || downloadBusy || resetBusy
+              ? '진행 중인 작업이 끝난 뒤 업데이트해 주세요.'
+              : '';
   const sourcePageCount = session?.pages?.length || 0;
   const recognitionDisabledReason = !sourcePageCount
     ? '문항을 찾을 원본 페이지가 없습니다.'
@@ -16821,6 +16853,7 @@ function App(){
     if (info.channelStatus === 'not_configured') return '업데이트 채널이 아직 설정되지 않았습니다';
     if (info.channelStatus === 'unsupported_platform') return '이 OS용 업데이트가 아직 없습니다';
     if (info.channelStatus === 'invalid_feed') return `업데이트 피드 오류: ${info.error || '채널 정보가 올바르지 않습니다'}`;
+    if (info.channelStatus === 'invalid_config') return `업데이트 설정 오류: ${info.error || '배포 설정이 올바르지 않습니다'}`;
     if (info.channelStatus === 'error') return `업데이트 확인 오류: ${info.error || '채널 확인 실패'}`;
     return '업데이트 정보를 확인했습니다';
   };
@@ -16830,11 +16863,17 @@ function App(){
     updateCheckInFlightRef.current = true;
     setUpdateBusy(true);
     try {
-      const info = await fetchAppUpdateStatus();
+      const info = await fetchAppUpdateStatus({ refresh: !options.silent });
       setUpdateInfo(info);
       if (!options.silent) showToast(updateStatusToast(info));
       return info;
     } catch (e) {
+      setUpdateInfo({
+        channelStatus: 'error',
+        updateAvailable: false,
+        automaticUpdateReady: false,
+        error: `업데이트 정보를 다시 확인하지 못했습니다. ${e?.message || '연결 상태를 확인한 뒤 다시 시도해 주세요.'}`,
+      });
       if (!options.silent) showSimpleErrorToast(e, '업데이트 확인 실패');
       console.warn('[board] update check skipped:', e.message);
       return null;
@@ -16872,9 +16911,13 @@ function App(){
     }
   }, [updateInfo, updateBusy, checkForUpdates, showSimpleErrorToast, showToast]);
 
-  const installUpdateVersion = useCallback(async (pin) => {
+  const installUpdateVersion = useCallback(async (pin, expectedUpdate) => {
     if (updateBusy || updateInstallBusy) {
       showToast('다른 업데이트 작업이 끝난 뒤 다시 눌러 주세요');
+      return false;
+    }
+    if (updateInstallBlockedReason || mutatingRef.current) {
+      showToast(updateInstallBlockedReason || '진행 중인 작업이 끝난 뒤 업데이트해 주세요.');
       return false;
     }
     const normalizedPin = String(pin || '').trim();
@@ -16895,9 +16938,13 @@ function App(){
       showToast('자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다');
       return false;
     }
+    if (!expectedUpdate || JSON.stringify(expectedUpdate) !== JSON.stringify(appUpdateArtifactSnapshot(info))) {
+      showToast('업데이트 정보가 바뀌었습니다. 다시 확인한 뒤 설치해 주세요.');
+      return false;
+    }
     setUpdateInstallBusy(true);
     try {
-      const result = await postAppUpdateInstall(normalizedPin);
+      const result = await postAppUpdateInstall(normalizedPin, expectedUpdate);
       const targetVersion = result?.targetVersion || info?.latest?.version || '새 버전';
       showToast(`${targetVersion} 업데이트 준비 완료 · 앱을 종료한 뒤 자동으로 다시 엽니다`);
       return true;
@@ -16919,6 +16966,7 @@ function App(){
     updateInfo,
     updateBusy,
     updateInstallBusy,
+    updateInstallBlockedReason,
     checkForUpdates,
     showSimpleErrorToast,
     showToast,
@@ -19580,6 +19628,7 @@ function App(){
           selectedIds={selectedProblemIds}
           updateBusy={updateBusy}
           updateInstallBusy={updateInstallBusy}
+          updateInstallBlockedReason={updateInstallBlockedReason}
           onCheckUpdate={checkForUpdates}
           onOpenUpdate={openUpdatePage}
           onInstallUpdate={installUpdateVersion}

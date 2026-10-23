@@ -1947,19 +1947,28 @@ WINDOWS_UPDATE_HELPER = r'''param(
   [Parameter(Mandatory=$true)][string]$LogFile
 )
 $ErrorActionPreference = 'Stop'
+# Keep installer diagnostics separate: Inno Setup owns its /LOG file.
+$installerLog = Join-Path (Split-Path -Parent $LogFile) 'update-install.log'
 try {
+  Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Updater waiting for the app to exit.'
   $parent = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue
   if ($parent -and -not $parent.WaitForExit(120000)) {
     throw "app did not exit within 120 seconds; update cancelled"
   }
-  $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $LogFile + '"'))
+  $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $installerLog + '"'))
   $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
   if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
     throw "installer exited with code $($process.ExitCode)"
   }
-  if (Test-Path -LiteralPath $AppExecutable -PathType Leaf) {
-    Start-Process -FilePath $AppExecutable
+  if (-not (Test-Path -LiteralPath $AppExecutable -PathType Leaf)) {
+    throw "installer completed but the updated executable is missing: $AppExecutable"
   }
+  Start-Process -FilePath $AppExecutable -ErrorAction Stop
+  Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Updated app restart requested.'
+} catch {
+  # Detached helpers have no console. Persist errors before propagating failure.
+  Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value ('Update failed: ' + $_.Exception.ToString()) -ErrorAction SilentlyContinue
+  throw
 } finally {
   Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
 }
@@ -2028,37 +2037,42 @@ def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> di
             recovery_steps=["쓰기 가능한 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
         )
     helper_path = artifact_path.parent / "apply-windows-update.ps1"
-    log_path = artifact_path.parent / "update-install.log"
+    log_path = artifact_path.parent / "update-helper.log"
     helper_path.write_text(WINDOWS_UPDATE_HELPER, encoding="utf-8-sig")
     creation_flags = 0
     creation_flags |= int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     creation_flags |= int(getattr(subprocess, "DETACHED_PROCESS", 0))
-    subprocess.Popen(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(helper_path),
-            "-ParentPid",
-            str(os.getpid()),
-            "-Installer",
-            str(artifact_path),
-            "-AppExecutable",
-            str(executable),
-            "-InstallDir",
-            str(executable.parent),
-            "-LogFile",
-            str(log_path),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=creation_flags,
-        close_fds=True,
-    )
+    # Capture PowerShell parse/startup errors as well as the helper's own log.
+    log_stream = (artifact_path.parent / "update-helper-process.log").open("ab")
+    try:
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(helper_path),
+                "-ParentPid",
+                str(os.getpid()),
+                "-Installer",
+                str(artifact_path),
+                "-AppExecutable",
+                str(executable),
+                "-InstallDir",
+                str(executable.parent),
+                "-LogFile",
+                str(log_path),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=log_stream,
+            stderr=subprocess.STDOUT,
+            creationflags=creation_flags,
+            close_fds=True,
+        )
+    finally:
+        log_stream.close()
     return {"platform": "windows", "targetName": executable.name, "restartScheduled": True}
 
 
@@ -2097,7 +2111,41 @@ def _discard_update_download(artifact_path: Path) -> None:
         _log_operation_exception("discard_failed_update_download", exc)
 
 
-def prepare_app_update(pin: Any) -> dict[str, Any]:
+def _validate_confirmed_update(status: dict[str, Any], expected: Any) -> None:
+    """Bind installation to the exact artifact the user confirmed."""
+    if not isinstance(expected, dict):
+        raise AppUpdateError(
+            "update_confirmation_required", "업데이트 정보를 다시 확인한 뒤 설치해 주세요.",
+            status=HTTPStatus.CONFLICT,
+        )
+    latest = status.get("latest") if isinstance(status.get("latest"), dict) else {}
+    url, _filename, artifact_type, size, digest = _update_artifact_details(status)
+    current = {
+        "version": str(latest.get("version") or "").strip(),
+        "downloadUrl": url,
+        "sha256": digest,
+        "sizeBytes": size,
+        "arch": _normalized_app_arch(latest.get("arch") or status.get("arch")),
+        "artifactType": artifact_type,
+    }
+    confirmed = {
+        "version": str(expected.get("version") or "").strip(),
+        "downloadUrl": _normalize_update_url(expected.get("downloadUrl")),
+        "sha256": _normalize_update_sha256(expected.get("sha256")),
+        "sizeBytes": expected.get("sizeBytes") if type(expected.get("sizeBytes")) is int else None,
+        "arch": _normalized_app_arch(expected.get("arch")),
+        "artifactType": str(expected.get("artifactType") or "").strip().lower(),
+    }
+    if confirmed != current:
+        raise AppUpdateError(
+            "update_target_changed",
+            "확인한 업데이트 버전 또는 설치 파일이 변경되었습니다. 다시 확인한 뒤 설치해 주세요.",
+            status=HTTPStatus.CONFLICT,
+            recovery_steps=["업데이트 확인을 다시 누른 뒤 버전 정보를 확인하고 PIN을 입력해 주세요."],
+        )
+
+
+def prepare_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, Any]:
     status = build_app_update_status()
     if not status.get("updateAvailable"):
         raise AppUpdateError("update_not_available", "설치할 새 버전이 없습니다.")
@@ -2112,6 +2160,8 @@ def prepare_app_update(pin: Any) -> dict[str, Any]:
     if _parse_update_pin_verifier(verifier) is None:
         raise AppUpdateError("invalid_update_pin_config", "업데이트 PIN 설정이 올바르지 않습니다.")
     _authorize_update_pin(pin, verifier)
+    if expected_update is not None:
+        _validate_confirmed_update(status, expected_update)
     _download_url, file_name, artifact_type, _expected_size, _expected_sha256 = _update_artifact_details(status)
     artifact_path = _download_update_artifact(status)
     try:
@@ -2130,14 +2180,14 @@ def prepare_app_update(pin: Any) -> dict[str, Any]:
     }
 
 
-def begin_app_update(pin: Any) -> dict[str, Any]:
+def begin_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, Any]:
     global _update_install_started
     if not _update_install_lock.acquire(blocking=False):
         raise AppUpdateError("update_install_busy", "다른 업데이트 요청을 처리하고 있습니다.")
     try:
         if _update_install_started:
             raise AppUpdateError("update_install_started", "업데이트가 이미 시작되었습니다.")
-        result = prepare_app_update(pin)
+        result = prepare_app_update(pin, expected_update=expected_update)
         _update_install_started = True
         return result
     finally:
@@ -10300,6 +10350,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(cached_runtime_diagnostics(force_refresh=force_refresh))
             return
         if parsed.path == "/api/app/update":
+            refresh = parse_qs(parsed.query).get("refresh", [""])[0].strip().lower()
+            if refresh in {"1", "true", "yes"}:
+                clear_app_update_status_cache()
             self._send_json(build_app_update_status())
             return
         if parsed.path == "/api/session/latest":
@@ -11922,8 +11975,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 status=HTTPStatus.BAD_REQUEST,
             )
             return
+        if not isinstance(payload.get("expectedUpdate"), dict):
+            self._send_json(
+                {"ok": False, "error": "업데이트 정보를 다시 확인한 뒤 설치해 주세요.",
+                 "code": "update_confirmation_required"},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         try:
-            result = begin_app_update(payload.get("pin"))
+            result = begin_app_update(payload.get("pin"), expected_update=payload["expectedUpdate"])
         except AppUpdateError as exc:
             response = {"ok": False, "error": str(exc), "code": exc.code}
             if exc.recovery_steps:
