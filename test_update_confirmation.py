@@ -96,3 +96,20 @@ def test_explicit_http_check_refreshes_backend_cache_but_regular_poll_reuses_it(
     assert [reply["latest"]["version"] for reply in replies] == ["0.2.9", "0.2.9", "0.2.10"]
     assert fetch.call_count == 2
     app.clear_app_update_status_cache()
+
+
+@pytest.mark.parametrize("platform,suffix,kind", [
+    ("windows", ".exe", "setup-exe"), ("macos", ".dmg", "dmg"), ("macos", ".zip", "zip"),
+])
+def test_legacy_feed_without_optional_artifact_type_accepts_browser_snapshot(platform, suffix, kind):
+    status = available_update()
+    status["platform"] = platform
+    status["latest"].update(downloadUrl="https://example.test/installer" + suffix, fileName="installer" + suffix)
+    expected = confirmation(status)
+    status["latest"].pop("artifactType")
+    expected["artifactType"] = ""
+    app._validate_confirmed_update(status, expected)
+    assert app._update_artifact_details(status)[2] == kind
+    expected["sha256"] = "b" * 64
+    with pytest.raises(app.AppUpdateError, match="변경"):
+        app._validate_confirmed_update(status, expected)

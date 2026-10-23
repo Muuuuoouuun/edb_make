@@ -2128,13 +2128,18 @@ def _validate_confirmed_update(status: dict[str, Any], expected: Any) -> None:
         "arch": _normalized_app_arch(latest.get("arch") or status.get("arch")),
         "artifactType": artifact_type,
     }
+    confirmed_type = str(expected.get("artifactType") or "").strip().lower()
+    if not confirmed_type and not str(latest.get("artifactType") or "").strip():
+        # Legacy feeds omit this optional field; the same validated file suffix
+        # must imply the same type for the browser snapshot and installation.
+        confirmed_type = artifact_type
     confirmed = {
         "version": str(expected.get("version") or "").strip(),
         "downloadUrl": _normalize_update_url(expected.get("downloadUrl")),
         "sha256": _normalize_update_sha256(expected.get("sha256")),
         "sizeBytes": expected.get("sizeBytes") if type(expected.get("sizeBytes")) is int else None,
         "arch": _normalized_app_arch(expected.get("arch")),
-        "artifactType": str(expected.get("artifactType") or "").strip().lower(),
+        "artifactType": confirmed_type,
     }
     if confirmed != current:
         raise AppUpdateError(
