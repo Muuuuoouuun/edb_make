@@ -2,6 +2,8 @@
 import hashlib
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -9,7 +11,7 @@ from unittest.mock import patch
 from types import SimpleNamespace
 import urllib.request
 
-from scripts.smoke_packaged_update import PrivateFeed, owned_macos_home, packaged_config_audit, pin_verifier, require_artifact, snapshot_files, verify_snapshot, verify_changed_confirmation, copy_from_dmg
+from scripts.smoke_packaged_update import PrivateFeed, owned_macos_home, packaged_config_audit, pin_verifier, require_artifact, snapshot_files, verify_snapshot, verify_changed_confirmation, copy_from_dmg, wait_for_ready
 
 
 class NativeUpdateHarness(unittest.TestCase):
@@ -165,3 +167,26 @@ class NativeRestartConfirmationGuards(unittest.TestCase):
                 with self.assertRaises(subprocess.TimeoutExpired):
                     copy_from_dmg(root / 'original.dmg', destination, mount)
             self.assertEqual('detach', call.call_args.args[0][1])
+
+
+class NativeOldProcessReaping(unittest.TestCase):
+    @unittest.skipIf(os.name == 'nt', 'POSIX zombie reaping regression')
+    def test_old_direct_child_is_reaped_while_waiting_for_native_restart(self):
+        child = subprocess.Popen([sys.executable, '-c', 'pass'])
+        def request(path, **_kwargs):
+            # Model the native helper: the new server cannot start until the
+            # old direct child is reaped and kill -0 stops seeing its PID.
+            reaped = child.returncode is not None
+            if path == '/api/health':
+                return 200, {'ok': True, 'pid': child.pid + 1 if reaped else child.pid}
+            return 200, {'currentVersion': '0.2.9' if reaped else '0.2.8'}
+        try:
+            with patch('scripts.smoke_packaged_update.api', side_effect=request):
+                health, status = wait_for_ready('0.2.9', previous_pid=child.pid, previous_process=child, timeout=3)
+            self.assertEqual(0, child.returncode)
+            self.assertNotEqual(child.pid, health['pid'])
+            self.assertEqual('0.2.9', status['currentVersion'])
+            with self.assertRaises(ChildProcessError):
+                os.waitpid(child.pid, os.WNOHANG)
+        finally:
+            child.wait(timeout=3)

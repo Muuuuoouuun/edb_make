@@ -144,9 +144,13 @@ def api(path, payload=None, *, timeout=30):
         return response.status, json.loads(response.read())
 
 
-def wait_for_ready(version, *, previous_pid=None, timeout=150):
+def wait_for_ready(version, *, previous_pid=None, previous_process=None, timeout=150):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        # The old macOS updater waits with kill -0. Reap our direct child as
+        # soon as it exits so its zombie PID cannot block the native helper.
+        if previous_process is not None:
+            previous_process.poll()
         try:
             _, health = api('/api/health', timeout=2)
             _, status = api('/api/app/update', timeout=4)
@@ -324,7 +328,7 @@ def run_transition(args, temp, app_home):
                 code, accepted = api('/api/app/update/install', {'pin': pin, 'expectedUpdate': expected}, timeout=180)
                 if code != 202 or not accepted.get('restartScheduled'):
                     raise RuntimeError('Correct PIN did not schedule native installation/restart')
-                new_health, new_status = wait_for_ready(args.target_version, previous_pid=old_pid, timeout=240)
+                new_health, new_status = wait_for_ready(args.target_version, previous_pid=old_pid, previous_process=process_tree.process, timeout=240)
                 new_pid = int(new_health['pid'])
                 deadline = time.monotonic() + 15
                 while pid_alive(old_pid) and time.monotonic() < deadline:
