@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import errno
 import hashlib
 import json
 import math
@@ -25,9 +26,11 @@ from PIL import Image, ImageOps
 
 from passage_detection import parse_shared_passage_range_header
 
+_PDF_RENDERER_IMPORT_ERROR = ""
 try:
-    import fitz  # type: ignore
-except ImportError:  # pragma: no cover
+    import pymupdf as fitz  # type: ignore
+except ImportError as exc:  # pragma: no cover
+    _PDF_RENDERER_IMPORT_ERROR = str(exc)
     fitz = None
 
 try:
@@ -49,7 +52,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-PDF_NORMALIZED_CACHE_VERSION = 3
+PDF_NORMALIZED_CACHE_VERSION = 5
 IMAGE_NORMALIZED_CACHE_VERSION = 2
 HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
@@ -137,18 +140,53 @@ class PreprocessOptions:
     max_dimension: int | None = None
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class PreparedPage:
     page_id: str
     source_path: str
     page_number: int
-    image: Image.Image
+    _image: Image.Image | None = field(repr=False)
     original_size: tuple[int, int]
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any]
+    disk_backed: bool
+
+    def __init__(self, page_id: str, source_path: str, page_number: int,
+                 image: Image.Image | None, original_size: tuple[int, int],
+                 metadata: dict[str, Any] | None = None):
+        self.page_id = page_id
+        self.source_path = source_path
+        self.page_number = page_number
+        self._image = image
+        self.original_size = original_size
+        self.metadata = metadata if metadata is not None else {}
+        self.disk_backed = image is None
+
+    @property
+    def image(self) -> Image.Image:
+        if self._image is None:
+            with Image.open(self.source_path) as source:
+                self._image = source.convert("RGB")
+        return self._image
+
+    @image.setter
+    def image(self, image: Image.Image) -> None:
+        self._image = image
+        # A caller replacing pixels owns an edited image; disk reload must not
+        # silently discard those edits.
+        self.disk_backed = False
+
+    def release_image(self) -> None:
+        # Eager, synthetic or edited images have no guaranteed disk backing.
+        if self.disk_backed and self._image is not None:
+            self._image.close()
+            self._image = None
 
     @property
     def size(self) -> tuple[int, int]:
-        return self.image.size
+        if self._image is not None:
+            return self._image.size
+        with Image.open(self.source_path) as source:
+            return source.size
 
 
 @dataclass(slots=True)
@@ -412,6 +450,11 @@ print(json.dumps(pages, ensure_ascii=True))
 
 
 def _iter_external_pymupdf_python_candidates() -> list[Path]:
+    # A PyInstaller executable is the app, not a Python interpreter. Packaged
+    # PDF handling must use the bundled renderer and never depend on a PC's
+    # development environment (or relaunch the app with Python's -c flag).
+    if getattr(sys, "frozen", False):
+        return []
     base_dir = Path(__file__).resolve().parent
     virtual_env = os.environ.get("VIRTUAL_ENV")
     raw_candidates: list[str | Path | None] = [
@@ -447,6 +490,12 @@ def _render_pdf_pages_with_external_pymupdf(
     *,
     dpi: int,
 ) -> list[NormalizedPageImage]:
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "설치된 앱의 PDF 렌더러를 불러오지 못했습니다. 최신 설치파일로 다시 설치해 주세요. "
+            "별도 Python 설치는 필요하지 않습니다. "
+            f"(bundled PyMuPDF: {_PDF_RENDERER_IMPORT_ERROR or 'unavailable'})"
+        )
     errors: list[str] = []
     for python_exe in _iter_external_pymupdf_python_candidates():
         command = [
@@ -504,33 +553,59 @@ def _render_pdf_pages_with_external_pymupdf(
     raise RuntimeError(f"PyMuPDF is required to render PDF pages ({detail})")
 
 
-def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160) -> list[NormalizedPageImage]:
-    source_path = Path(source)
-    target_dir = Path(output_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
+PDF_PROCESSING_BATCH_PAGES = 10
 
-    if fitz is None:
-        return _render_pdf_pages_with_external_pymupdf(source_path, target_dir, dpi=dpi)
 
-    if not source_path.is_file():
-        raise FileNotFoundError(f"PDF source file not found: {source_path}")
+class PdfPageProcessingError(RuntimeError):
+    def __init__(self, source_file: str | Path, page_start: int, page_end: int,
+                 cause: Exception, *, resource_exhausted: bool = False):
+        self.source_file = Path(source_file).name
+        self.page_start = page_start
+        self.page_end = page_end
+        self.cause = cause
+        self.code = "pdf_resource_exhausted" if resource_exhausted else "pdf_page_processing_failed"
+        reason = "메모리가 부족합니다" if resource_exhausted else "PDF 페이지를 처리하지 못했습니다"
+        super().__init__(f"{self.source_file} · {page_start}~{page_end}페이지: {reason}. ({cause})")
 
-    try:
-        doc = fitz.open(source_path)
-    except Exception as exc:
-        raise ValueError(f"Failed to open PDF document {source_path}: {exc}") from exc
+
+def _is_pdf_resource_error(exc: Exception) -> bool:
+    if isinstance(exc, MemoryError) or (
+        isinstance(exc, OSError)
+        and (exc.errno == errno.ENOMEM or getattr(exc, "winerror", None) in {8, 14, 1455})
+    ):
+        return True
+    if cv2 is not None and isinstance(exc, cv2.error):
+        # cv2.error derives directly from Exception, not RuntimeError. Native
+        # allocation failures have StsNoMem (-4); argument/assertion errors
+        # must not become capacity errors just because their text mentions it.
+        native_code = getattr(exc, "code", None)
+        if native_code is not None:
+            return native_code == -4
+        # Some Python wrappers retain only the native diagnostic string.
+        return re.search(r"\(-4:\s*insufficient memory\)", str(exc), re.IGNORECASE) is not None
+    return isinstance(exc, RuntimeError) and any(
+        token in str(exc).lower()
+        for token in ("out of memory", "cannot allocate", "malloc failed", "failed to allocate")
+    )
+
+
+def _render_pdf_document_pages(doc: Any, source_path: Path, target_dir: Path,
+                               dpi: int, page_start: int, page_end: int) -> list[NormalizedPageImage]:
     pages: list[NormalizedPageImage] = []
+    page_index = page_start
     try:
         scale = dpi / 72.0
         matrix = fitz.Matrix(scale, scale)
-        for page_index in range(doc.page_count):
+        for page_index in range(page_start, page_end):
             page = doc.load_page(page_index)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
             pix.save(out_path.as_posix())
             try:
                 page_dict = page.get_text("dict")
-            except Exception:
+            except Exception as exc:
+                if _is_pdf_resource_error(exc):
+                    raise
                 page_dict = {}
             pages.append(
                 NormalizedPageImage(
@@ -542,18 +617,71 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                     height_px=pix.height,
                     metadata={
                         "source_type": "pdf",
+                        "pdf_batch_start_page": page_start + 1,
+                        "pdf_batch_end_page": page_end,
                         "dpi": dpi,
                         "pdf_page_width_pt": float(page.rect.width),
                         "pdf_page_height_pt": float(page.rect.height),
                         "pdf_problem_markers": _extract_pdf_problem_markers(page, scale, page_dict),
+                        "pdf_badge_markers": _extract_pdf_badge_markers(page, scale, page_dict),
                         "pdf_text_stem_markers": _extract_pdf_text_stem_markers(page, scale, page_dict),
                         "pdf_text_lines": _extract_pdf_text_lines(page, scale, page_dict),
                         "pdf_media_regions": _extract_pdf_media_regions(page, scale, page_dict),
                     },
                 )
             )
+    except Exception as exc:
+        # The caller retries allocation failures with smaller PDF documents.
+        if _is_pdf_resource_error(exc):
+            raise
+        raise PdfPageProcessingError(source_path, page_index + 1, page_index + 1, exc) from exc
+    return pages
+
+
+def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160) -> list[NormalizedPageImage]:
+    source_path = Path(source)
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if fitz is None:
+        return _render_pdf_pages_with_external_pymupdf(source_path, target_dir, dpi=dpi)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"PDF source file not found: {source_path}")
+    try:
+        document = fitz.open(source_path)
+    except Exception as exc:
+        raise ValueError(f"Failed to open PDF document {source_path}: {exc}") from exc
+
+    def render_range(first: int, last: int) -> list[NormalizedPageImage]:
+        try:
+            # Reopen the original for each sequential range, then close its
+            # native page/resource cache. Copying pages with insert_pdf can
+            # expose hidden answer layers or alter form/annotation appearance.
+            # Only this range is loaded; original catalog/OCG state survives.
+            with fitz.open(source_path) as chunk:
+                return _render_pdf_document_pages(chunk, source_path, target_dir, dpi, first, last)
+        except Exception as exc:
+            if not _is_pdf_resource_error(exc):
+                if isinstance(exc, PdfPageProcessingError):
+                    raise
+                raise PdfPageProcessingError(source_path, first + 1, last, exc) from exc
+            if last - first <= 1:
+                raise PdfPageProcessingError(source_path, first + 1, last, exc, resource_exhausted=True) from exc
+            # Do not retain failed pixmaps/page dictionaries in traceback
+            # frames while retrying the smaller PDFs.
+            exc.__traceback__ = None
+        middle = first + (last - first) // 2
+        return render_range(first, middle) + render_range(middle, last)
+
+    pages: list[NormalizedPageImage] = []
+    try:
+        if document.needs_pass:
+            raise ValueError(f"PDF document is password protected: {source_path.name}")
+        if document.page_count < 1:
+            raise ValueError(f"PDF document has no pages: {source_path.name}")
+        for first in range(0, document.page_count, PDF_PROCESSING_BATCH_PAGES):
+            pages.extend(render_range(first, min(first + PDF_PROCESSING_BATCH_PAGES, document.page_count)))
     finally:
-        doc.close()
+        document.close()
     return pages
 
 
@@ -2873,9 +3001,16 @@ def _normalize_pdf_rendered_pages(
         normalized.metadata["document_like"] = True
         return normalized
 
-    worker_count = _resolve_preprocess_page_worker_count(len(rendered))
+    worker_count = 1 if len(rendered) > PDF_PROCESSING_BATCH_PAGES else _resolve_preprocess_page_worker_count(len(rendered))
     if worker_count <= 1:
-        normalized_pages = [_normalize(page) for page in rendered]
+        normalized_pages = []
+        for page in rendered:
+            try:
+                normalized_pages.append(_normalize(page))
+            except Exception as exc:
+                if _is_pdf_resource_error(exc):
+                    raise PdfPageProcessingError(source_path, page.page_index + 1, page.page_index + 1, exc, resource_exhausted=True) from exc
+                raise
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
             normalized_pages = list(executor.map(_normalize, rendered))
@@ -3244,6 +3379,112 @@ def _extract_pdf_problem_markers(
     return markers
 
 
+def _extract_pdf_badge_markers(
+    page: Any,
+    scale: float,
+    data: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Extract two-digit number badges ("01", "12") that head each problem.
+
+    Workbook-style PDFs often print the problem number alone in a colored
+    badge without a trailing period, so ``_extract_pdf_problem_markers`` never
+    sees them. These are only candidates: a lone two-digit line can also be a
+    table cell or fraction, so ``_promote_pdf_badge_markers_when_numeric_missing``
+    accepts them only when the whole document forms one clean sequence.
+    """
+    import re
+
+    markers: list[dict[str, Any]] = []
+    if data is None:
+        try:
+            data = page.get_text("dict")
+        except Exception:
+            return markers
+
+    for block in data.get("blocks") or []:
+        if not isinstance(block, dict):
+            continue
+        for line in block.get("lines") or []:
+            if not isinstance(line, dict):
+                continue
+            text = "".join(
+                str(span.get("text") or "")
+                for span in line.get("spans") or []
+                if isinstance(span, dict)
+            ).strip()
+            if not re.fullmatch(r"0[1-9]|[1-9][0-9]", text):
+                continue
+            bbox = line.get("bbox")
+            if not bbox or len(bbox) != 4:
+                continue
+            left, top, right, bottom = [float(value) * scale for value in bbox]
+            markers.append(
+                {
+                    "number": int(text),
+                    "marker_kind": "badge",
+                    "text": text,
+                    "bbox": {
+                        "left": left,
+                        "top": top,
+                        "right": right,
+                        "bottom": bottom,
+                        "width": max(0.0, right - left),
+                        "height": max(0.0, bottom - top),
+                    },
+                }
+            )
+
+    return markers
+
+
+PDF_BADGE_MARKER_MIN_COUNT = 3
+PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE = 0.8
+
+
+def _promote_pdf_badge_markers_when_numeric_missing(pages: list[NormalizedPageImage]) -> bool:
+    """Fill badge-only pages without replacing trusted ``N.`` markers.
+
+    Validate the effective numbering of the whole document: numeric markers
+    take precedence on their page, and badges are candidates only on pages
+    without numeric markers. Repeated/backwards/sparse runs remain unpromoted.
+    """
+    effective_pages: list[list[dict[str, Any]]] = []
+    badge_pages: list[tuple[NormalizedPageImage, list[dict[str, Any]]]] = []
+    for page in pages:
+        numeric = page.metadata.get("pdf_problem_markers")
+        badges = page.metadata.get("pdf_badge_markers")
+        numeric = list(numeric) if isinstance(numeric, list) else []
+        badges = list(badges) if isinstance(badges, list) else []
+        if numeric:
+            effective_pages.append(numeric)
+        else:
+            effective_pages.append(badges)
+            if badges:
+                badge_pages.append((page, badges))
+
+    numbers = [int(marker["number"]) for markers in effective_pages for marker in markers]
+    if not badge_pages or len(numbers) < PDF_BADGE_MARKER_MIN_COUNT:
+        return False
+    if len(set(numbers)) != len(numbers):
+        return False
+    previous_page_max = 0
+    for markers in effective_pages:
+        if not markers:
+            continue
+        page_numbers = [int(marker["number"]) for marker in markers]
+        if min(page_numbers) <= previous_page_max:
+            return False
+        previous_page_max = max(page_numbers)
+    span = max(numbers) - min(numbers) + 1
+    if len(numbers) / span < PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE:
+        return False
+
+    for page, badges in badge_pages:
+        page.metadata["pdf_problem_markers"] = badges
+        page.metadata["pdf_problem_marker_source"] = "badge"
+    return True
+
+
 def _looks_like_pdf_problem_stem_line(text: str) -> bool:
     import re
 
@@ -3580,6 +3821,7 @@ def _transform_pdf_text_geometry(
 ) -> None:
     for key in (
         "pdf_problem_markers",
+        "pdf_badge_markers",
         "pdf_text_stem_markers",
         "pdf_text_lines",
         "pdf_media_regions",
@@ -3959,6 +4201,7 @@ def prepare_pages(
             return cached_pdf_pages
 
         rendered = render_pdf_pages(source_path, normalized_dir / "rendered", dpi=dpi)
+        _promote_pdf_badge_markers_when_numeric_missing(rendered)
         normalized_pages = _normalize_pdf_rendered_pages(
             source_path,
             rendered,
@@ -4222,12 +4465,16 @@ def prepare_source_pages(
         max_dimension=max_dimension,
     )
     prepared: list[PreparedPage] = []
+    # Even short PDFs must not retain decoded rasters across a many-file
+    # queue; processing one source at a time alone would still retain them in
+    # the accumulated source_results list.
+    disk_backed = Path(path).suffix.lower() == ".pdf" or len(normalized_pages) > PDF_PROCESSING_BATCH_PAGES
     for page in normalized_pages:
-        image = Image.open(page.normalized_path).convert("RGB")
+        image = None if disk_backed else Image.open(page.normalized_path).convert("RGB")
         original_source_path = page.source_path
         if page.metadata.get("source_type") == "pdf" and page.metadata.get("source_pdf_path"):
             original_source_path = str(page.metadata["source_pdf_path"])
-        if max_dimension:
+        if max_dimension and image is not None:
             width, height = image.size
             scale = min(max_dimension / max(width, height), 1.0)
             if scale < 1.0:

@@ -870,7 +870,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("updateArchitectureNotice(info)", source)
         self.assertIn("disabled={updateActionBusy || !updateDownloadUrl}", side_panel)
         self.assertIn("if (updateBusy)", source)
-        self.assertIn("fetch('/api/app/update')", source)
+        self.assertIn("fetch(refresh ? '/api/app/update?refresh=1' : '/api/app/update')", source)
         self.assertIn("fetch('/api/system/open-url'", source)
 
     def test_shipped_bundle_contains_app_update_controls(self) -> None:
@@ -880,7 +880,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("updateActionBusy||!updateDownloadUrl", compact_bundle)
         self.assertIn("invalid_feed", bundle)
         self.assertIn("피드 오류", bundle)
-        self.assertIn("fetch('/api/app/update')", bundle)
+        self.assertIn("fetch(refresh?'/api/app/update?refresh=1':'/api/app/update')", bundle)
         self.assertIn("fetch('/api/system/open-url'", bundle)
 
     def test_review_summary_surfaces_hwp_cache_hits(self) -> None:

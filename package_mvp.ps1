@@ -400,6 +400,7 @@ if ($HasPyInstaller) {
     $PyInstallerArgs = @(
         "--noconfirm",
         "--clean",
+        "--additional-hooks-dir", (Join-Path $ProjectRoot "packaging\pyinstaller_hooks"),
         $ModeArg,
         $WindowArg,
         "--distpath", $ResolvedOutputDir,

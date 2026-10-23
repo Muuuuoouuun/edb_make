@@ -19,11 +19,19 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+
+if not __package__:
+    # Direct invocation puts only scripts/ on sys.path. The independent EDB
+    # parser lives at the repository root, including on clean native runners.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from inspect_edb import parse_edb
 
 try:
     from .verify_frontend_package import EXTRA_UI_STYLESHEETS
 except ImportError:  # pragma: no cover - direct script execution
-    from verify_frontend_package import EXTRA_UI_STYLESHEETS
+    from scripts.verify_frontend_package import EXTRA_UI_STYLESHEETS
 
 
 _WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -406,10 +414,23 @@ def _validate_update_metadata(payload: dict[str, Any], *, expected_app_id: str =
             raise RuntimeError(f"update metadata {field} must be boolean")
 
 
-def _smoke_edb_export(base_url: str, source: Path, output_dir: Path) -> dict[str, Any]:
+def _smoke_edb_export(
+    base_url: str, source: Path, output_dir: Path, *, input_intent: str = "page-as-is",
+    expected_records: int | None = None, publish_after_import: bool = False,
+    expected_problem_numbers: list[int] | None = None, minimum_parts: int = 1,
+) -> dict[str, Any]:
     resolved_source = source.expanduser().resolve()
     if not resolved_source.is_file():
         raise FileNotFoundError(f"EDB smoke source does not exist: {resolved_source}")
+    source_bytes = resolved_source.read_bytes()
+    upload_request = urllib.request.Request(
+        f"{base_url}/api/uploads", data=source_bytes, method="POST",
+        headers={"Origin": base_url, "Content-Type": "application/octet-stream", "X-File-Name": quote(resolved_source.name)},
+    )
+    with urllib.request.urlopen(upload_request, timeout=30.0) as response:
+        uploaded = json.loads(response.read().decode("utf-8"))
+    if uploaded.get("ok") is not True or uploaded.get("sha256") != hashlib.sha256(source_bytes).hexdigest():
+        raise RuntimeError(f"packaged upload failed integrity verification: {uploaded}")
     resolved_output = output_dir.resolve()
     session_state = _json_request(f"{base_url}/api/session/latest")
     session_revision = session_state.get("sessionRevision")
@@ -423,13 +444,14 @@ def _smoke_edb_export(base_url: str, source: Path, output_dir: Path) -> dict[str
         method="POST",
         timeout=180.0,
         request_payload={
-            "files": [str(resolved_source)],
+            "files": [uploaded["sourcePath"]],
             "outputDir": str(resolved_output),
-            "inputIntent": "page-as-is",
-            "contentTarget": "full-page",
+            "inputIntent": input_intent,
+            "contentTarget": "full-page" if input_intent == "page-as-is" else "problem",
+            "pdfDpi": 72,
             "ocr": "off",
             "preview": False,
-            "exportEdb": True,
+            "exportEdb": not publish_after_import,
             "recordMode": "image-only",
             "edbName": "Windows_Packaged_Smoke.edb",
             "expectedSessionRevision": session_revision,
@@ -438,7 +460,24 @@ def _smoke_edb_export(base_url: str, source: Path, output_dir: Path) -> dict[str
     )
     if payload.get("ok") is not True:
         raise RuntimeError(f"packaged EDB smoke export did not report ok=true: {payload}")
-    edb_path = Path(str(payload.get("edbPath") or "")).expanduser().resolve()
+    if publish_after_import:
+        state = _json_request(f"{base_url}/api/session/latest")
+        session = state.get("session") or {}
+        payload = _json_request(
+            f"{base_url}/api/session/publish", method="POST", timeout=180.0,
+            request_payload={
+                "order": [problem["id"] for problem in session.get("problems", [])],
+                "excluded": [], "edbName": "Packaged_UI_Publish.edb",
+                "expectedSessionRevision": state.get("sessionRevision"),
+                "expectedSessionEpoch": state.get("sessionEpoch"),
+            },
+        )
+        if payload.get("ok") is not True:
+            raise RuntimeError(f"packaged UI publish failed: {payload}")
+    response_parts = (payload.get("edbParts") or (payload.get("publishSummary") or {}).get("edbParts")
+                      or (payload.get("session") or {}).get("edbParts") or [])
+    primary_path = payload.get("edbPath") or (response_parts[0].get("edbPath") if response_parts else "")
+    edb_path = Path(str(primary_path)).expanduser().resolve()
     if not edb_path.is_file() or edb_path.suffix.lower() != ".edb":
         raise RuntimeError(f"packaged EDB smoke export did not create an EDB file: {edb_path}")
     if not edb_path.is_relative_to(resolved_output):
@@ -451,9 +490,37 @@ def _smoke_edb_export(base_url: str, source: Path, output_dir: Path) -> dict[str
     record_count = int(validation.get("recordCountActual") or 0)
     if record_count < 1:
         raise RuntimeError(f"packaged EDB smoke export contains no validated records: {validation}")
-    edb_parts = payload.get("edbParts")
+    if expected_records is not None and record_count != expected_records:
+        raise RuntimeError(f"packaged PDF export expected {expected_records} records, found {record_count}")
+    edb_parts = response_parts
     if not isinstance(edb_parts, list) or not edb_parts:
         raise RuntimeError("packaged EDB smoke export omitted EDB part metadata")
+    # Read every part independently, including parts after the primary file.
+    verified_parts = []
+    actual_records = 0
+    for part in edb_parts:
+        part_path = Path(str(part.get("edbPath") or "")).resolve()
+        if not part_path.is_file() or not part_path.is_relative_to(resolved_output):
+            raise RuntimeError(f"missing or unexpected EDB part: {part_path}")
+        parsed = parse_edb(part_path)
+        if not 1 <= parsed.page_count_hint <= 50:
+            raise RuntimeError(f"EDB part exceeds ClassIn's 50-page limit: {part_path}")
+        if parsed.record_count_actual != int(part.get("recordCountActual") or 0):
+            raise RuntimeError(f"EDB part record count does not match its bytes: {part_path}")
+        actual_records += parsed.record_count_actual
+        verified_parts.append({"fileName": part_path.name, "records": parsed.record_count_actual,
+                               "pageCount": parsed.page_count_hint,
+                               "sha256": hashlib.sha256(part_path.read_bytes()).hexdigest()})
+    if actual_records != record_count:
+        raise RuntimeError("EDB parts lost or duplicated records relative to the export result")
+    if len(edb_parts) < minimum_parts:
+        raise RuntimeError(f"packaged PDF export expected at least {minimum_parts} EDB parts")
+    problem_numbers = None
+    if expected_problem_numbers is not None:
+        state = _json_request(f"{base_url}/api/session/latest")
+        problem_numbers = [problem.get("problemNumber") for problem in (state.get("session") or {}).get("problems", [])]
+        if problem_numbers != expected_problem_numbers:
+            raise RuntimeError(f"packaged PDF question numbers changed: {problem_numbers}")
     return {
         "fileName": edb_path.name,
         "bytes": edb_path.stat().st_size,
@@ -461,7 +528,69 @@ def _smoke_edb_export(base_url: str, source: Path, output_dir: Path) -> dict[str
         "recordCount": record_count,
         "partCount": len(edb_parts),
         "pageCountHint": int(validation.get("pageCountHint") or 0),
+        "parts": verified_parts,
+        **({"problemNumbers": problem_numbers} if problem_numbers is not None else {}),
     }
+
+
+def _smoke_pdf_exports(base_url: str, workspace: Path) -> list[dict[str, Any]]:
+    # Fixtures are created by the build/test interpreter. The app receives only
+    # PDFs, with no usable Python on PATH and no developer venv to fall back to.
+    import pymupdf
+
+    results = []
+    for name, page_count, badges in (
+        ("badge-16", 4, True), ("mixed-numbering", 4, False),
+        ("raster-5", 5, False), ("text-23", 23, False), ("page-stack-60", 60, False),
+    ):
+        source = workspace / f"PDF 한글 {name}.pdf"
+        with pymupdf.open() as document:
+            for page_index in range(page_count):
+                page = document.new_page(width=600, height=800)
+                if badges:
+                    for slot, (x, y) in enumerate(((60, 120), (330, 120), (60, 470), (330, 470))):
+                        number = page_index * 4 + slot + 1
+                        page.insert_text((x, y), f"{number:02d}", fontsize=10)
+                        page.insert_text((x + 30, y), "category label", fontsize=9)
+                        page.draw_rect(pymupdf.Rect(x, y + 20, x + 200, y + 150), color=(0, 0, 0))
+                elif name == "mixed-numbering":
+                    page.insert_text((60, 120), "1. Real question" if page_index == 0 else f"{page_index + 1:02d}", fontsize=12)
+                    page.draw_rect(pymupdf.Rect(60, 150, 500, 400), color=(0, 0, 0))
+                elif name.startswith("raster"):
+                    # An image-only PDF must render even without a text layer/OCR.
+                    from PIL import Image, ImageDraw
+                    import io
+                    image = Image.new("RGB", (300, 400), "white")
+                    ImageDraw.Draw(image).text((30, 40), f"Scanned page {page_index + 1}", fill="black")
+                    data = io.BytesIO()
+                    image.save(data, format="PNG")
+                    page.insert_image(page.rect, stream=data.getvalue())
+                else:
+                    page.insert_text((60, 120), f"PDF page {page_index + 1}", fontsize=16)
+            document.save(source)
+        result = _smoke_edb_export(
+            base_url, source, workspace / f"PDF 출력 {name}",
+            input_intent="multi-problem" if badges or name == "mixed-numbering" else "page-as-is",
+            expected_records=16 if badges else page_count,
+            publish_after_import=name == "text-23",
+            expected_problem_numbers=[1, 2, 3, 4] if name == "mixed-numbering" else None,
+            minimum_parts=2 if name == "page-stack-60" else 1,
+        )
+        result.update(fixture=name, sourcePageCount=page_count)
+        results.append(result)
+    return results
+
+
+def _isolated_smoke_environment(app_home: Path, empty_path: Path, *, windows: bool = os.name == "nt") -> dict[str, str]:
+    environment = {key.upper() if windows else key: value for key, value in os.environ.items()}
+    environment["EDB_APP_HOME"] = str(app_home)
+    environment["PATH"] = str(empty_path)
+    if windows and environment.get("SYSTEMROOT"):
+        environment["PATH"] += ";" + str(Path(environment["SYSTEMROOT"]) / "System32")
+    for variable in ("VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH", "EDB_PYMUPDF_PYTHON",
+                     "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        environment.pop(variable, None)
+    return environment
 
 
 def smoke_packaged_executable(
@@ -493,11 +622,9 @@ def smoke_packaged_executable(
         app_home = unicode_workspace / "사용자 데이터 ClassIn EDB"
         launch_directory.mkdir(parents=True)
         log_path = unicode_workspace / "packaged app.log"
-        environment = dict(os.environ)
-        environment["EDB_APP_HOME"] = str(app_home)
-        environment.pop("GEMINI_API_KEY", None)
-        environment.pop("GOOGLE_API_KEY", None)
-        environment.pop("OPENAI_API_KEY", None)
+        empty_path = unicode_workspace / "no external Python"
+        empty_path.mkdir()
+        environment = _isolated_smoke_environment(app_home, empty_path)
         with log_path.open("wb") as log_handle:
             process_tree = _ProcessTreeGuard.launch(
                 command,
@@ -529,6 +656,9 @@ def smoke_packaged_executable(
                 diagnostics = _json_request(f"{base_url}/api/runtime-diagnostics")
                 if diagnostics.get("ok") is not True:
                     raise RuntimeError(f"runtime diagnostics did not report ok=true: {diagnostics}")
+                renderer = diagnostics.get("pdfRenderer") or {}
+                if renderer.get("available") is not True or renderer.get("bundled") is not True:
+                    raise RuntimeError(f"packaged PDF renderer unavailable: {renderer}")
                 ui_bytes = _bytes_request(f"{base_url}/")
                 if b"<!doctype html" not in ui_bytes[:512].lower():
                     raise RuntimeError("packaged UI root did not return the expected HTML shell")
@@ -567,6 +697,7 @@ def smoke_packaged_executable(
                         + ", ".join(missing_runtime_dirs)
                     )
 
+                pdf_exports = _smoke_pdf_exports(base_url, unicode_workspace)
                 edb_export = None
                 if edb_source is not None:
                     edb_export = _smoke_edb_export(
@@ -602,6 +733,8 @@ def smoke_packaged_executable(
                     "isolatedUnicodeAppHome": True,
                     "cleanShutdown": True,
                     "cleanProcessTree": True,
+                    "externalPythonOnPath": False,
+                    "pdfExports": pdf_exports,
                 }
                 if edb_export is not None:
                     result["edbExport"] = edb_export

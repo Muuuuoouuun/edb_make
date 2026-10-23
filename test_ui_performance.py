@@ -210,17 +210,18 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn('decoding="async"', review_stage)
         self.assertIn("scrollbar-gutter: stable", board)
 
-    def test_large_upload_is_rejected_before_base64_encoding(self) -> None:
+    def test_large_upload_streams_files_before_submitting_export_metadata(self) -> None:
         post_export = self.source.split("async function postExport", 1)[1]
         post_export = post_export.split("function formatApiError", 1)[0]
 
-        self.assertIn("const MAX_EXPORT_JSON_BYTES = 64 * 1024 * 1024", self.source)
-        self.assertIn("function estimatedExportPayloadBytes", self.source)
+        self.assertIn("const MAX_EXPORT_FILE_BYTES = 512 * 1024 * 1024", self.source)
+        self.assertIn("const MAX_EXPORT_BATCH_BYTES = 2 * 1024 * 1024 * 1024", self.source)
         self.assertIn("function assertExportPayloadFits", self.source)
         self.assertLess(
             post_export.index("assertExportPayloadFits(files)"),
-            post_export.index("Promise.all(files.map"),
+            post_export.index("uploadSourceFiles(files, options)"),
         )
+        self.assertNotIn("fileToBase64", post_export)
         self.assertIn("파일을 나누어 등록하거나 PDF를 압축해 주세요", self.source)
         self.assertIn("`${fallbackMessage} · 파일을 나누어 등록하세요`", self.source)
 

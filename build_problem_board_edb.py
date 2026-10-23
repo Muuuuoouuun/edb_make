@@ -65,7 +65,7 @@ from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from page_tiling import PageTilingOptions, tile_page_columns
 from passage_quality import assess_passage_crop_quality
 from placement_engine import place_problems, normalize_placement_extra_slots
-from preprocess import PreparedPage, prepare_source_pages
+from preprocess import PDF_PROCESSING_BATCH_PAGES, PdfPageProcessingError, PreparedPage, _is_pdf_resource_error, prepare_source_pages
 from raster_media import detect_color_media_regions, stage2_media_regions
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
 
@@ -1938,7 +1938,7 @@ class ProblemEntry:
 
 @dataclass(slots=True)
 class _ProblemAssetTask:
-    source_image: Image.Image
+    source_image: Image.Image | None
     bounds: Box
     crop_path: Path
     board_render_path: Path
@@ -1962,6 +1962,7 @@ class _ProblemAssetTask:
     rendered_media_regions: list[dict[str, Any]] = field(default_factory=list)
     rendered_source_offset: dict[str, int] | None = None
     trim_to_content: bool = False
+    source_image_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -2347,6 +2348,16 @@ def _render_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> N
 
 
 def _render_problem_asset(task: _ProblemAssetTask) -> tuple[int, int]:
+    if task.source_image is None:
+        if not task.source_image_path:
+            raise ValueError("problem asset has no source image")
+        with Image.open(task.source_image_path) as source:
+            task.source_image = source.convert("RGB")
+        try:
+            return _render_problem_asset(task)
+        finally:
+            task.source_image.close()
+            task.source_image = None
     if task.text_payload:
         crop = _render_text_fallback_problem_card(task.text_payload, title=task.text_title)
         task.crop_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2529,9 +2540,9 @@ def _problem_asset_task_dedup_key(task: _ProblemAssetTask) -> tuple[Any, ...]:
         default=str,
     )
     return (
-        id(task.source_image),
-        task.source_image.mode,
-        task.source_image.size,
+        ("path", task.source_image_path) if task.source_image is None else ("image", id(task.source_image)),
+        task.source_image.mode if task.source_image is not None else None,
+        task.source_image.size if task.source_image is not None else None,
         box_key(task.bounds),
         tuple(box_key(bounds) for bounds in (task.segment_bounds or ())),
         tuple(task.segment_column_indices or ()),
@@ -2577,6 +2588,8 @@ def _render_problem_assets(tasks: list[_ProblemAssetTask]) -> list[tuple[int, in
         canonical_index_by_task.append(canonical_index)
 
     worker_count = _resolve_problem_asset_worker_count(len(canonical_tasks))
+    if any(task.source_image_path for task in canonical_tasks):
+        worker_count = min(worker_count, 2)
     if worker_count <= 1:
         canonical_sizes = [_render_problem_asset(task) for task in canonical_tasks]
     else:
@@ -2722,23 +2735,49 @@ def build_pages(
             prepared_pages,
             page_tile_mode=page_tile_mode,
         )
-        return prepared_pages, _build_page_as_is_models(prepared_pages, subject=subject)
+        prepared_pages = _split_tall_page_as_is_prepared_pages(prepared_pages)
+        page_models = _build_page_as_is_models(prepared_pages, subject=subject)
+        for prepared_page in prepared_pages:
+            prepared_page.release_image()
+        return prepared_pages, page_models
 
     page_ai_config = _to_page_ai_config(ai_fallback_config)
     segment_started_at = time.perf_counter()
-    page_models = build_page_models_for_prepared_pages(
-        prepared_pages,
-        subject=subject,
-        ocr_mode=ocr_mode,
-        ai_config=page_ai_config,
-        ocr_semaphore=ocr_semaphore,
-        global_ocr_worker_limit=global_ocr_worker_limit,
-    )
+
+    def segment_batch(batch: list[PreparedPage]) -> list[PageModel]:
+        try:
+            return build_page_models_for_prepared_pages(
+                batch,
+                subject=subject,
+                ocr_mode=ocr_mode,
+                ai_config=page_ai_config,
+                ocr_semaphore=ocr_semaphore,
+                global_ocr_worker_limit=global_ocr_worker_limit,
+            )
+        except Exception as exc:
+            if not _is_pdf_resource_error(exc):
+                raise
+            if len(batch) <= 1:
+                number = batch[0].page_number
+                raise PdfPageProcessingError(source, number, number, exc, resource_exhausted=True) from exc
+            exc.__traceback__ = None
+        finally:
+            for prepared_page in batch:
+                prepared_page.release_image()
+        middle = len(batch) // 2
+        return segment_batch(batch[:middle]) + segment_batch(batch[middle:])
+
+    # Geometry/numbering metadata is collected document-wide before this loop,
+    # while raster images/OCR workers are bounded to one sequential PDF batch.
+    page_models: list[PageModel] = []
+    for first in range(0, len(prepared_pages), PDF_PROCESSING_BATCH_PAGES):
+        page_models.extend(segment_batch(prepared_pages[first:first + PDF_PROCESSING_BATCH_PAGES]))
     _record_ms(timings, "segment", segment_started_at)
     if debug_segments_dir is not None:
         for prepared_page, page in zip(prepared_pages, page_models):
             debug_path = debug_segments_dir / f"{page.page_id}_segments.png"
             draw_segment_debug(prepared_page, page.blocks, debug_path)
+            prepared_page.release_image()
     return prepared_pages, page_models
 
 
@@ -2862,9 +2901,57 @@ def _tile_page_as_is_prepared_pages(
     return tiled_pages
 
 
+def _split_tall_page_as_is_prepared_pages(prepared_pages: Sequence[PreparedPage]) -> list[PreparedPage]:
+    """Cut an exceptionally tall full-page image into lossless <=49-page slices.
+
+    Normal pages retain their existing single-image behavior. A 1-page safety
+    margin covers record padding/rounding under ClassIn's hard 50-page limit.
+    Adjacent source boxes are exact half-open intervals: no pixels are dropped,
+    repeated or scaled at a boundary.
+    """
+    result: list[PreparedPage] = []
+    display_width = max(
+        _v1_default_display_width_px(LayoutTemplate(name="academy-default")),
+        float(V2_TARGET_IMAGE_WIDTH_PX),
+        CANVAS_HEIGHT - LEFT_MARGIN_PX - RIGHT_PADDING_PX,
+    )
+    for prepared in prepared_pages:
+        width, height = prepared.size
+        max_height = max(1, math.floor(49 * CANVAS_WIDTH * width / display_width))
+        if height <= max_height:
+            result.append(prepared)
+            continue
+        count = math.ceil(height / max_height)
+        tile_dir = Path(prepared.source_path).resolve().parent / "classin_page_slices"
+        tile_dir.mkdir(parents=True, exist_ok=True)
+        source = prepared.image
+        try:
+            for index, top in enumerate(range(0, height, max_height), start=1):
+                bottom = min(top + max_height, height)
+                page_id = f"{prepared.page_id}-vertical-{index:03d}"
+                target = tile_dir / f"{page_id}.png"
+                fragment = source.crop((0, top, width, bottom))
+                fragment.save(target, format="PNG", compress_level=INTERMEDIATE_PNG_COMPRESSION_LEVEL)
+                fragment.close()
+                metadata = {
+                    **prepared.metadata,
+                    "normalized_path": str(target),
+                    "page_vertical_fragment_index": index,
+                    "page_vertical_fragment_count": count,
+                    "page_fragment_parent_page_id": prepared.page_id,
+                    "page_fragment_source_box": {"left": 0, "top": top, "right": width, "bottom": bottom},
+                    "pdf_media_regions": _tile_media_regions_for_box(prepared.metadata.get("pdf_media_regions") or (), (0, top, width, bottom)),
+                }
+                result.append(PreparedPage(page_id, str(target), prepared.page_number, None, (width, bottom - top), metadata))
+        finally:
+            prepared.release_image()
+    return result
+
+
 def _build_page_as_is_models(prepared_pages: list[PreparedPage], *, subject: Subject) -> list[PageModel]:
     pages: list[PageModel] = []
     for index, prepared_page in enumerate(prepared_pages, start=1):
+        width, height = prepared_page.size
         block_id = f"{prepared_page.page_id}-full-page"
         problem_id = f"{prepared_page.page_id}-problem-1"
         page_metadata = {
@@ -2884,8 +2971,8 @@ def _build_page_as_is_models(prepared_pages: list[PreparedPage], *, subject: Sub
             bbox=Box(
                 left=0.0,
                 top=0.0,
-                width=float(prepared_page.image.width),
-                height=float(prepared_page.image.height),
+                width=float(width),
+                height=float(height),
             ),
             reading_order=0,
             confidence=1.0,
@@ -2903,7 +2990,10 @@ def _build_page_as_is_models(prepared_pages: list[PreparedPage], *, subject: Sub
         tile_count = int(prepared_page.metadata.get("page_tile_count") or 1)
         tile_column = str(prepared_page.metadata.get("page_tile_column") or "")
         title = f"페이지 {source_page_number}"
-        if tile_count > 1:
+        vertical_count = int(prepared_page.metadata.get("page_vertical_fragment_count") or 1)
+        if vertical_count > 1:
+            title += f" · {prepared_page.metadata['page_vertical_fragment_index']}/{vertical_count}"
+        elif tile_count > 1:
             title += " · 왼쪽" if tile_column == "left" else " · 오른쪽"
         problem = ProblemUnit(
             unit_id=problem_id,
@@ -2918,16 +3008,16 @@ def _build_page_as_is_models(prepared_pages: list[PreparedPage], *, subject: Sub
                 "bbox_px": {
                     "left": 0.0,
                     "top": 0.0,
-                    "width": float(prepared_page.image.width),
-                    "height": float(prepared_page.image.height),
+                    "width": float(width),
+                    "height": float(height),
                 },
             },
         )
         pages.append(
             PageModel(
                 page_id=prepared_page.page_id,
-                width_px=prepared_page.image.width,
-                height_px=prepared_page.image.height,
+                width_px=width,
+                height_px=height,
                 subject=subject,
                 source_path=prepared_page.source_path,
                 blocks=[block],
@@ -6454,7 +6544,8 @@ def build_problem_entries(
                     asset_task=None
                     if reuse_full_page_asset
                     else _ProblemAssetTask(
-                        source_image=prepared_page.image,
+                        source_image=None if prepared_page.disk_backed else prepared_page.image,
+                        source_image_path=prepared_page.source_path if prepared_page.disk_backed else None,
                         bounds=merged_box,
                         segment_bounds=stitched_segment_bounds,
                         segment_column_indices=passage_segment_column_indices,
@@ -6504,6 +6595,8 @@ def build_problem_entries(
                 )
             )
 
+        prepared_page.release_image()
+
     _record_ms(timings, "entries", entries_started_at)
     assets_started_at = time.perf_counter()
     rendered_crop_sizes = iter(
@@ -6512,7 +6605,7 @@ def build_problem_entries(
     _record_ms(timings, "assets", assets_started_at)
     coalesce_started_at = time.perf_counter()
     crop_sizes = [
-        draft.prepared_page.image.size if draft.asset_task is None else next(rendered_crop_sizes)
+        draft.prepared_page.size if draft.asset_task is None else next(rendered_crop_sizes)
         for draft in drafts
     ]
     for draft in drafts:
@@ -9591,7 +9684,7 @@ def build_ui_session(
 
     pages_payload: list[dict[str, Any]] = []
     for prepared_page in prepared_pages:
-        width, height = prepared_page.image.size
+        width, height = prepared_page.size
         resolved_path = Path(prepared_page.source_path).resolve()
         page_model = pages_by_id.get(prepared_page.page_id)
         page_quality = _page_quality_payload(page_model)
@@ -11187,10 +11280,13 @@ def build_mixed_records(
     text_confidence_threshold: float,
     dark_board: bool = True,
     board_theme: str = DEFAULT_BOARD_THEME,
+    generate_records: bool = True,
+    expand_board_capacity: bool = True,
 ) -> tuple[list[bytes], list[dict[str, object]]]:
     _validate_problem_entry_ids(problem_entries)
     placements = place_problems(placement_inputs(problem_entries), template=template)
-    _ensure_template_board_capacity(template, placements)
+    if expand_board_capacity:
+        _ensure_template_board_capacity(template, placements)
     entries_by_problem_id = {entry.problem_id: entry for entry in problem_entries}
     available_width_px = CANVAS_HEIGHT * template.fixed_left_zone_ratio - LEFT_MARGIN_PX - RIGHT_PADDING_PX
     block_crop_dir = output_dir / "block_crops"
@@ -11231,46 +11327,48 @@ def build_mixed_records(
 
             if record_mode == "text":
                 text_payload = normalize_text_payload(block.text)
-                records.append(
-                    build_text_record(
-                        TextRecordSpec(
-                            record_id=next_record_id,
-                            text=text_payload,
-                            x=normalize_x_px(x_px),
-                            y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
-                            width_hint=normalize_width_px(width_px),
-                            font_size=resolve_font_size(block, scale),
+                if generate_records:
+                    records.append(
+                        build_text_record(
+                            TextRecordSpec(
+                                record_id=next_record_id,
+                                text=text_payload,
+                                x=normalize_x_px(x_px),
+                                y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
+                                width_hint=normalize_width_px(width_px),
+                                font_size=resolve_font_size(block, scale),
+                            )
                         )
                     )
-                )
                 text_record_count += 1
             else:
-                crop = entry.prepared_page.image.crop(
-                    _integer_crop_rect_for_box(
-                        block.bbox,
-                        image_width=entry.prepared_page.image.width,
-                        image_height=entry.prepared_page.image.height,
-                    )
-                )
-                crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
-                crop_path = block_crop_dir / crop_name
-                crop.save(crop_path)  # Save original for UI/debugging
-                board_crop = _extract_problem_cutout(crop, chalk_color=chalk_color) if dark_board else crop.convert("RGB")
-                image_bytes, image_format = _encode_image_bytes(board_crop, quality=92)
-                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
-                records.append(
-                    build_image_record(
-                        ImageRecordSpec(
-                            record_id=next_record_id,
-                            image_primary=image_bytes,
-                            image_secondary=preview_bytes,
-                            x=normalize_x_px(x_px),
-                            y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
-                            width_hint=normalize_width_px(width_px),
-                            height_hint=normalize_height_px(height_px, page_count_hint=template.board_page_count),
+                if generate_records:
+                    crop = entry.prepared_page.image.crop(
+                        _integer_crop_rect_for_box(
+                            block.bbox,
+                            image_width=entry.prepared_page.image.width,
+                            image_height=entry.prepared_page.image.height,
                         )
                     )
-                )
+                    crop_name = f"p{len(placement_summaries) + 1:03d}_b{len(block_summaries) + 1:03d}_{hashlib.sha1((entry.problem_id + block.block_id).encode('utf-8', errors='ignore')).hexdigest()[:8]}.png"
+                    crop_path = block_crop_dir / crop_name
+                    crop.save(crop_path)  # Save original for UI/debugging
+                    board_crop = _extract_problem_cutout(crop, chalk_color=chalk_color) if dark_board else crop.convert("RGB")
+                    image_bytes, image_format = _encode_image_bytes(board_crop, quality=92)
+                    preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
+                    records.append(
+                        build_image_record(
+                            ImageRecordSpec(
+                                record_id=next_record_id,
+                                image_primary=image_bytes,
+                                image_secondary=preview_bytes,
+                                x=normalize_x_px(x_px),
+                                y=normalize_y_px(y_px, page_count_hint=template.board_page_count),
+                                width_hint=normalize_width_px(width_px),
+                                height_hint=normalize_height_px(height_px, page_count_hint=template.board_page_count),
+                            )
+                        )
+                    )
                 image_record_count += 1
 
             block_summaries.append(
@@ -11291,26 +11389,27 @@ def build_mixed_records(
             next_record_id += 1
 
         if not block_summaries:
-            fallback_image = Image.open(entry.crop_path).convert("RGB")
-            board_fallback = Image.open(entry.board_render_path) if dark_board else fallback_image
-            image_bytes, image_format = _encode_image_bytes(board_fallback, quality=92)
-            preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
-            records.append(
-                build_image_record(
-                    ImageRecordSpec(
-                        record_id=next_record_id,
-                        image_primary=image_bytes,
-                        image_secondary=preview_bytes,
-                        x=normalize_x_px(problem_origin_x_px),
-                        y=normalize_y_px(problem_origin_y_px, page_count_hint=template.board_page_count),
-                        width_hint=normalize_width_px(scaled_available_width_px),
-                        height_hint=normalize_height_px(
-                            rendered_problem_height_px,
-                            page_count_hint=template.board_page_count,
-                        ),
+            if generate_records:
+                fallback_image = Image.open(entry.crop_path).convert("RGB")
+                board_fallback = Image.open(entry.board_render_path) if dark_board else fallback_image
+                image_bytes, image_format = _encode_image_bytes(board_fallback, quality=92)
+                preview_bytes = build_preview_image_bytes(image_bytes, max_size=(768, 768), format_hint=image_format, quality=88)
+                records.append(
+                    build_image_record(
+                        ImageRecordSpec(
+                            record_id=next_record_id,
+                            image_primary=image_bytes,
+                            image_secondary=preview_bytes,
+                            x=normalize_x_px(problem_origin_x_px),
+                            y=normalize_y_px(problem_origin_y_px, page_count_hint=template.board_page_count),
+                            width_hint=normalize_width_px(scaled_available_width_px),
+                            height_hint=normalize_height_px(
+                                rendered_problem_height_px,
+                                page_count_hint=template.board_page_count,
+                            ),
+                        )
                     )
                 )
-            )
             image_record_count += 1
             next_record_id += 1
 
@@ -11358,6 +11457,8 @@ def build_mixed_records(
                 "blocks": block_summaries,
             }
         )
+        if entry.prepared_page is not None:
+            entry.prepared_page.release_image()
 
     return records, placement_summaries
 
@@ -11396,6 +11497,8 @@ def build_records(
         text_confidence_threshold=text_confidence_threshold,
         dark_board=dark_board,
         board_theme=board_theme,
+        generate_records=generate_records,
+        expand_board_capacity=expand_board_capacity,
     )
     has_images = any(item["image_record_count"] for item in placement_summaries)
     if has_images:
@@ -11403,6 +11506,60 @@ def build_records(
     else:
         header_flag = 3
     return records, placement_summaries, header_flag
+
+
+def _use_bounded_record_export(problem_entries: Sequence[ProblemEntry]) -> bool:
+    return len(problem_entries) > CLASSIN_MAX_BOARD_PAGE_COUNT or any(
+        bool(getattr(entry.prepared_page, "disk_backed", False)) for entry in problem_entries
+    )
+
+
+def _write_streamed_classin_edb_parts(
+    problem_entries: list[ProblemEntry], template: LayoutTemplate, output_dir: Path,
+    edb_name: str, *, record_mode: str, text_confidence_threshold: float,
+    dark_board: bool, board_theme: str, crop_format: str,
+) -> list[dict[str, Any]]:
+    # Plan with geometry only; retain encoded image bytes for one <=50-page
+    # EDB at a time instead of building the full document twice in memory.
+    planned = plan_classin_limited_edb_parts(
+        problem_entries, template, output_dir, record_mode=record_mode,
+        text_confidence_threshold=text_confidence_threshold, dark_board=dark_board,
+        board_theme=board_theme, crop_format=crop_format,
+    )
+    by_id = {entry.problem_id: entry for entry in problem_entries}
+    parts: list[dict[str, Any]] = []
+    for index, plan in enumerate(planned):
+        chunk = [by_id[problem_id] for problem_id in plan["problemIds"]]
+        render_template = template_with_board_page_count(template, CLASSIN_MAX_BOARD_PAGE_COUNT)
+        records, placements, header_flag = build_records(
+            chunk, render_template, record_mode=record_mode, output_dir=output_dir,
+            text_confidence_threshold=text_confidence_threshold, dark_board=dark_board,
+            board_theme=board_theme, crop_format=crop_format,
+            reserve_image_layout_height=True, expand_board_capacity=False,
+        )
+        _validate_record_page_count_hints(placements, expected_page_count=CLASSIN_MAX_BOARD_PAGE_COUNT)
+        if not render_template.metadata.get("preserve_source_layout"):
+            _validate_sequential_record_placements(placements)
+        flow_end = _placement_summaries_flow_end_pages(placements)
+        if flow_end > CLASSIN_MAX_BOARD_PAGE_COUNT + 1e-6:
+            raise ValueError(f"ClassIn part {index + 1} exceeds the 50-page limit after rendering ({flow_end:.3f} pages)")
+        path = output_dir / edb_part_file_name(edb_name, index, len(planned))
+        write_edb(path, build_edb(records, header_flag=header_flag,
+            version=version_string_for_crop_format(crop_format), page_count_hint=CLASSIN_MAX_BOARD_PAGE_COUNT))
+        problem_ids = [entry.problem_id for entry in chunk]
+        parts.append({
+            "partIndex": index + 1, "part_index": index + 1,
+            "partCount": len(planned), "part_count": len(planned),
+            "edbFileName": path.name, "edb_file_name": path.name,
+            "edbPath": str(path.resolve()), "edb_path": str(path.resolve()),
+            "recordCount": len(records), "record_count": len(records),
+            "placementCount": len(placements), "placement_count": len(placements),
+            "pageCountHint": CLASSIN_MAX_BOARD_PAGE_COUNT, "page_count_hint": CLASSIN_MAX_BOARD_PAGE_COUNT,
+            "flowEndPages": flow_end, "flow_end_pages": flow_end,
+            "problemIds": problem_ids, "problem_ids": problem_ids, "placements": placements,
+        })
+        del records
+    return parts
 
 
 def write_classin_limited_edb_files(
@@ -11420,6 +11577,12 @@ def write_classin_limited_edb_files(
     existing_placements: list[dict[str, object]] | None = None,
     existing_header_flag: int | None = None,
 ) -> list[dict[str, Any]]:
+    if _use_bounded_record_export(problem_entries):
+        return _write_streamed_classin_edb_parts(
+            problem_entries, template, output_dir, edb_name, record_mode=record_mode,
+            text_confidence_threshold=text_confidence_threshold, dark_board=dark_board,
+            board_theme=board_theme, crop_format=crop_format,
+        )
     chunks = split_problem_entries_for_classin_page_limit(problem_entries, template)
     if not chunks:
         return []
@@ -11873,6 +12036,8 @@ def run_problem_export(
         ocr_mode=ocr,
         ai_fallback_config=ai_fallback_config,
     )
+    if any(source_path.suffix.lower() == ".pdf" for source_path in source_paths):
+        source_worker_count = 1
     source_build_started_at = time.perf_counter()
     if source_worker_count <= 1:
         source_results = [_build_source_pages(source_path) for source_path in source_paths]
@@ -11952,7 +12117,7 @@ def run_problem_export(
         dark_board=dark_board,
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
-        generate_records=export_edb,
+        generate_records=export_edb and not _use_bounded_record_export(problem_entries),
     )
     timing_ms["records"] = _elapsed_ms(records_started_at)
     timing_ms.update(_summarize_page_timing_ms(pages))
@@ -12016,6 +12181,7 @@ def run_problem_export(
         summary["edb_paths"] = [str(Path(str(part["edbPath"])).resolve()) for part in edb_parts]
         summary["edb_parts"] = edb_parts
         summary["edb_part_count"] = len(edb_parts)
+        summary["record_count"] = sum(int(part["recordCount"]) for part in edb_parts)
         summary["edb_split"] = len(edb_parts) > 1
         summary["timing_ms"] = dict(timing_ms)
         placements_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

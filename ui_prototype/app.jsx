@@ -33,6 +33,9 @@ function captureRecoverableDiagnostic(error, detail = {}) {
     type: detail.type || 'operation',
     message: error?.message || String(error || '알 수 없는 오류'),
     timestamp: detail.timestamp || new Date().toISOString(),
+    ...Object.fromEntries(['errorKind', 'detail', 'sourceFile', 'pageStart', 'pageEnd', 'receivedBytes', 'maxBytes']
+      .filter(key => error?.[key] != null && error[key] !== '')
+      .map(key => [key, error[key]])),
     ...detail,
   };
   try {
@@ -7332,6 +7335,7 @@ function ItemsRail({
             {hasSessionItems ? '파일 추가' : '이미지·PDF·HWP 대기열에 추가'}
           </strong>
           <small>{hasSessionItems ? 'PNG 등록 / AI 인식' : '페이지 PNG로 바로 만들거나 문항을 AI 인식합니다'}</small>
+          {!hasSessionItems && <small>파일당 512MB · 한 번에 총 2GB</small>}
         </button>
         {hasSessionItems && <button
           className="btn rail-preserve-all"
@@ -9319,7 +9323,7 @@ function HomeDashboard({
           </span>
           <span className="home-dropzone-text">
             <strong>{dropActive ? '여기에 놓으면 자료가 담겨요' : '끌어다 놓거나 클릭하세요'}</strong>
-            <span>시험지·교재 파일을 여러 개 함께 넣을 수 있어요.</span>
+            <span>파일당 512MB · 한 번에 총 2GB · 큰 PDF도 차례로 처리합니다.</span>
           </span>
           <span className="btn primary home-upload-btn" aria-hidden="true">
             {Icon.plus} 파일 선택
@@ -9905,7 +9909,7 @@ function SidePanel({
   onClassinReviewComplete,
   onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, updateInstallBusy, onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
+  updateInfo, updateBusy, updateInstallBusy, updateInstallBlockedReason = '', onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
@@ -10168,6 +10172,8 @@ function SidePanel({
               ? '미설정'
               : updateStatus === 'error'
                 ? '오류'
+                : updateStatus === 'invalid_config'
+                  ? '설정 오류'
                 : updateStatus === 'invalid_feed'
                   ? '피드 오류'
                   : updateStatus === 'unsupported_platform'
@@ -10179,27 +10185,31 @@ function SidePanel({
         ? 'accent'
         : updateStatus === 'up_to_date'
           ? 'ok'
-          : updateStatus === 'error' || updateStatus === 'invalid_feed'
+          : updateStatus === 'error' || updateStatus === 'invalid_feed' || updateStatus === 'invalid_config'
             ? 'danger'
             : 'neutral';
   const updateVersionLine = updateInfo?.currentVersion
     ? `현재 ${updateInfo.currentVersion}${updateInfo?.latest?.version ? ` · 최신 ${updateInfo.latest.version}` : ''}`
     : '버전 정보를 불러오지 않았습니다';
-  const requestUpdateInstall = () => {
-    if (!updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
-    const targetVersion = updateInfo?.latest?.version || '새 버전';
-    const confirmed = window.confirm(
-      `${targetVersion} 업데이트를 설치할까요?\n검증이 끝나면 앱이 종료되고 현재 설치 위치에 적용됩니다.`
-    );
-    if (!confirmed) return;
-    Promise.resolve(onInstallUpdate?.(updatePinDraft)).then(installed => {
-      if (installed) setUpdatePinDraft('');
-    });
-  };
   const savedCrop = item ? normalizeManualCrop(item.manualCrop) : { ...EMPTY_MANUAL_CROP };
   const cropChanged = item && !manualCropEquals(cropDraft, savedCrop);
   const savedCropActive = manualCropIsActive(savedCrop);
   const draftCropActive = manualCropIsActive(cropDraft);
+  const updateInstallSafetyReason = updateInstallBlockedReason || (cropChanged
+    ? '업데이트 전에 변경한 자르기 여백을 적용하거나 초기화해 주세요.'
+    : '');
+  const requestUpdateInstall = () => {
+    if (!updatePinDraft || !updateAutomaticReady || updateActionBusy || updateInstallSafetyReason) return;
+    const expectedUpdate = appUpdateArtifactSnapshot(updateInfo);
+    const targetVersion = expectedUpdate.version || '새 버전';
+    const confirmed = window.confirm(
+      `${targetVersion} 업데이트를 설치할까요?\n검증이 끝나면 앱이 종료되고 현재 설치 위치에 적용됩니다.`
+    );
+    if (!confirmed) return;
+    Promise.resolve(onInstallUpdate?.(updatePinDraft, expectedUpdate)).then(installed => {
+      if (installed) setUpdatePinDraft('');
+    });
+  };
   const remainingReviewItems = items.filter(candidate=>candidate.id!==item?.id && ['check_needed','failed'].includes(candidate.reviewStatus));
   const remainingApplyIds = item ? [item.id,...remainingReviewItems.map(candidate=>candidate.id)] : [];
   const showItemConfirmBar = view !== 'review' && !!item && (itemNeedsCheck || panelSaveState.dirty);
@@ -10402,6 +10412,7 @@ function SidePanel({
         </button>
       </div>
       {updateInfo?.updateAvailable && <div className="update-install-card">
+        {updateInstallSafetyReason && <div className="runtime-note warn" role="status">{updateInstallSafetyReason}</div>}
         <div className="lbl">
           관리자 PIN 업데이트
           <small>
@@ -10424,7 +10435,7 @@ function SidePanel({
             disabled={updateActionBusy || !updateAutomaticEnabled}
             onChange={event => setUpdatePinDraft(event.target.value.replace(/\D/g, '').slice(0, 12))}
             onKeyDown={event => {
-              if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy) return;
+              if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy || updateInstallSafetyReason) return;
               event.preventDefault();
               requestUpdateInstall();
             }}
@@ -10444,14 +10455,14 @@ function SidePanel({
         <button
           className="btn primary update-install-button"
           type="button"
-          disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4}
-          title={!updateAutomaticEnabled
+          disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4 || Boolean(updateInstallSafetyReason)}
+          title={updateInstallSafetyReason || (!updateAutomaticEnabled
             ? '이 배포본에 업데이트 PIN이 설정되지 않았습니다'
             : !updateInfo?.updateAvailable
               ? '업데이트 확인 후 새 버전이 있을 때 사용할 수 있습니다'
               : !updateAutomaticReady
                 ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
-                : 'PIN 확인 후 새 버전을 덮어씁니다'}
+                : 'PIN 확인 후 새 버전을 덮어씁니다')}
           onClick={requestUpdateInstall}
         >
           {updateInstallBusy ? '검증·설치 준비 중...' : '관리자 PIN 확인 후 업데이트'}
@@ -11803,7 +11814,19 @@ function OperationRecoveryBanner({
       .filter((step, index, steps) => step && steps.indexOf(step) === index && step !== summary)
       .slice(0, 3)
     : [];
-  const title = localServerUnavailable
+  const failureTitles = {
+    upload_file_too_large: '파일 용량이 너무 큽니다',
+    upload_batch_too_large: '전체 업로드 용량이 너무 큽니다',
+    processing_memory_exhausted: '자료 처리에 필요한 메모리가 부족합니다',
+    runtime_storage_full: '파일을 저장할 디스크 공간이 부족합니다',
+    pdf_invalid_document: 'PDF 파일을 읽을 수 없습니다',
+    pdf_password_protected: '암호로 보호된 PDF입니다',
+    pdf_renderer_unavailable: '앱의 PDF 처리 기능에 문제가 있습니다',
+    app_dependency_missing: '앱의 필수 구성 요소를 불러오지 못했습니다',
+    app_internal_error: '앱 내부 오류가 발생했습니다',
+    single_problem_too_tall: '한 문항이 칠판 50페이지를 넘습니다',
+  };
+  const title = failureTitles[error.code] || (localServerUnavailable
     ? (serverConnected ? 'ClassIn EDB 연결이 복구되었습니다' : 'ClassIn EDB 앱을 다시 실행해 주세요')
     : isDownload
     ? 'EDB 제작은 완료됐습니다'
@@ -11813,7 +11836,7 @@ function OperationRecoveryBanner({
         ? '초기화를 마치지 못했습니다'
         : isRestore
           ? '최근 작업을 열지 못했습니다'
-          : '제작을 마치지 못했지만 편집 내용은 안전합니다';
+          : '제작을 마치지 못했지만 편집 내용은 안전합니다');
   const guidance = conflictNeedsResolution
     ? (latestSessionIsEmpty
       ? '서버의 최신 상태는 빈 작업입니다. ‘빈 최신 상태 불러오기’로 새로 시작하거나, 현재 편집본이 더 필요하면 오류를 신고한 뒤 초기화 여부를 선택하세요.'
@@ -11823,7 +11846,7 @@ function OperationRecoveryBanner({
         ? '서버는 이미 빈 상태입니다. ‘초기화 다시 시도’로 현재 화면도 정리하거나 ‘빈 최신 상태 불러오기’로 서버 상태에 맞추세요.'
         : '‘초기화 다시 시도’는 최신 버전을 기준으로 작업 목록을 비우고, ‘최신 상태 불러오기’는 초기화를 취소하고 최신 작업으로 돌아갑니다.')
       : retryDisallowed
-        ? '같은 요청을 바로 반복해도 해결되지 않습니다. 아래 권장 순서대로 원본이나 문항 구성을 수정한 뒤 다시 제작하세요.'
+        ? '아래 오류 원인과 권장 조치를 확인한 뒤 다시 시도해 주세요.'
       : isDownload
         ? (canExport
           ? '제작본은 최근 제작에 보관했습니다. EDB 다운로드를 다시 시도하거나 PNG로 먼저 저장할 수 있습니다.'
@@ -11867,6 +11890,8 @@ function OperationRecoveryBanner({
       <div className="operation-recovery-copy" role="alert" aria-live="assertive" aria-atomic="true">
         <strong id="operation-recovery-title">{title}</strong>
         <span id="operation-recovery-summary">{displayedSummary}</span>
+        {(error.sourceFile || error.pageStart) && <small>{error.sourceFile}{error.pageStart ? ` · ${error.pageStart}–${error.pageEnd || error.pageStart}페이지` : ''}</small>}
+        {error.detail && <details><summary>오류 상세 보기</summary><small style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error.detail}</small></details>}
         <small>
           {guidance}
           {!localServerUnavailable && <> 해결되지 않으면 <b>설정 → 도움말 및 문제 신고 → 버그 리포트</b>에서 오류를 보내 주세요.</>}
@@ -12262,30 +12287,52 @@ function fileToBase64(file){
   });
 }
 
-const MAX_EXPORT_JSON_BYTES = 64 * 1024 * 1024;
-const EXPORT_JSON_SAFETY_BYTES = 256 * 1024;
-
-function estimatedExportPayloadBytes(files){
-  return (Array.isArray(files) ? files : []).reduce((total, file) => {
-    const rawBytes = Math.max(0, Number(file?.size) || 0);
-    const base64Bytes = 4 * Math.ceil(rawBytes / 3);
-    const metadataBytes = 256 + (String(file?.name || '').length * 4);
-    return total + base64Bytes + metadataBytes;
-  }, 2048);
-}
+const MAX_EXPORT_FILE_BYTES = 512 * 1024 * 1024;
+const MAX_EXPORT_BATCH_BYTES = 2 * 1024 * 1024 * 1024;
 
 function assertExportPayloadFits(files){
-  const estimatedBytes = estimatedExportPayloadBytes(files);
-  const usableBytes = MAX_EXPORT_JSON_BYTES - EXPORT_JSON_SAFETY_BYTES;
-  if (estimatedBytes <= usableBytes) return estimatedBytes;
-  const rawBytes = (Array.isArray(files) ? files : []).reduce(
-    (total, file) => total + Math.max(0, Number(file?.size) || 0),
-    0
-  );
-  throw new Error(
-    `업로드 용량 ${formatBytes(rawBytes)}가 한 번에 처리할 수 있는 범위를 넘었습니다. `
-    + '파일을 나누어 등록하거나 PDF를 압축해 주세요.'
-  );
+  const selected = Array.isArray(files) ? files : [];
+  const oversized = selected.find(file => Number(file?.size) > MAX_EXPORT_FILE_BYTES);
+  const rawBytes = selected.reduce((total, file) => total + Math.max(0, Number(file?.size) || 0), 0);
+  if (!oversized && rawBytes <= MAX_EXPORT_BATCH_BYTES) return rawBytes;
+  const error = new Error(oversized
+    ? `파일 용량 초과: ${oversized.name} (${formatBytes(oversized.size)}). 파일 하나는 최대 ${formatBytes(MAX_EXPORT_FILE_BYTES)}까지 등록할 수 있습니다.`
+    : `전체 업로드 용량 초과: ${formatBytes(rawBytes)}. 한 번에 최대 ${formatBytes(MAX_EXPORT_BATCH_BYTES)}까지 등록할 수 있습니다.`);
+  error.code = oversized ? 'upload_file_too_large' : 'upload_batch_too_large';
+  error.errorKind = 'capacity';
+  error.receivedBytes = oversized ? oversized.size : rawBytes;
+  error.maxBytes = oversized ? MAX_EXPORT_FILE_BYTES : MAX_EXPORT_BATCH_BYTES;
+  error.sourceFile = oversized?.name || '';
+  error.retryable = false;
+  error.recoverySteps = ['파일을 나누어 등록하거나 PDF를 압축해 주세요.'];
+  throw error;
+}
+
+async function uploadSourceFiles(files, options = {}){
+  assertExportPayloadFits(files);
+  const paths = [];
+  for (const file of files) {
+    options.signal?.throwIfAborted?.();
+    options.onUploadProgress?.({ completed: paths.length, total: files.length, fileName: file.name });
+    const response = await fetch('/api/uploads', {
+      method: 'POST',
+      signal: options.signal,
+      headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
+      body: file,
+    });
+    const payload = await readJsonResponse(response, '파일 업로드 실패');
+    if (!response.ok || !payload.ok) {
+      throw operationErrorFromResponse(payload, response, 'source_upload', '파일 업로드 실패');
+    }
+    if (!payload.sourcePath || typeof payload.sourcePath !== 'string') {
+      const error = new Error('앱이 업로드한 파일의 저장 위치를 반환하지 않았습니다. 오류 내용을 복사해 신고해 주세요.');
+      error.code = 'app_internal_error';
+      throw error;
+    }
+    paths.push(payload.sourcePath);
+    options.onUploadProgress?.({ completed: paths.length, total: files.length, fileName: file.name });
+  }
+  return paths;
 }
 
 function fileQueueKey(file){
@@ -15664,10 +15711,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
   const resolvedContentTarget = normalizeContentTarget(options.contentTarget);
   const inputIntentConfig = INPUT_INTENT_BY_VALUE[resolvedInputIntent] || INPUT_INTENT_BY_VALUE[DEFAULT_INPUT_INTENT];
   assertExportPayloadFits(files);
-  const filesPayload = await Promise.all(files.map(async (f) => ({
-    fileName: f.name,
-    fileDataBase64: await fileToBase64(f),
-  })));
+  const filesPayload = await uploadSourceFiles(files, options);
   const edbName = edbFileNameFromSessionName(options.edbName, files[0]?.name || 'classin');
   const resp = await fetch('/api/export', {
     method: 'POST',
@@ -15824,6 +15868,13 @@ function operationErrorFromResponse(payload, response, operation, fallbackMessag
   error.status = Number(response?.status) || 0;
   error.retryable = payload?.retryable !== false;
   error.recoverySteps = Array.isArray(payload?.recoverySteps) ? payload.recoverySteps.slice(0, 5) : [];
+  error.errorKind = String(payload?.errorKind || '');
+  error.detail = String(payload?.detail || '');
+  error.sourceFile = String(payload?.sourceFile || payload?.fileName || '');
+  error.pageStart = payload?.pageStart;
+  error.pageEnd = payload?.pageEnd;
+  error.receivedBytes = payload?.receivedBytes;
+  error.maxBytes = payload?.maxBytes;
   error.latestSession = payload?.session || null;
   error.hasLatestSessionState = Boolean(
     payload && Object.prototype.hasOwnProperty.call(payload, 'session')
@@ -15845,7 +15896,12 @@ function operationErrorClipboardText(error){
     `작업: ${error.operation || 'session_publish'}`,
     `코드: ${error.code || 'unknown'}`,
     error.status ? `HTTP: ${error.status}` : '',
+    error.errorKind ? `원인 분류: ${error.errorKind}` : '',
+    error.sourceFile ? `파일: ${error.sourceFile}` : '',
+    error.pageStart ? `페이지: ${error.pageStart}–${error.pageEnd || error.pageStart}` : '',
+    error.receivedBytes != null ? `용량: ${error.receivedBytes} bytes / 한도 ${error.maxBytes ?? '미지정'} bytes` : '',
     `내용: ${String(error.message || '알 수 없는 오류').trim()}`,
+    error.detail ? `진단 상세: ${error.detail}` : '',
   ].filter(Boolean).join('\n');
 }
 
@@ -15877,6 +15933,9 @@ const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
 });
 
 function operationRecoverySummary(error){
+  if (error?.errorKind && error.errorKind !== 'export_failed') {
+    return String(error.message || '처리 중 오류가 발생했습니다.').split('\n')[0];
+  }
   const knownSummary = OPERATION_RECOVERY_SUMMARIES[String(error?.code || '')];
   if (knownSummary) return knownSummary;
   return String(error?.message || 'EDB 제작 중 예상하지 못한 오류가 발생했습니다.').split('\n')[0];
@@ -15949,19 +16008,38 @@ async function classifyNetworkRequestError(error, fallbackCode){
 
 function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
   const raw = String(error?.message || error || '').trim();
+  const reasons = {
+    upload_file_too_large: '파일 용량 초과', upload_batch_too_large: '전체 업로드 용량 초과',
+    processing_memory_exhausted: '메모리 부족', runtime_storage_full: '디스크 공간 부족',
+    runtime_storage_access_denied: '저장 권한 또는 파일 잠금 확인',
+    update_disk_full: '업데이트 저장 공간 부족 · 드라이브 공간을 확보해 주세요',
+    update_storage_permission_denied: '업데이트 저장 권한 오류 · 폴더 권한과 보안 프로그램을 확인해 주세요',
+    update_staging_failed: '업데이트 파일 준비 오류 · 작업 폴더와 드라이브를 확인해 주세요',
+    update_download_failed: '업데이트 다운로드 실패 · 인터넷 연결과 배포 서버를 확인해 주세요',
+    update_target_changed: '업데이트 정보가 바뀌었습니다 · 다시 확인한 뒤 설치해 주세요',
+    update_confirmation_required: '업데이트 정보를 다시 확인한 뒤 설치해 주세요',
+    update_installer_launch_failed: '업데이트 설치기 실행 오류 · 오류 상세를 복사해 신고해 주세요',
+    update_size_mismatch: '업데이트 파일 크기 검증 실패 · 업데이트를 다시 확인해 주세요',
+    update_checksum_mismatch: '업데이트 파일 무결성 검증 실패 · 업데이트를 다시 확인해 주세요',
+    pdf_invalid_document: 'PDF 손상 또는 파일 형식 확인', pdf_password_protected: 'PDF 암호 해제 필요',
+    pdf_renderer_unavailable: '앱의 PDF 처리 기능 오류', app_dependency_missing: '앱 구성 요소 오류',
+    app_internal_error: '앱 내부 오류 · 오류 상세를 확인해 주세요',
+    single_problem_too_tall: '한 문항이 칠판 50페이지를 넘습니다',
+  };
+  if (reasons[error?.code]) return `${fallbackMessage} · ${reasons[error.code]}`;
   if (isNetworkRequestError(error)) {
     return `${fallbackMessage} · 앱을 다시 실행해 주세요`;
   }
   if (/한 번에 처리할 수 있는 범위|파일을 나누어 등록/i.test(raw)) {
     return `${fallbackMessage} · 파일을 나누어 등록하세요`;
   }
-  if (/413|too large|payload|용량|크기/i.test(raw)) {
+  if (/413|payload too large|용량 초과|허용 크기를 초과/i.test(raw)) {
     return `${fallbackMessage} · 파일이 너무 큽니다`;
   }
-  if (/api key|apikey|gemini|unauthorized|인증|키/i.test(raw)) {
+  if (/api key|apikey|gemini|unauthorized|API.?키/i.test(raw)) {
     return `${fallbackMessage} · API 키 확인 필요`;
   }
-  if (/hwp|hwpx|한글|libreoffice|rhwp|pdf 변환|converter/i.test(raw)) {
+  if (/hwp|hwpx|libreoffice|rhwp|converter/i.test(raw)) {
     return `${fallbackMessage} · HWP 변환 환경 확인`;
   }
   if (/pdf/i.test(raw)) {
@@ -16014,17 +16092,29 @@ async function submitBugReport(payload){
   return expectOkJson(resp, '리포트 전송 실패');
 }
 
-async function fetchAppUpdateStatus(){
-  const resp = await fetch('/api/app/update');
+async function fetchAppUpdateStatus({ refresh = false } = {}){
+  const resp = await fetch(refresh ? '/api/app/update?refresh=1' : '/api/app/update');
   const json = await expectOkJson(resp, '업데이트 확인 실패');
   return json;
 }
 
-async function postAppUpdateInstall(pin){
+function appUpdateArtifactSnapshot(info){
+  const latest = info?.latest || {};
+  return Object.freeze({
+    version: String(latest.version || ''),
+    downloadUrl: String(info?.downloadUrl || latest.downloadUrl || ''),
+    sha256: String(info?.sha256 || latest.sha256 || ''),
+    sizeBytes: Number(info?.sizeBytes || latest.sizeBytes || 0),
+    arch: String(latest.arch || info?.arch || ''),
+    artifactType: String(latest.artifactType || ''),
+  });
+}
+
+async function postAppUpdateInstall(pin, expectedUpdate){
   const resp = await fetch('/api/app/update/install', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin }),
+    body: JSON.stringify({ pin, expectedUpdate }),
   });
   return expectOkJson(resp, '자동 업데이트 시작 실패');
 }
@@ -16521,6 +16611,19 @@ function App(){
     () => deriveSessionEditState(session, items, fileName, boardColumns, layoutGapMode, mutating || publishBusy || confirmingRecognition),
     [session, items, fileName, boardColumns, layoutGapMode, mutating, publishBusy, confirmingRecognition]
   );
+  const updateInstallBlockedReason = reviewEditorActive || recognitionReview
+    ? '업데이트 전에 현재 영역 편집을 적용하거나 취소해 주세요.'
+    : sessionEditState.dirty
+      ? '업데이트 전에 수업의 배치·처리 방식 변경을 저장해 주세요.'
+      : hasPendingSessionConflict
+        ? '최신 수업 상태를 확인한 뒤 업데이트해 주세요.'
+        : pendingFiles.length
+          ? '대기 중인 자료를 처리하거나 목록에서 제거한 뒤 업데이트해 주세요.'
+          : !initialSessionLoaded && !initialSessionError
+            ? '저장된 수업을 불러오는 작업이 끝난 뒤 업데이트해 주세요.'
+            : loading || mutating || hasRunningBackgroundJobs || confirmingRecognition || publishBusy || downloadBusy || resetBusy
+              ? '진행 중인 작업이 끝난 뒤 업데이트해 주세요.'
+              : '';
   const sourcePageCount = session?.pages?.length || 0;
   const recognitionDisabledReason = !sourcePageCount
     ? '문항을 찾을 원본 페이지가 없습니다.'
@@ -16759,6 +16862,7 @@ function App(){
     if (info.channelStatus === 'not_configured') return '업데이트 채널이 아직 설정되지 않았습니다';
     if (info.channelStatus === 'unsupported_platform') return '이 OS용 업데이트가 아직 없습니다';
     if (info.channelStatus === 'invalid_feed') return `업데이트 피드 오류: ${info.error || '채널 정보가 올바르지 않습니다'}`;
+    if (info.channelStatus === 'invalid_config') return `업데이트 설정 오류: ${info.error || '배포 설정이 올바르지 않습니다'}`;
     if (info.channelStatus === 'error') return `업데이트 확인 오류: ${info.error || '채널 확인 실패'}`;
     return '업데이트 정보를 확인했습니다';
   };
@@ -16768,11 +16872,17 @@ function App(){
     updateCheckInFlightRef.current = true;
     setUpdateBusy(true);
     try {
-      const info = await fetchAppUpdateStatus();
+      const info = await fetchAppUpdateStatus({ refresh: !options.silent });
       setUpdateInfo(info);
       if (!options.silent) showToast(updateStatusToast(info));
       return info;
     } catch (e) {
+      setUpdateInfo({
+        channelStatus: 'error',
+        updateAvailable: false,
+        automaticUpdateReady: false,
+        error: `업데이트 정보를 다시 확인하지 못했습니다. ${e?.message || '연결 상태를 확인한 뒤 다시 시도해 주세요.'}`,
+      });
       if (!options.silent) showSimpleErrorToast(e, '업데이트 확인 실패');
       console.warn('[board] update check skipped:', e.message);
       return null;
@@ -16810,9 +16920,13 @@ function App(){
     }
   }, [updateInfo, updateBusy, checkForUpdates, showSimpleErrorToast, showToast]);
 
-  const installUpdateVersion = useCallback(async (pin) => {
+  const installUpdateVersion = useCallback(async (pin, expectedUpdate) => {
     if (updateBusy || updateInstallBusy) {
       showToast('다른 업데이트 작업이 끝난 뒤 다시 눌러 주세요');
+      return false;
+    }
+    if (updateInstallBlockedReason || mutatingRef.current) {
+      showToast(updateInstallBlockedReason || '진행 중인 작업이 끝난 뒤 업데이트해 주세요.');
       return false;
     }
     const normalizedPin = String(pin || '').trim();
@@ -16833,9 +16947,13 @@ function App(){
       showToast('자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다');
       return false;
     }
+    if (!expectedUpdate || JSON.stringify(expectedUpdate) !== JSON.stringify(appUpdateArtifactSnapshot(info))) {
+      showToast('업데이트 정보가 바뀌었습니다. 다시 확인한 뒤 설치해 주세요.');
+      return false;
+    }
     setUpdateInstallBusy(true);
     try {
-      const result = await postAppUpdateInstall(normalizedPin);
+      const result = await postAppUpdateInstall(normalizedPin, expectedUpdate);
       const targetVersion = result?.targetVersion || info?.latest?.version || '새 버전';
       showToast(`${targetVersion} 업데이트 준비 완료 · 앱을 종료한 뒤 자동으로 다시 엽니다`);
       return true;
@@ -16857,6 +16975,7 @@ function App(){
     updateInfo,
     updateBusy,
     updateInstallBusy,
+    updateInstallBlockedReason,
     checkForUpdates,
     showSimpleErrorToast,
     showToast,
@@ -17936,6 +18055,9 @@ function App(){
       });
       try {
         const incomingSession = await postExport(files, aiFallback, resolvedInputIntent, {
+          onUploadProgress: ({ completed, total, fileName: uploadingName }) => setBackgroundJobs(prev => prev.map(entry => entry.id === job.id
+            ? { ...entry, hint: completed < total ? `파일 업로드 ${completed + 1}/${total} · ${uploadingName}` : '업로드 완료 · PDF를 나누어 차례로 처리합니다' }
+            : entry)),
           preserveMediaMode: keepAttachedFigures ? 'auto' : 'grayscale',
           signal: job.controller.signal,
           preview: true,
@@ -18011,6 +18133,9 @@ function App(){
     const queueGeneration = queueGenerationRef.current;
     try {
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
+        onUploadProgress: ({ completed, total, fileName: uploadingName }) => setBackgroundJobs(prev => prev.map(entry => entry.id === job.id
+          ? { ...entry, hint: completed < total ? `파일 업로드 ${completed + 1}/${total} · ${uploadingName}` : '업로드 완료 · 자료를 차례로 처리합니다' }
+          : entry)),
         signal: job.controller.signal,
         preserveMediaMode: keepAttachedFigures ? 'auto' : 'grayscale',
         edbName: fileName,
@@ -19512,6 +19637,7 @@ function App(){
           selectedIds={selectedProblemIds}
           updateBusy={updateBusy}
           updateInstallBusy={updateInstallBusy}
+          updateInstallBlockedReason={updateInstallBlockedReason}
           onCheckUpdate={checkForUpdates}
           onOpenUpdate={openUpdatePage}
           onInstallUpdate={installUpdateVersion}
