@@ -1,0 +1,40 @@
+name: Diagnose Windows updater host (private, read only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  diagnose:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.11"
+      - name: Download pinned baseline
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download 39938842927 --repo $env:GITHUB_REPOSITORY --name windows-installer --dir "$env:RUNNER_TEMP/edb-host-baseline"
+          if ($LASTEXITCODE -ne 0) { throw "Baseline download failed" }
+      - name: Probe exact OS PowerShell5 process creation flags
+        shell: pwsh
+        run: |
+          python scripts/debug_windows_powershell_flags.py --output evidence/windows-powershell-flags.json
+          if ($LASTEXITCODE -ne 0) { throw "Native host diagnosis failed" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-updater-host-diagnostics
+          path: evidence
+          if-no-files-found: error
+          retention-days: 7
