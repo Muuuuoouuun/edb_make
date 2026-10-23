@@ -854,26 +854,12 @@ jobs:
           WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
           RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
 
-      - name: Audit shipped PIN and update channel configuration
+      - name: Audit target PIN and update channel configuration
         if: inputs.verify_update_from_028
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
           EDB_AUDIT_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
         run: |
-          $auditRoot = Join-Path $env:RUNNER_TEMP "edb-update-config-audit"
-          New-Item -ItemType Directory -Force -Path $auditRoot | Out-Null
-          $oldInstaller = Join-Path $auditRoot "ClassInEDBMVP-0.2.4-Setup.exe"
-          .\.venv\Scripts\python.exe -c "import subprocess,sys; f=open(sys.argv[1],'wb'); subprocess.run(['gh','api','-H','Accept: application/octet-stream',sys.argv[2]],stdout=f,check=True)" $oldInstaller "repos/$env:GITHUB_REPOSITORY/releases/assets/647652086"
-          if ($LASTEXITCODE -ne 0) { throw "Could not download the original 0.2.4 draft installer" }
-          if ((Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne "462a7d00d4511dba2ec0969cfeff2de7e8cc1cfd0d8a5e2d83ce6060898b412e") {
-            throw "Original 0.2.4 installer SHA-256 mismatch"
-          }
-          $oldInstallDir = Join-Path $auditRoot "installed original 0.2.4"
-          $install = Start-Process -FilePath $oldInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="' + $oldInstallDir + '"')) -Wait -PassThru
-          if ($install.ExitCode -ne 0) { throw "Original 0.2.4 configuration inspection install failed" }
-          .\.venv\Scripts\python.exe scripts\audit_packaged_update_config.py $oldInstallDir --output dist\update-config-0.2.4.json
-          if ($LASTEXITCODE -ne 0) { throw "Original updater configuration audit failed" }
           .\.venv\Scripts\python.exe scripts\audit_packaged_update_config.py dist\ClassInEDBMVP --output dist\update-config-target.json
           if ($LASTEXITCODE -ne 0) { throw "Target updater configuration audit failed" }
 
@@ -966,6 +952,58 @@ jobs:
             dist/release-metadata
             dist/update-smoke.json
             dist/update-config-*.json
+
+  original-update-config-audit:
+    name: Original 0.2.4 update config audit
+    if: inputs.verify_update_from_028
+    runs-on: windows-2022
+    timeout-minutes: 10
+    # GitHub restricts unpublished release assets to callers with push access.
+    # Keep that permission isolated from the installer build/test jobs.
+    permissions:
+      contents: write
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Install the exact original draft for configuration inspection
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $auditRoot = Join-Path $env:RUNNER_TEMP "edb-original-config-audit"
+          New-Item -ItemType Directory -Force -Path $auditRoot | Out-Null
+          $oldInstaller = Join-Path $auditRoot "ClassInEDBMVP-0.2.4-Setup.exe"
+          python -c "import subprocess,sys; f=open(sys.argv[1],'wb'); subprocess.run(['gh','api','-H','Accept: application/octet-stream',sys.argv[2]],stdout=f,check=True)" $oldInstaller "repos/$env:GITHUB_REPOSITORY/releases/assets/647652086"
+          if ($LASTEXITCODE -ne 0) { throw "Could not download the original 0.2.4 draft installer" }
+          if ((Get-FileHash -LiteralPath $oldInstaller -Algorithm SHA256).Hash.ToLowerInvariant() -ne "462a7d00d4511dba2ec0969cfeff2de7e8cc1cfd0d8a5e2d83ce6060898b412e") {
+            throw "Original 0.2.4 installer SHA-256 mismatch"
+          }
+          $oldInstallDir = Join-Path $auditRoot "installed original 0.2.4"
+          $install = Start-Process -FilePath $oldInstaller -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', ('/DIR="' + $oldInstallDir + '"')) -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Original 0.2.4 configuration inspection install failed" }
+      - name: Report original update settings without exposing PIN material
+        shell: pwsh
+        env:
+          EDB_AUDIT_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
+        run: |
+          $oldInstallDir = Join-Path $env:RUNNER_TEMP "edb-original-config-audit/installed original 0.2.4"
+          python scripts\audit_packaged_update_config.py $oldInstallDir --output dist\update-config-0.2.4.json
+          if ($LASTEXITCODE -ne 0) { throw "Original updater configuration audit failed" }
+      - name: Preserve original configuration audit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: original-024-update-config-audit
+          path: dist/update-config-0.2.4.json
+          if-no-files-found: warn
+          retention-days: 14
 
   update-feed:
     name: Update Feed
