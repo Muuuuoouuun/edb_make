@@ -409,7 +409,7 @@ def _validate_update_metadata(payload: dict[str, Any], *, expected_app_id: str =
 
 def _smoke_edb_export(
     base_url: str, source: Path, output_dir: Path, *, input_intent: str = "page-as-is",
-    expected_records: int | None = None,
+    expected_records: int | None = None, publish_after_import: bool = False,
 ) -> dict[str, Any]:
     resolved_source = source.expanduser().resolve()
     if not resolved_source.is_file():
@@ -443,7 +443,7 @@ def _smoke_edb_export(
             "pdfDpi": 72,
             "ocr": "off",
             "preview": False,
-            "exportEdb": True,
+            "exportEdb": not publish_after_import,
             "recordMode": "image-only",
             "edbName": "Windows_Packaged_Smoke.edb",
             "expectedSessionRevision": session_revision,
@@ -452,7 +452,24 @@ def _smoke_edb_export(
     )
     if payload.get("ok") is not True:
         raise RuntimeError(f"packaged EDB smoke export did not report ok=true: {payload}")
-    edb_path = Path(str(payload.get("edbPath") or "")).expanduser().resolve()
+    if publish_after_import:
+        state = _json_request(f"{base_url}/api/session/latest")
+        session = state.get("session") or {}
+        payload = _json_request(
+            f"{base_url}/api/session/publish", method="POST", timeout=180.0,
+            request_payload={
+                "order": [problem["id"] for problem in session.get("problems", [])],
+                "excluded": [], "edbName": "Packaged_UI_Publish.edb",
+                "expectedSessionRevision": state.get("sessionRevision"),
+                "expectedSessionEpoch": state.get("sessionEpoch"),
+            },
+        )
+        if payload.get("ok") is not True:
+            raise RuntimeError(f"packaged UI publish failed: {payload}")
+    response_parts = (payload.get("edbParts") or (payload.get("publishSummary") or {}).get("edbParts")
+                      or (payload.get("session") or {}).get("edbParts") or [])
+    primary_path = payload.get("edbPath") or (response_parts[0].get("edbPath") if response_parts else "")
+    edb_path = Path(str(primary_path)).expanduser().resolve()
     if not edb_path.is_file() or edb_path.suffix.lower() != ".edb":
         raise RuntimeError(f"packaged EDB smoke export did not create an EDB file: {edb_path}")
     if not edb_path.is_relative_to(resolved_output):
@@ -467,7 +484,7 @@ def _smoke_edb_export(
         raise RuntimeError(f"packaged EDB smoke export contains no validated records: {validation}")
     if expected_records is not None and record_count != expected_records:
         raise RuntimeError(f"packaged PDF export expected {expected_records} records, found {record_count}")
-    edb_parts = payload.get("edbParts")
+    edb_parts = response_parts
     if not isinstance(edb_parts, list) or not edb_parts:
         raise RuntimeError("packaged EDB smoke export omitted EDB part metadata")
     # Read every part independently, including parts after the primary file.
@@ -533,6 +550,7 @@ def _smoke_pdf_exports(base_url: str, workspace: Path) -> list[dict[str, Any]]:
             base_url, source, workspace / f"PDF 출력 {name}",
             input_intent="multi-problem" if badges else "page-as-is",
             expected_records=16 if badges else page_count,
+            publish_after_import=name == "text-23",
         )
         result.update(fixture=name, sourcePageCount=page_count)
         results.append(result)
