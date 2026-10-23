@@ -340,7 +340,13 @@ jobs:
       - name: Build and verify image-only OpenCV
         run: |
           .venv/bin/python scripts/build_minimal_opencv.py --work-dir "$RUNNER_TEMP/edb-opencv-build" --cache-dir "$RUNNER_TEMP/edb-opencv-wheel-cache" --reference-out "$RUNNER_TEMP/opencv-reference.json" --install
-          .venv/bin/python scripts/verify_minimal_opencv.py --require-profile --compare "$RUNNER_TEMP/opencv-reference.json"
+          # Intel macOS runners showed 13% timing variance when verifying the
+          # same cached wheel twice. Keep exact output hashes as the hard gate.
+          timing_ratio=1.10
+          if [[ "$(uname -m)" == "x86_64" ]]; then
+            timing_ratio=1.25
+          fi
+          .venv/bin/python scripts/verify_minimal_opencv.py --require-profile --compare "$RUNNER_TEMP/opencv-reference.json" --max-timing-ratio "$timing_ratio"
 
       - name: Save verified image-only OpenCV wheel
         if: steps.opencv-cache.outputs.cache-hit != 'true'
