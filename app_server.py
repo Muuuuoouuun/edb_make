@@ -3512,8 +3512,9 @@ def _write_classin_limited_edb_files_streamed_local(
     max_entries = int(_lazy_attr("build_problem_board_edb", "MAX_ENCODED_ENTRIES_PER_PART"))
     # Published sessions restore image records without PreparedPage instances.
     # The persisted source page ID retains the original PDF page boundaries.
-    distinct_source_pages = len({entry.source_page_id for entry in problem_entries if entry.source_page_id})
-    if distinct_source_pages > max_entries:
+    full_source_pages = len({entry.source_page_id for entry in problem_entries
+        if entry.source_page_id and entry.input_intent == "page-as-is"})
+    if full_source_pages > max_entries:
         chunks = [
             chunk[first:first + max_entries]
             for chunk in chunks

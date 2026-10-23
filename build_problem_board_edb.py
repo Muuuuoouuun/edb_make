@@ -10812,8 +10812,9 @@ def plan_classin_limited_edb_parts(
     # A long PDF may have many inexpensive-looking placements while each page
     # still carries an image. Bound those batches without changing the part
     # layout of a single source page split into many small problem entries.
-    distinct_source_pages = len({id(entry.prepared_page) for entry in problem_entries if entry.prepared_page is not None})
-    if distinct_source_pages > MAX_ENCODED_ENTRIES_PER_PART:
+    full_source_pages = len({id(entry.prepared_page) for entry in problem_entries
+        if entry.prepared_page is not None and entry.input_intent == "page-as-is"})
+    if full_source_pages > MAX_ENCODED_ENTRIES_PER_PART:
         ranges = [
             (chunk_start, min(chunk_start + MAX_ENCODED_ENTRIES_PER_PART, end), estimated_pages)
             for start, end, estimated_pages in ranges
