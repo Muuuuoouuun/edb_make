@@ -3458,13 +3458,15 @@ class TestExportErrorPayload(unittest.TestCase):
         self.assertGreaterEqual(len(payload["recoverySteps"]), 2)
         self.assertTrue(any("PDF" in step for step in payload["recoverySteps"]))
 
-    def test_generic_export_error_stays_simple(self):
+    def test_generic_input_error_keeps_reason_and_recovery_steps(self):
         payload = app_server._export_error_payload(ValueError("plain failure"))
 
         self.assertFalse(payload["ok"])
-        self.assertEqual("export_failed", payload["errorKind"])
-        self.assertEqual("plain failure", payload["error"])
-        self.assertNotIn("recoverySteps", payload)
+        self.assertEqual("invalid_input", payload["errorKind"])
+        self.assertEqual("invalid_input", payload["code"])
+        self.assertIn("plain failure", payload["error"])
+        self.assertEqual("ValueError: plain failure", payload["detail"])
+        self.assertTrue(payload["recoverySteps"])
 
 
 class TestExportSourceResolution(unittest.TestCase):
@@ -3638,7 +3640,8 @@ class TestExportSourceResolution(unittest.TestCase):
             handler._handle_export()
 
         self.assertFalse(responses[0][0]["ok"])
-        self.assertIn("no preserved source files", responses[0][0]["error"])
+        self.assertEqual("input_file_missing", responses[0][0]["code"])
+        self.assertIn("no preserved source files", responses[0][0]["detail"])
         self.assertEqual(current_session, handler.server.latest_session)
 
     def test_uploaded_files_reuse_same_content_path_for_cache_stability(self):

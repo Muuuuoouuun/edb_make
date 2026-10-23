@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 try:
     from .verify_frontend_package import EXTRA_UI_STYLESHEETS
@@ -413,6 +414,15 @@ def _smoke_edb_export(
     resolved_source = source.expanduser().resolve()
     if not resolved_source.is_file():
         raise FileNotFoundError(f"EDB smoke source does not exist: {resolved_source}")
+    source_bytes = resolved_source.read_bytes()
+    upload_request = urllib.request.Request(
+        f"{base_url}/api/uploads", data=source_bytes, method="POST",
+        headers={"Origin": base_url, "Content-Type": "application/octet-stream", "X-File-Name": quote(resolved_source.name)},
+    )
+    with urllib.request.urlopen(upload_request, timeout=30.0) as response:
+        uploaded = json.loads(response.read().decode("utf-8"))
+    if uploaded.get("ok") is not True or uploaded.get("sha256") != hashlib.sha256(source_bytes).hexdigest():
+        raise RuntimeError(f"packaged upload failed integrity verification: {uploaded}")
     resolved_output = output_dir.resolve()
     session_state = _json_request(f"{base_url}/api/session/latest")
     session_revision = session_state.get("sessionRevision")
@@ -426,7 +436,7 @@ def _smoke_edb_export(
         method="POST",
         timeout=180.0,
         request_payload={
-            "files": [str(resolved_source)],
+            "files": [uploaded["sourcePath"]],
             "outputDir": str(resolved_output),
             "inputIntent": input_intent,
             "contentTarget": "full-page" if input_intent == "page-as-is" else "problem",
@@ -460,6 +470,25 @@ def _smoke_edb_export(
     edb_parts = payload.get("edbParts")
     if not isinstance(edb_parts, list) or not edb_parts:
         raise RuntimeError("packaged EDB smoke export omitted EDB part metadata")
+    # Read every part independently, including parts after the primary file.
+    from inspect_edb import parse_edb
+    verified_parts = []
+    actual_records = 0
+    for part in edb_parts:
+        part_path = Path(str(part.get("edbPath") or "")).resolve()
+        if not part_path.is_file() or not part_path.is_relative_to(resolved_output):
+            raise RuntimeError(f"missing or unexpected EDB part: {part_path}")
+        parsed = parse_edb(part_path)
+        if not 1 <= parsed.page_count_hint <= 50:
+            raise RuntimeError(f"EDB part exceeds ClassIn's 50-page limit: {part_path}")
+        if parsed.record_count_actual != int(part.get("recordCountActual") or 0):
+            raise RuntimeError(f"EDB part record count does not match its bytes: {part_path}")
+        actual_records += parsed.record_count_actual
+        verified_parts.append({"fileName": part_path.name, "records": parsed.record_count_actual,
+                               "pageCount": parsed.page_count_hint,
+                               "sha256": hashlib.sha256(part_path.read_bytes()).hexdigest()})
+    if actual_records != record_count:
+        raise RuntimeError("EDB parts lost or duplicated records relative to the export result")
     return {
         "fileName": edb_path.name,
         "bytes": edb_path.stat().st_size,
@@ -467,6 +496,7 @@ def _smoke_edb_export(
         "recordCount": record_count,
         "partCount": len(edb_parts),
         "pageCountHint": int(validation.get("pageCountHint") or 0),
+        "parts": verified_parts,
     }
 
 
@@ -509,6 +539,18 @@ def _smoke_pdf_exports(base_url: str, workspace: Path) -> list[dict[str, Any]]:
     return results
 
 
+def _isolated_smoke_environment(app_home: Path, empty_path: Path, *, windows: bool = os.name == "nt") -> dict[str, str]:
+    environment = {key.upper() if windows else key: value for key, value in os.environ.items()}
+    environment["EDB_APP_HOME"] = str(app_home)
+    environment["PATH"] = str(empty_path)
+    if windows and environment.get("SYSTEMROOT"):
+        environment["PATH"] += ";" + str(Path(environment["SYSTEMROOT"]) / "System32")
+    for variable in ("VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH", "EDB_PYMUPDF_PYTHON",
+                     "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        environment.pop(variable, None)
+    return environment
+
+
 def smoke_packaged_executable(
     executable: Path,
     *,
@@ -538,18 +580,9 @@ def smoke_packaged_executable(
         app_home = unicode_workspace / "사용자 데이터 ClassIn EDB"
         launch_directory.mkdir(parents=True)
         log_path = unicode_workspace / "packaged app.log"
-        environment = dict(os.environ)
-        environment["EDB_APP_HOME"] = str(app_home)
         empty_path = unicode_workspace / "no external Python"
         empty_path.mkdir()
-        environment["PATH"] = str(empty_path)
-        if os.name == "nt":
-            environment["PATH"] += os.pathsep + str(Path(environment["SystemRoot"]) / "System32")
-        for variable in ("VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH", "EDB_PYMUPDF_PYTHON"):
-            environment.pop(variable, None)
-        environment.pop("GEMINI_API_KEY", None)
-        environment.pop("GOOGLE_API_KEY", None)
-        environment.pop("OPENAI_API_KEY", None)
+        environment = _isolated_smoke_environment(app_home, empty_path)
         with log_path.open("wb") as log_handle:
             process_tree = _ProcessTreeGuard.launch(
                 command,

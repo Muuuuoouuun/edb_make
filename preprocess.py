@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import errno
 import hashlib
 import json
 import math
@@ -139,18 +140,53 @@ class PreprocessOptions:
     max_dimension: int | None = None
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class PreparedPage:
     page_id: str
     source_path: str
     page_number: int
-    image: Image.Image
+    _image: Image.Image | None = field(repr=False)
     original_size: tuple[int, int]
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any]
+    disk_backed: bool
+
+    def __init__(self, page_id: str, source_path: str, page_number: int,
+                 image: Image.Image | None, original_size: tuple[int, int],
+                 metadata: dict[str, Any] | None = None):
+        self.page_id = page_id
+        self.source_path = source_path
+        self.page_number = page_number
+        self._image = image
+        self.original_size = original_size
+        self.metadata = metadata if metadata is not None else {}
+        self.disk_backed = image is None
+
+    @property
+    def image(self) -> Image.Image:
+        if self._image is None:
+            with Image.open(self.source_path) as source:
+                self._image = source.convert("RGB")
+        return self._image
+
+    @image.setter
+    def image(self, image: Image.Image) -> None:
+        self._image = image
+        # A caller replacing pixels owns an edited image; disk reload must not
+        # silently discard those edits.
+        self.disk_backed = False
+
+    def release_image(self) -> None:
+        # Eager, synthetic or edited images have no guaranteed disk backing.
+        if self.disk_backed and self._image is not None:
+            self._image.close()
+            self._image = None
 
     @property
     def size(self) -> tuple[int, int]:
-        return self.image.size
+        if self._image is not None:
+            return self._image.size
+        with Image.open(self.source_path) as source:
+            return source.size
 
 
 @dataclass(slots=True)
@@ -517,33 +553,47 @@ def _render_pdf_pages_with_external_pymupdf(
     raise RuntimeError(f"PyMuPDF is required to render PDF pages ({detail})")
 
 
-def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160) -> list[NormalizedPageImage]:
-    source_path = Path(source)
-    target_dir = Path(output_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
+PDF_PROCESSING_BATCH_PAGES = 10
 
-    if fitz is None:
-        return _render_pdf_pages_with_external_pymupdf(source_path, target_dir, dpi=dpi)
 
-    if not source_path.is_file():
-        raise FileNotFoundError(f"PDF source file not found: {source_path}")
+class PdfPageProcessingError(RuntimeError):
+    def __init__(self, source_file: str | Path, page_start: int, page_end: int,
+                 cause: Exception, *, resource_exhausted: bool = False):
+        self.source_file = Path(source_file).name
+        self.page_start = page_start
+        self.page_end = page_end
+        self.cause = cause
+        self.code = "pdf_resource_exhausted" if resource_exhausted else "pdf_page_processing_failed"
+        reason = "메모리가 부족합니다" if resource_exhausted else "PDF 페이지를 처리하지 못했습니다"
+        super().__init__(f"{self.source_file} · {page_start}~{page_end}페이지: {reason}. ({cause})")
 
-    try:
-        doc = fitz.open(source_path)
-    except Exception as exc:
-        raise ValueError(f"Failed to open PDF document {source_path}: {exc}") from exc
+
+def _is_pdf_resource_error(exc: Exception) -> bool:
+    if isinstance(exc, MemoryError) or (isinstance(exc, OSError) and exc.errno == errno.ENOMEM):
+        return True
+    return isinstance(exc, RuntimeError) and any(
+        token in str(exc).lower()
+        for token in ("out of memory", "cannot allocate", "malloc failed", "failed to allocate")
+    )
+
+
+def _render_pdf_document_pages(doc: Any, source_path: Path, target_dir: Path,
+                               dpi: int, page_start: int, page_end: int) -> list[NormalizedPageImage]:
     pages: list[NormalizedPageImage] = []
+    page_index = page_start
     try:
         scale = dpi / 72.0
         matrix = fitz.Matrix(scale, scale)
-        for page_index in range(doc.page_count):
+        for page_index in range(page_start, page_end):
             page = doc.load_page(page_index)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
             pix.save(out_path.as_posix())
             try:
                 page_dict = page.get_text("dict")
-            except Exception:
+            except Exception as exc:
+                if _is_pdf_resource_error(exc):
+                    raise
                 page_dict = {}
             pages.append(
                 NormalizedPageImage(
@@ -555,6 +605,8 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                     height_px=pix.height,
                     metadata={
                         "source_type": "pdf",
+                        "pdf_batch_start_page": page_start + 1,
+                        "pdf_batch_end_page": page_end,
                         "dpi": dpi,
                         "pdf_page_width_pt": float(page.rect.width),
                         "pdf_page_height_pt": float(page.rect.height),
@@ -566,8 +618,58 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
                     },
                 )
             )
+    except Exception as exc:
+        # The caller retries allocation failures with smaller PDF documents.
+        if _is_pdf_resource_error(exc):
+            raise
+        raise PdfPageProcessingError(source_path, page_index + 1, page_index + 1, exc) from exc
+    return pages
+
+
+def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160) -> list[NormalizedPageImage]:
+    source_path = Path(source)
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if fitz is None:
+        return _render_pdf_pages_with_external_pymupdf(source_path, target_dir, dpi=dpi)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"PDF source file not found: {source_path}")
+    try:
+        document = fitz.open(source_path)
+    except Exception as exc:
+        raise ValueError(f"Failed to open PDF document {source_path}: {exc}") from exc
+
+    def render_range(first: int, last: int) -> list[NormalizedPageImage]:
+        try:
+            # Reopen the original for each sequential range, then close its
+            # native page/resource cache. Copying pages with insert_pdf can
+            # expose hidden answer layers or alter form/annotation appearance.
+            # Only this range is loaded; original catalog/OCG state survives.
+            with fitz.open(source_path) as chunk:
+                return _render_pdf_document_pages(chunk, source_path, target_dir, dpi, first, last)
+        except Exception as exc:
+            if not _is_pdf_resource_error(exc):
+                if isinstance(exc, PdfPageProcessingError):
+                    raise
+                raise PdfPageProcessingError(source_path, first + 1, last, exc) from exc
+            if last - first <= 1:
+                raise PdfPageProcessingError(source_path, first + 1, last, exc, resource_exhausted=True) from exc
+            # Do not retain failed pixmaps/page dictionaries in traceback
+            # frames while retrying the smaller PDFs.
+            exc.__traceback__ = None
+        middle = first + (last - first) // 2
+        return render_range(first, middle) + render_range(middle, last)
+
+    pages: list[NormalizedPageImage] = []
+    try:
+        if document.needs_pass:
+            raise ValueError(f"PDF document is password protected: {source_path.name}")
+        if document.page_count < 1:
+            raise ValueError(f"PDF document has no pages: {source_path.name}")
+        for first in range(0, document.page_count, PDF_PROCESSING_BATCH_PAGES):
+            pages.extend(render_range(first, min(first + PDF_PROCESSING_BATCH_PAGES, document.page_count)))
     finally:
-        doc.close()
+        document.close()
     return pages
 
 
@@ -2887,9 +2989,16 @@ def _normalize_pdf_rendered_pages(
         normalized.metadata["document_like"] = True
         return normalized
 
-    worker_count = _resolve_preprocess_page_worker_count(len(rendered))
+    worker_count = 1 if len(rendered) > PDF_PROCESSING_BATCH_PAGES else _resolve_preprocess_page_worker_count(len(rendered))
     if worker_count <= 1:
-        normalized_pages = [_normalize(page) for page in rendered]
+        normalized_pages = []
+        for page in rendered:
+            try:
+                normalized_pages.append(_normalize(page))
+            except Exception as exc:
+                if _is_pdf_resource_error(exc):
+                    raise PdfPageProcessingError(source_path, page.page_index + 1, page.page_index + 1, exc, resource_exhausted=True) from exc
+                raise
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
             normalized_pages = list(executor.map(_normalize, rendered))
@@ -4341,12 +4450,16 @@ def prepare_source_pages(
         max_dimension=max_dimension,
     )
     prepared: list[PreparedPage] = []
+    # Even short PDFs must not retain decoded rasters across a many-file
+    # queue; processing one source at a time alone would still retain them in
+    # the accumulated source_results list.
+    disk_backed = Path(path).suffix.lower() == ".pdf" or len(normalized_pages) > PDF_PROCESSING_BATCH_PAGES
     for page in normalized_pages:
-        image = Image.open(page.normalized_path).convert("RGB")
+        image = None if disk_backed else Image.open(page.normalized_path).convert("RGB")
         original_source_path = page.source_path
         if page.metadata.get("source_type") == "pdf" and page.metadata.get("source_pdf_path"):
             original_source_path = str(page.metadata["source_pdf_path"])
-        if max_dimension:
+        if max_dimension and image is not None:
             width, height = image.size
             scale = min(max_dimension / max(width, height), 1.0)
             if scale < 1.0:
