@@ -31,6 +31,7 @@ import traceback
 import uuid
 import webbrowser
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime
 from functools import lru_cache, partial
 from http import HTTPStatus
@@ -1784,6 +1785,45 @@ def _update_artifact_details(status: dict[str, Any]) -> tuple[str, str, str, int
     return download_url, file_name, artifact_type, expected_size, expected_sha256
 
 
+def _update_storage_failure(exc: OSError) -> AppUpdateError:
+    if exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)} or getattr(exc, "winerror", None) in {39, 112}:
+        return AppUpdateError(
+            "update_disk_full",
+            "업데이트 파일을 저장할 디스크 공간이 부족하거나 저장 용량 한도를 초과했습니다.",
+            status=HTTPStatus.INSUFFICIENT_STORAGE,
+            recovery_steps=["앱 데이터가 저장된 드라이브의 공간을 확보한 뒤 업데이트를 다시 시도해 주세요."],
+        )
+    if isinstance(exc, PermissionError) or exc.errno in {errno.EACCES, errno.EPERM} or getattr(exc, "winerror", None) == 5:
+        return AppUpdateError(
+            "update_storage_permission_denied",
+            "업데이트 파일을 저장할 폴더에 쓰기 권한이 없거나 보안 프로그램이 접근을 차단했습니다.",
+            status=HTTPStatus.FORBIDDEN,
+            recovery_steps=["앱 데이터 폴더의 쓰기 권한과 보안 프로그램의 차단 여부를 확인한 뒤 다시 시도해 주세요."],
+        )
+    return AppUpdateError(
+        "update_staging_failed",
+        "업데이트 파일을 로컬 폴더에 준비하지 못했습니다.",
+        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+        recovery_steps=["앱 데이터 폴더와 드라이브가 사용 가능한지 확인한 뒤 다시 시도해 주세요."],
+    )
+
+
+def _perform_update_storage(operation, *args, **kwargs):
+    try:
+        return operation(*args, **kwargs)
+    except OSError as exc:
+        raise _update_storage_failure(exc) from exc
+
+
+@contextmanager
+def _update_storage_writer(path: Path):
+    output = _perform_update_storage(path.open, "wb")
+    try:
+        yield output
+    finally:
+        _perform_update_storage(output.close)
+
+
 def _download_update_artifact(
     status: dict[str, Any],
     *,
@@ -1791,8 +1831,8 @@ def _download_update_artifact(
 ) -> Path:
     download_url, file_name, _artifact_type, expected_size, expected_sha256 = _update_artifact_details(status)
     update_root = (runtime_dir or RUNTIME_DIR) / "updates"
-    update_root.mkdir(parents=True, exist_ok=True)
-    download_dir = Path(tempfile.mkdtemp(prefix="pending-", dir=update_root))
+    _perform_update_storage(update_root.mkdir, parents=True, exist_ok=True)
+    download_dir = Path(_perform_update_storage(tempfile.mkdtemp, prefix="pending-", dir=update_root))
     partial_path = download_dir / f"{file_name}.part"
     final_path = download_dir / file_name
     request = Request(
@@ -1805,7 +1845,7 @@ def _download_update_artifact(
     try:
         digest = hashlib.sha256()
         total = 0
-        with urlopen(request, timeout=30.0) as response, partial_path.open("wb") as output:
+        with urlopen(request, timeout=30.0) as response, _update_storage_writer(partial_path) as output:
             response_url = str(getattr(response, "geturl", lambda: download_url)() or download_url)
             if not _normalize_update_url(response_url):
                 raise AppUpdateError("unsafe_update_redirect", "업데이트 다운로드가 안전하지 않은 주소로 이동했습니다.")
@@ -1834,9 +1874,9 @@ def _download_update_artifact(
                         "업데이트 파일 크기가 배포 정보보다 큽니다.",
                     )
                 digest.update(chunk)
-                output.write(chunk)
-            output.flush()
-            os.fsync(output.fileno())
+                _perform_update_storage(output.write, chunk)
+            _perform_update_storage(output.flush)
+            _perform_update_storage(os.fsync, output.fileno())
         if total != expected_size:
             raise AppUpdateError(
                 "update_size_mismatch",
@@ -1848,7 +1888,7 @@ def _download_update_artifact(
                 "업데이트 파일 무결성 검증에 실패했습니다.",
                 recovery_steps=["파일을 실행하지 않았습니다. 관리자에게 업데이트 피드를 확인해 달라고 요청해 주세요."],
             )
-        os.replace(partial_path, final_path)
+        _perform_update_storage(os.replace, partial_path, final_path)
         return final_path
     except AppUpdateError:
         shutil.rmtree(download_dir, ignore_errors=True)
@@ -1857,7 +1897,7 @@ def _download_update_artifact(
         shutil.rmtree(download_dir, ignore_errors=True)
         raise AppUpdateError(
             "update_download_failed",
-            f"업데이트 파일을 받지 못했습니다: {exc}",
+            "업데이트 파일을 다운로드하지 못했습니다. 인터넷 연결과 배포 서버 상태를 확인해 주세요.",
             status=HTTPStatus.BAD_GATEWAY,
             recovery_steps=["인터넷 연결을 확인한 뒤 다시 시도해 주세요."],
         ) from exc
@@ -1947,19 +1987,28 @@ WINDOWS_UPDATE_HELPER = r'''param(
   [Parameter(Mandatory=$true)][string]$LogFile
 )
 $ErrorActionPreference = 'Stop'
+# Keep installer diagnostics separate: Inno Setup owns its /LOG file.
+$installerLog = Join-Path (Split-Path -Parent $LogFile) 'update-install.log'
 try {
+  Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Updater waiting for the app to exit.'
   $parent = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue
   if ($parent -and -not $parent.WaitForExit(120000)) {
     throw "app did not exit within 120 seconds; update cancelled"
   }
-  $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $LogFile + '"'))
+  $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $installerLog + '"'))
   $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
   if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
     throw "installer exited with code $($process.ExitCode)"
   }
-  if (Test-Path -LiteralPath $AppExecutable -PathType Leaf) {
-    Start-Process -FilePath $AppExecutable
+  if (-not (Test-Path -LiteralPath $AppExecutable -PathType Leaf)) {
+    throw "installer completed but the updated executable is missing: $AppExecutable"
   }
+  Start-Process -FilePath $AppExecutable -ErrorAction Stop
+  Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Updated app restart requested.'
+} catch {
+  # Detached helpers have no console. Persist errors before propagating failure.
+  Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value ('Update failed: ' + $_.Exception.ToString()) -ErrorAction SilentlyContinue
+  throw
 } finally {
   Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
 }
@@ -2028,37 +2077,44 @@ def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> di
             recovery_steps=["쓰기 가능한 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
         )
     helper_path = artifact_path.parent / "apply-windows-update.ps1"
-    log_path = artifact_path.parent / "update-install.log"
+    log_path = artifact_path.parent / "update-helper.log"
     helper_path.write_text(WINDOWS_UPDATE_HELPER, encoding="utf-8-sig")
     creation_flags = 0
     creation_flags |= int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-    creation_flags |= int(getattr(subprocess, "DETACHED_PROCESS", 0))
-    subprocess.Popen(
-        [
-            "powershell.exe",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(helper_path),
-            "-ParentPid",
-            str(os.getpid()),
-            "-Installer",
-            str(artifact_path),
-            "-AppExecutable",
-            str(executable),
-            "-InstallDir",
-            str(executable.parent),
-            "-LogFile",
-            str(log_path),
-        ],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=creation_flags,
-        close_fds=True,
-    )
+    # Windows PowerShell 5 exits 0 without executing -File when detached.
+    # A hidden console lets the helper run independently after this app exits.
+    creation_flags |= int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    # Capture PowerShell parse/startup errors as well as the helper's own log.
+    log_stream = (artifact_path.parent / "update-helper-process.log").open("ab")
+    try:
+        subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(helper_path),
+                "-ParentPid",
+                str(os.getpid()),
+                "-Installer",
+                str(artifact_path),
+                "-AppExecutable",
+                str(executable),
+                "-InstallDir",
+                str(executable.parent),
+                "-LogFile",
+                str(log_path),
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=log_stream,
+            stderr=subprocess.STDOUT,
+            creationflags=creation_flags,
+            close_fds=True,
+        )
+    finally:
+        log_stream.close()
     return {"platform": "windows", "targetName": executable.name, "restartScheduled": True}
 
 
@@ -2097,7 +2153,46 @@ def _discard_update_download(artifact_path: Path) -> None:
         _log_operation_exception("discard_failed_update_download", exc)
 
 
-def prepare_app_update(pin: Any) -> dict[str, Any]:
+def _validate_confirmed_update(status: dict[str, Any], expected: Any) -> None:
+    """Bind installation to the exact artifact the user confirmed."""
+    if not isinstance(expected, dict):
+        raise AppUpdateError(
+            "update_confirmation_required", "업데이트 정보를 다시 확인한 뒤 설치해 주세요.",
+            status=HTTPStatus.CONFLICT,
+        )
+    latest = status.get("latest") if isinstance(status.get("latest"), dict) else {}
+    url, _filename, artifact_type, size, digest = _update_artifact_details(status)
+    current = {
+        "version": str(latest.get("version") or "").strip(),
+        "downloadUrl": url,
+        "sha256": digest,
+        "sizeBytes": size,
+        "arch": _normalized_app_arch(latest.get("arch") or status.get("arch")),
+        "artifactType": artifact_type,
+    }
+    confirmed_type = str(expected.get("artifactType") or "").strip().lower()
+    if not confirmed_type and not str(latest.get("artifactType") or "").strip():
+        # Legacy feeds omit this optional field; the same validated file suffix
+        # must imply the same type for the browser snapshot and installation.
+        confirmed_type = artifact_type
+    confirmed = {
+        "version": str(expected.get("version") or "").strip(),
+        "downloadUrl": _normalize_update_url(expected.get("downloadUrl")),
+        "sha256": _normalize_update_sha256(expected.get("sha256")),
+        "sizeBytes": expected.get("sizeBytes") if type(expected.get("sizeBytes")) is int else None,
+        "arch": _normalized_app_arch(expected.get("arch")),
+        "artifactType": confirmed_type,
+    }
+    if confirmed != current:
+        raise AppUpdateError(
+            "update_target_changed",
+            "확인한 업데이트 버전 또는 설치 파일이 변경되었습니다. 다시 확인한 뒤 설치해 주세요.",
+            status=HTTPStatus.CONFLICT,
+            recovery_steps=["업데이트 확인을 다시 누른 뒤 버전 정보를 확인하고 PIN을 입력해 주세요."],
+        )
+
+
+def prepare_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, Any]:
     status = build_app_update_status()
     if not status.get("updateAvailable"):
         raise AppUpdateError("update_not_available", "설치할 새 버전이 없습니다.")
@@ -2112,6 +2207,8 @@ def prepare_app_update(pin: Any) -> dict[str, Any]:
     if _parse_update_pin_verifier(verifier) is None:
         raise AppUpdateError("invalid_update_pin_config", "업데이트 PIN 설정이 올바르지 않습니다.")
     _authorize_update_pin(pin, verifier)
+    if expected_update is not None:
+        _validate_confirmed_update(status, expected_update)
     _download_url, file_name, artifact_type, _expected_size, _expected_sha256 = _update_artifact_details(status)
     artifact_path = _download_update_artifact(status)
     try:
@@ -2130,14 +2227,14 @@ def prepare_app_update(pin: Any) -> dict[str, Any]:
     }
 
 
-def begin_app_update(pin: Any) -> dict[str, Any]:
+def begin_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, Any]:
     global _update_install_started
     if not _update_install_lock.acquire(blocking=False):
         raise AppUpdateError("update_install_busy", "다른 업데이트 요청을 처리하고 있습니다.")
     try:
         if _update_install_started:
             raise AppUpdateError("update_install_started", "업데이트가 이미 시작되었습니다.")
-        result = prepare_app_update(pin)
+        result = prepare_app_update(pin, expected_update=expected_update)
         _update_install_started = True
         return result
     finally:
@@ -2501,6 +2598,22 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
         causes.append(current)
         current = getattr(current, "cause", None) or current.__cause__
     combined = " ".join(str(item) for item in causes).lower()
+    # File paths are diagnostic context, not evidence of a failure category.
+    # A malformed file named "out of memory.pdf" must still be reported as
+    # malformed rather than as memory exhaustion or password protection.
+    reason_text = combined
+    for item in causes:
+        for attribute in ("source_file", "file_name", "filename", "filename2"):
+            value = getattr(item, attribute, None)
+            if value:
+                filename = str(value).lower()
+                reason_text = reason_text.replace(filename, "")
+                reason_text = reason_text.replace(re.split(r"[\\/]", filename)[-1], "")
+    pdf_open_failure = any(
+        type(item).__name__ in {"FileDataError", "EmptyFileError"}
+        or str(item).lower().startswith("failed to open pdf document ")
+        for item in causes
+    )
     native_cv2_causes = [item for item in causes if type(item).__module__ == "cv2"]
     native_memory_exhausted = any(
         _preprocess_module()._is_pdf_resource_error(item) for item in native_cv2_causes
@@ -2524,8 +2637,8 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
         any(isinstance(item, MemoryError) or isinstance(item, OSError) and (item.errno == errno.ENOMEM or getattr(item, "winerror", None) in {8, 14, 1455}) for item in causes)
         or native_memory_exhausted
         or getattr(exc, "code", "") == "pdf_resource_exhausted"
-        or (not native_cv2_causes and any(
-            signal in combined for signal in ("out of memory", "cannot allocate memory", "malloc failed", "memory allocation failed")
+        or (not native_cv2_causes and not pdf_open_failure and any(
+            signal in reason_text for signal in ("out of memory", "cannot allocate memory", "malloc failed", "memory allocation failed")
         ))
     ):
         code, kind = "processing_memory_exhausted", "memory_exhausted"
@@ -2534,7 +2647,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
         retryable = False
     elif any(isinstance(item, OSError) and (
         item.errno == errno.ENOSPC or getattr(item, "winerror", None) == 112
-        or any(signal in str(item).lower() for signal in ("disk full", "no space left on device", "not enough space on the disk"))
+        or any(signal in reason_text for signal in ("disk full", "no space left on device", "not enough space on the disk"))
     ) for item in causes):
         code, kind = "runtime_storage_full", "storage_full"
         summary = "디스크의 남은 용량이 부족해 원본 또는 변환 파일을 저장하지 못했습니다."
@@ -2552,22 +2665,22 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
         summary = "같은 작업 폴더가 이미 있어 덮어쓰지 않았습니다. 기존 파일은 그대로 유지됩니다."
         steps = ["다른 출력 폴더를 선택하거나 잠시 후 작업을 다시 시도해 주세요."]
         retryable = True
-    elif "bundled pymupdf" in combined or "pymupdf is required to render pdf" in combined:
+    elif not pdf_open_failure and ("bundled pymupdf" in reason_text or "pymupdf is required to render pdf" in reason_text):
         code, kind = "pdf_renderer_unavailable", "app_dependency_missing"
         summary = "앱 내부의 PDF 변환 기능을 불러오지 못했습니다. 파일 용량 문제가 아닌 프로그램 설치 오류입니다."
         steps = ["최신 설치파일로 앱을 다시 설치해 주세요. 별도 Python 설치는 필요하지 않습니다.", "계속 실패하면 아래 오류 상세를 복사해 버그 리포트로 보내 주세요."]
         retryable = False
-    elif "password protected" in combined or "password-protected" in combined or "encrypted pdf" in combined:
+    elif not pdf_open_failure and ("password protected" in reason_text or "password-protected" in reason_text or "encrypted pdf" in reason_text):
         code, kind = "pdf_password_protected", "invalid_document"
         summary = "암호로 보호된 PDF여서 페이지를 읽을 수 없습니다."
         steps = ["권한이 있는 PDF 프로그램에서 암호를 해제하거나 새 PDF로 내보낸 뒤 등록해 주세요."]
         retryable = False
-    elif "exceeds classin's 50-page limit" in combined:
+    elif not pdf_open_failure and "exceeds classin's 50-page limit" in reason_text:
         code, kind = "single_problem_too_tall", "document_layout_limit"
         summary = "한 문항이 ClassIn 칠판 50페이지를 넘어 한 파일에 넣을 수 없습니다."
         steps = ["해당 문항을 ‘나누기’로 여러 영역으로 나누어 주세요.", "원본 페이지를 유지하려면 ‘페이지 전체 넣기’로 다시 등록하면 길이에 맞춰 자동 분할합니다."]
         retryable = False
-    elif "failed to open pdf document" in combined or any(type(item).__name__ in {"FileDataError", "EmptyFileError"} for item in causes):
+    elif pdf_open_failure:
         code, kind = "pdf_invalid_document", "invalid_document"
         summary = "PDF가 손상되었거나 올바른 PDF 형식이 아니어서 읽을 수 없습니다."
         steps = ["PDF 뷰어에서 원본이 열리는지 확인해 주세요.", "원본을 다시 다운로드하거나 PDF로 다시 저장한 뒤 등록해 주세요."]
@@ -10300,6 +10413,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(cached_runtime_diagnostics(force_refresh=force_refresh))
             return
         if parsed.path == "/api/app/update":
+            refresh = parse_qs(parsed.query).get("refresh", [""])[0].strip().lower()
+            if refresh in {"1", "true", "yes"}:
+                clear_app_update_status_cache()
             self._send_json(build_app_update_status())
             return
         if parsed.path == "/api/session/latest":
@@ -11922,8 +12038,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 status=HTTPStatus.BAD_REQUEST,
             )
             return
+        if not isinstance(payload.get("expectedUpdate"), dict):
+            self._send_json(
+                {"ok": False, "error": "업데이트 정보를 다시 확인한 뒤 설치해 주세요.",
+                 "code": "update_confirmation_required"},
+                status=HTTPStatus.CONFLICT,
+            )
+            return
         try:
-            result = begin_app_update(payload.get("pin"))
+            result = begin_app_update(payload.get("pin"), expected_update=payload["expectedUpdate"])
         except AppUpdateError as exc:
             response = {"ok": False, "error": str(exc), "code": exc.code}
             if exc.recovery_steps:
@@ -12222,17 +12345,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         content_type = str(self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
         if content_type != "application/octet-stream":
             raise UploadRequestError("upload_invalid_content_type", "파일 전송 형식을 확인하지 못했습니다. 파일을 다시 등록해 주세요.", **context)
-        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        free_bytes = shutil.disk_usage(UPLOAD_DIR).free
-        required_bytes = content_length + UPLOAD_DISK_RESERVE_BYTES
-        if free_bytes < required_bytes:
-            error = OSError(errno.ENOSPC, f"파일 '{file_name}'을 저장하려면 {_format_capacity_bytes(required_bytes)}가 필요하지만 디스크에 {_format_capacity_bytes(free_bytes)}만 남아 있습니다.")
-            error.available_bytes = free_bytes
-            error.required_bytes = required_bytes
-            error.source_file = file_name
-            raise error
         staged_path: Path | None = None
         try:
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            free_bytes = shutil.disk_usage(UPLOAD_DIR).free
+            required_bytes = content_length + UPLOAD_DISK_RESERVE_BYTES
+            if free_bytes < required_bytes:
+                error = OSError(errno.ENOSPC, f"파일 '{file_name}'을 저장하려면 {_format_capacity_bytes(required_bytes)}가 필요하지만 디스크에 {_format_capacity_bytes(free_bytes)}만 남아 있습니다.")
+                error.available_bytes = free_bytes
+                error.required_bytes = required_bytes
+                raise error
             descriptor, raw_path = tempfile.mkstemp(prefix=".upload-stream.", suffix=".tmp", dir=str(UPLOAD_DIR))
             staged_path = Path(raw_path)
             digest = hashlib.sha256()
@@ -12276,7 +12398,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             staged_path = None
             _fsync_parent_directory(target)
             return target, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
-        except OSError as exc:
+        except (OSError, MemoryError) as exc:
             exc.source_file = file_name
             raise
         finally:
