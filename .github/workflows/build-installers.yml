@@ -24,8 +24,8 @@ on:
         required: true
         type: boolean
         default: true
-      verify_update_from_028:
-        description: "Verify real PIN/download/install/restart from the pinned 0.2.8 test build"
+      verify_native_update:
+        description: "Verify native PIN/install/restart (Windows fixed-updater test bootstrap; macOS original 0.2.8)"
         required: false
         type: boolean
         default: false
@@ -459,7 +459,7 @@ jobs:
           RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
 
       - name: Verify actual PIN update from 0.2.8 on macOS
-        if: inputs.verify_update_from_028
+        if: inputs.verify_native_update
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
@@ -482,10 +482,12 @@ jobs:
             --baseline-version 0.2.8 --baseline-sha256 "$baseline_sha" \
             --target-artifact dist/ClassInEDBMVP-macOS.dmg \
             --target-version "$RELEASE_VERSION" --target-sha256 "$target_sha" \
+            --baseline-source-commit d5a3f37d984047875ae32bff22967ff625a4bfe2 \
+            --target-source-commit "$GITHUB_SHA" \
             --output dist/update-smoke.json
 
       - name: Preserve macOS updater diagnostics
-        if: ${{ always() && inputs.verify_update_from_028 }}
+        if: ${{ always() && inputs.verify_native_update }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-update-diagnostics
@@ -640,6 +642,60 @@ jobs:
           if ("$installedPackage".ToLowerInvariant() -ne "innosetup|$innoVersion") {
             throw "Unexpected Inno Setup package version: '$installedPackage' (expected innosetup|$innoVersion)"
           }
+
+      - name: Verify real Windows PowerShell updater launch regressions
+        if: inputs.verify_native_update
+        shell: pwsh
+        run: |
+          .\.venv\Scripts\python.exe -m unittest -q test_smoke_packaged_update test_windows_update_helper_diagnostics
+          if ($LASTEXITCODE -ne 0) { throw "Native updater host regressions failed" }
+
+      - name: Build fixed-updater 0.2.9 test bootstrap (never a customer release)
+        id: windows-update-bootstrap
+        if: inputs.verify_native_update
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          if ([version]$env:RELEASE_VERSION -le [version]"0.2.9") {
+            throw "Native update verification needs a target version newer than the 0.2.9 test bootstrap"
+          }
+          # The original 0.2.8 DETACHED_PROCESS helper cannot execute PowerShell5.
+          # Users must install the fixed app once manually; this candidate tests
+          # subsequent updates with the corrected helper. It is not original 0.2.8.
+          # Keep it outside dist so the target's -Clean cannot remove it.
+          $bootstrapRoot = Join-Path $env:RUNNER_TEMP "edb-windows-update-bootstrap"
+          $bootstrapArgs = @{
+            Clean = $true
+            OutputDir = $bootstrapRoot
+            Version = "0.2.9"
+            PythonExe = (Join-Path $PWD ".venv/Scripts/python.exe")
+          }
+          .\package_windows_installer.ps1 @bootstrapArgs
+          $bootstrapInstaller = Join-Path $bootstrapRoot "ClassInEDBMVP-Setup.exe"
+          $bootstrapSha = (Get-FileHash -LiteralPath $bootstrapInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+          @{
+            appVersion = "0.2.9"
+            sourceCommit = $env:GITHUB_SHA
+            purpose = "fixed-updater-test-bootstrap"
+            publishedForCustomers = $false
+            original028WindowsUpdaterCompatible = $false
+            sha256 = $bootstrapSha
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $bootstrapRoot "bootstrap-provenance.json") -Encoding utf8
+          "installer=$bootstrapInstaller" >> $env:GITHUB_OUTPUT
+          "sha256=$bootstrapSha" >> $env:GITHUB_OUTPUT
+
+      - name: Preserve fixed-updater test bootstrap evidence
+        if: ${{ always() && inputs.verify_native_update }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-update-test-bootstrap
+          path: |
+            ${{ runner.temp }}/edb-windows-update-bootstrap/ClassInEDBMVP-Setup.exe
+            ${{ runner.temp }}/edb-windows-update-bootstrap/bootstrap-provenance.json
+            ${{ runner.temp }}/edb-windows-update-bootstrap/release-metadata
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Build Windows installer
         shell: pwsh
@@ -855,7 +911,7 @@ jobs:
           RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
 
       - name: Audit target PIN and update channel configuration
-        if: inputs.verify_update_from_028
+        if: inputs.verify_native_update
         shell: pwsh
         env:
           EDB_AUDIT_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
@@ -863,30 +919,29 @@ jobs:
           .\.venv\Scripts\python.exe scripts\audit_packaged_update_config.py dist\ClassInEDBMVP --output dist\update-config-target.json
           if ($LASTEXITCODE -ne 0) { throw "Target updater configuration audit failed" }
 
-      - name: Verify actual PIN update from 0.2.8 on Windows
-        if: inputs.verify_update_from_028
+      - name: Verify actual PIN update from the fixed Windows test bootstrap
+        if: inputs.verify_native_update
         shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
+          BASELINE_INSTALLER: ${{ steps.windows-update-bootstrap.outputs.installer }}
+          BASELINE_SHA256: ${{ steps.windows-update-bootstrap.outputs.sha256 }}
         run: |
-          $baselineRoot = Join-Path $env:RUNNER_TEMP "edb-update-baseline"
-          gh run download 39938842927 --repo $env:GITHUB_REPOSITORY --name windows-installer --dir $baselineRoot
-          if ($LASTEXITCODE -ne 0) { throw "Could not download the pinned update baseline" }
-          .\.venv\Scripts\python.exe -m unittest -q test_smoke_packaged_update test_windows_update_helper_diagnostics
-          if ($LASTEXITCODE -ne 0) { throw "Native updater guard regressions failed" }
           $targetSha = (Get-FileHash -LiteralPath "dist\ClassInEDBMVP-Setup.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
           .\.venv\Scripts\python.exe scripts\smoke_packaged_update.py `
             --platform windows --arch x64 `
-            --baseline-artifact (Join-Path $baselineRoot "ClassInEDBMVP-Setup.exe") `
-            --baseline-version 0.2.8 --baseline-sha256 1c6e85a9a4be4640cd0490901754db9ec1938d0eca0ab53d0bfe6b91f73a9b53 `
+            --baseline-artifact $env:BASELINE_INSTALLER `
+            --baseline-version 0.2.9 --baseline-sha256 $env:BASELINE_SHA256 `
+            --baseline-kind fixed-updater-test-bootstrap `
+            --baseline-source-commit $env:GITHUB_SHA `
             --target-artifact dist\ClassInEDBMVP-Setup.exe `
             --target-version $env:RELEASE_VERSION --target-sha256 $targetSha `
+            --target-source-commit $env:GITHUB_SHA `
             --output dist\update-smoke.json
-          if ($LASTEXITCODE -ne 0) { throw "Actual PIN update transition failed" }
+          if ($LASTEXITCODE -ne 0) { throw "Fixed Windows updater transition failed" }
 
       - name: Preserve Windows updater diagnostics
-        if: ${{ always() && inputs.verify_update_from_028 }}
+        if: ${{ always() && inputs.verify_native_update }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-update-diagnostics
@@ -955,7 +1010,7 @@ jobs:
 
   original-update-config-audit:
     name: Original 0.2.4 update config audit
-    if: inputs.verify_update_from_028
+    if: inputs.verify_native_update
     runs-on: windows-2022
     timeout-minutes: 10
     # GitHub restricts unpublished release assets to callers with push access.

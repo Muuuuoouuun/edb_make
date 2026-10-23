@@ -64,6 +64,8 @@ def packaged_config_audit(executable, expected_pin=None):
     verifier = str(config.get('updatePinHash') or '')
     result = {'version': config.get('version'), 'pinConfigured': bool(verifier),
               'feedConfigured': bool(config.get('updateFeedUrl')), 'downloadConfigured': bool(config.get('downloadUrl'))}
+    provenance = existing[0].parent / "release_metadata/release-provenance.json"
+    result["gitCommit"] = json.loads(provenance.read_text(encoding="utf-8-sig")).get("gitCommit", "") if provenance.is_file() else ""
     if expected_pin is not None:
         matched = False
         try:
@@ -288,6 +290,9 @@ def run_transition(args, temp, app_home):
     original_audit = packaged_config_audit(executable, os.environ.get(args.expected_pin_env) if args.expected_pin_env else None)
     if original_audit['version'] != args.baseline_version:
         raise RuntimeError('Baseline package resource version does not match expectation')
+    expected_baseline_commit = getattr(args, "baseline_source_commit", "")
+    if expected_baseline_commit and original_audit.get("gitCommit") != expected_baseline_commit:
+        raise RuntimeError("Baseline embedded source commit does not match expectation")
     # Runtime override is limited to feed/verifier, never application version.
     pin = ''.join(str(secrets.randbelow(10)) for _ in range(8))
     wrong_pin = ('1' if pin[0] != '1' else '2') + pin[1:]
@@ -345,6 +350,8 @@ def run_transition(args, temp, app_home):
                 if before_problem_ids != after_problem_ids:
                     raise RuntimeError('Saved active session did not survive restart')
                 updated_audit = packaged_config_audit(executable, os.environ.get(args.expected_pin_env) if args.expected_pin_env else None)
+                if getattr(args, "target_source_commit", "") and updated_audit.get("gitCommit") != args.target_source_commit:
+                    raise RuntimeError("Target embedded source commit does not match expectation")
                 if updated_audit['version'] != args.target_version:
                     raise RuntimeError('Installed package resource version is incorrect')
                 after_export = _smoke_edb_export('http://127.0.0.1:8765', pdf, workspace / 'after update', expected_records=1)
@@ -353,6 +360,8 @@ def run_transition(args, temp, app_home):
                 confirmation_check = verify_changed_confirmation(feed, pin, new_pid, args.target_version)
                 return {'platform': args.platform, 'arch': args.arch, 'baselineVersion': args.baseline_version, 'targetVersion': args.target_version,
                         'baselineSha256': args.baseline_sha256, 'targetSha256': args.target_sha256,
+                        'baselineKind': getattr(args, 'baseline_kind', 'original-0.2.8'),
+                        'baselineSourceCommit': original_audit.get('gitCommit', ''), 'targetSourceCommit': updated_audit.get('gitCommit', ''),
                         'unmodifiedInstallerBytes': True, 'privateLoopbackFeed': True, 'ephemeralPinVerifier': True,
                         'wrongPinRejected': True, 'wrongPinDownloadedArtifact': False, 'wrongPinStoppedApp': False,
                         'artifactDownloads': feed.artifact_requests, 'realInstallApiAccepted': True, 'oldPid': old_pid, 'newPid': new_pid,
@@ -388,7 +397,7 @@ def run_transition(args, temp, app_home):
                 # Preserve diagnostic files before disposable homes are removed.
                 evidence = args.output.parent / (args.output.stem + '-logs')
                 evidence.mkdir(parents=True, exist_ok=True)
-                logs = [temp / 'packaged-app.log'] + list((app_home / '.app_runtime/updates').rglob('*.log'))
+                logs = [temp / 'packaged-app.log', app_home / '.app_runtime/app.log'] + list((app_home / '.app_runtime/updates').rglob('*.log'))
                 for index, source in enumerate(logs):
                     if source.is_file():
                         text = source.read_text(encoding='utf-8', errors='replace')[-65536:]
@@ -405,11 +414,19 @@ def main(argv=None):
     for name in ('baseline-sha256', 'target-sha256'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--baseline-version', default='0.2.8')
-    parser.add_argument('--target-version', default='0.2.9')
+    parser.add_argument('--target-version', default='0.2.10')
+    parser.add_argument('--baseline-kind', choices=('original-0.2.8', 'fixed-updater-test-bootstrap'), default='original-0.2.8')
+    parser.add_argument('--baseline-source-commit', default='')
+    parser.add_argument('--target-source-commit', default='')
     parser.add_argument('--expected-pin-env', help='Optional environment variable containing the packaged PIN secret; never printed')
     args = parser.parse_args(argv)
     if (args.platform == 'windows') != (os.name == 'nt') or (args.platform == 'macos' and sys.platform != 'darwin'):
         raise RuntimeError('Native update smoke must run on its target OS')
+    if args.baseline_kind == "fixed-updater-test-bootstrap" and (args.platform != "windows" or not args.baseline_source_commit or not args.target_source_commit):
+        raise RuntimeError("A fixed-updater bootstrap must identify its Windows source commit")
+    for value in (args.baseline_source_commit, args.target_source_commit):
+        if value and (len(value) != 40 or any(char not in "0123456789abcdef" for char in value)):
+            raise RuntimeError("Expected source commits must be full lowercase Git SHAs")
     # Never attach to an unrelated app already occupying the default update port.
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 8765))

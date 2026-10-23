@@ -2041,7 +2041,9 @@ def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> di
     helper_path.write_text(WINDOWS_UPDATE_HELPER, encoding="utf-8-sig")
     creation_flags = 0
     creation_flags |= int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
-    creation_flags |= int(getattr(subprocess, "DETACHED_PROCESS", 0))
+    # Windows PowerShell 5 exits 0 without executing -File when detached.
+    # A hidden console lets the helper run independently after this app exits.
+    creation_flags |= int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     # Capture PowerShell parse/startup errors as well as the helper's own log.
     log_stream = (artifact_path.parent / "update-helper-process.log").open("ab")
     try:

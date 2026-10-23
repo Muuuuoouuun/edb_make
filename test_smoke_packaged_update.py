@@ -190,3 +190,15 @@ class NativeOldProcessReaping(unittest.TestCase):
                 os.waitpid(child.pid, os.WNOHANG)
         finally:
             child.wait(timeout=3)
+
+
+def test_packaged_source_commit_comes_from_embedded_provenance(tmp_path):
+    internal = tmp_path / "_internal"
+    metadata = internal / "release_metadata"
+    metadata.mkdir(parents=True)
+    (internal / "app_update_config.json").write_text('{"version":"0.2.9"}')
+    embedded = "a" * 40
+    (metadata / "release-provenance.json").write_text(json.dumps({"gitCommit": embedded}))
+    audit = packaged_config_audit(tmp_path / "App.exe")
+    assert audit["version"] == "0.2.9"
+    assert audit["gitCommit"] == embedded
