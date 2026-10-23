@@ -1,25 +1,18 @@
-name: Stage Draft Release
+name: Stage exact EDB 0.2.11 test installers
 
 on:
   workflow_dispatch:
-    inputs:
-      source_run_id:
-        description: Successful Build Installers run to stage
-        required: true
-      version:
-        description: Existing draft release version
-        required: true
-        default: '0.2.4'
 
 permissions:
   contents: read
 
 concurrency:
-  group: stage-draft-${{ inputs.version }}
+  group: stage-exact-edb-031-draft-421912949
   cancel-in-progress: false
 
 jobs:
   stage:
+    if: github.repository == 'Muuuuoouuun/edb_make' && github.ref == 'refs/heads/chore/stage-edb-031-test-installers'
     name: Verify and attach draft assets
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -36,19 +29,14 @@ jobs:
       - name: Verify source run and attach exact artifacts to existing draft
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
-          RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
-          python scripts/stage_draft_release.py \
-            --repository "$RELEASE_REPOSITORY" \
-            --run-id "$SOURCE_RUN_ID" \
-            --version "$RELEASE_VERSION"
+          python -m unittest -q test_stage_edb_031_test_installers
+          python scripts/stage_edb_031_test_installers.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: staged-release-evidence
           path: |
-            dist/staged/staging-report.json
-            dist/staged/release-evidence.zip
+            dist/staged-edb-031/staging-report.json
+            dist/staged-edb-031/assets/release-evidence.zip
           if-no-files-found: error
           retention-days: 14
