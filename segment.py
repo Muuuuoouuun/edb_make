@@ -861,6 +861,17 @@ def _assign_pdf_marker_columns(
     visual_columns = _detect_pdf_visual_column_boxes(image)
     if len(visual_columns) == 2:
         boundary_x = (visual_columns[0].right + visual_columns[1].left) / 2.0
+        # Side-by-side figures can create a visual gutter on a one-column
+        # worksheet. A question line spanning that gutter is stronger evidence
+        # than the image projection; splitting it would discard actual text.
+        crossing_margin = max(24.0, float(image.width) * 0.05)
+        if any(
+            box is not None
+            and box.left < boundary_x - crossing_margin
+            and box.right > boundary_x + crossing_margin
+            for box in (_marker_bbox(marker) for marker in markers)
+        ):
+            return [(1, markers, (0.0, float(image.width)))], 1, False
         grouped: list[list[dict[str, Any]]] = [[], []]
         for marker in markers:
             center_x = _marker_center_x(marker)

@@ -49,6 +49,7 @@ from bug_reporting import (
     deliver_bug_report,
 )
 from layout_template_schema import LayoutTemplate
+from problem_gallery import GalleryStore, MAX_UPLOAD_BYTES as GALLERY_MAX_UPLOAD_BYTES
 from structured_schema import Box, Subject
 from user_settings import (
     ai_enabled_from_settings,
@@ -9574,6 +9575,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path == "/api/parser/jobs":
+            self._run_artifact_read(lambda: self._handle_parser_request("list", parsed))
+            return
         if parsed.path == "/api/health":
             health_builder = getattr(self.app_server, "health_payload", None)
             payload = health_builder() if callable(health_builder) else {"ok": True, "app": APP_NAME}
@@ -9634,6 +9638,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _dispatch_post(self) -> None:
         parsed = urlparse(self.path)
+        if parsed.path in {"/api/parser/upload", "/api/parser/next", "/api/parser/export-images", "/api/parser/recognize-labels"}:
+            if not _request_is_same_origin(self.headers):
+                self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+                return
+            self._run_artifact_job(lambda: self._handle_parser_request(parsed.path.rsplit("/", 1)[-1], parsed))
+            return
         if parsed.path == "/api/export":
             self._run_artifact_job(self._handle_export)
             return
@@ -9702,6 +9712,68 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._handle_session_clear(parsed)
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
+
+    def _handle_parser_request(self, action: str, parsed) -> None:
+        # Independent storage also keeps an EDB reset from deleting gallery work.
+        store = GalleryStore(RUNTIME_DIR / "problem-gallery")
+
+        def public_job(job):
+            response = {key: value for key, value in job.items() if key not in {"sourceFile", "problems"}}
+            response["problems"] = []
+            source = store.job_dir(job["id"]) / job["sourceFile"]
+            response["sourceUrl"] = path_to_api_url(source.resolve().as_uri())
+            paths = {str(source.resolve())}
+            for problem in job["problems"]:
+                path = store.job_dir(job["id"]) / problem["imageFile"]
+                paths.add(str(path.resolve()))
+                url = path_to_api_url(path.resolve().as_uri())
+                response["problems"].append({
+                    **{key: value for key, value in problem.items() if key != "imageFile"},
+                    "imageUrl": url, "previewUrl": f"{url}&previewMax=768",
+                    "sourceName": job["sourceName"], "jobId": job["id"],
+                })
+            self._allow_session_files(paths)
+            return response
+
+        try:
+            if action == "list":
+                self._send_json({"ok": True, "jobs": [public_job(job) for job in store.list_jobs()]})
+            elif action == "upload":
+                size = int(self.headers.get("Content-Length", "0"))
+                if size > GALLERY_MAX_UPLOAD_BYTES:
+                    self.close_connection = True
+                    self._send_json({"ok": False, "error": "파일은 512MB 이하로 올려 주세요."}, status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+                    return
+                name = parse_qs(parsed.query).get("name", ["upload.pdf"])[0]
+                job = store.upload(self.rfile, size, name)
+                self._send_json({"ok": True, "job": public_job(job)}, status=HTTPStatus.CREATED)
+            else:
+                payload = self._read_json_body()
+                if not isinstance(payload, dict):
+                    raise ValueError("요청 형식을 확인해 주세요.")
+                if action == "next":
+                    job = store.parse_next(str(payload.get("jobId", "")), payload.get("expectedProcessedPages"))
+                    self._send_json({"ok": True, "job": public_job(job)})
+                elif action == "recognize-labels":
+                    result = store.recognize_labels(payload.get("problemIds"), only_unattempted=payload.get("automatic") is True)
+                    self._send_json({"ok": True, **result, "jobs": [public_job(job) for job in result["jobs"]]})
+                elif action == "export-images":
+                    ids = payload.get("problemIds")
+                    if not isinstance(ids, list) or not all(isinstance(value, str) for value in ids):
+                        raise ValueError("다운로드할 문제를 선택하세요.")
+                    mode = payload.get("mode", "raw")
+                    target, count = store.export_images(ids, mode, single=payload.get("single") is True)
+                    self._allow_session_files({str(target.resolve())})
+                    self._send_json({
+                        "ok": True, "url": path_to_api_url(target.resolve().as_uri()), "count": count,
+                        "mode": mode, "fileCount": count * (2 if mode == "both" else 1),
+                        "fileName": target.name if target.suffix == ".zip" else store.image_download_name(ids[0]),
+                    })
+        except (ValueError, OSError) as exc:
+            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            _log_operation_exception("problem_gallery", exc)
+            self._send_json({"ok": False, "error": "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요."}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_session_publish_plan(self) -> None:
         session, current_revision = self._current_session_state()

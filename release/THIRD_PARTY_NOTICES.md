@@ -58,7 +58,7 @@ texts ship beside the font files.
 The complete inventory and exact versions are machine-readable. Their license
 files are copied from installed wheel metadata during every release build and
 covered by a SHA-256 manifest. This includes Pillow, NumPy, OpenCV, olefile,
-HWP/HWPX helpers, cryptography, lxml, Pydantic, PyInstaller and its build-time
+HWP/HWPX helpers, pytesseract (Apache-2.0), cryptography, lxml, Pydantic, PyInstaller and its build-time
 dependencies. PyInstaller's bundled bootloader is governed by its documented
 exception in the copied PyInstaller license file.
 

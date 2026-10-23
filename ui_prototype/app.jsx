@@ -1405,6 +1405,7 @@ function smoothScrollTo(el, top, duration = 380){
 }
 
 const Icon = {
+  search: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>,
   eye: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>,
   eyeOff: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1 12 5c6.5 0 10 7 10 7a19.1 19.1 0 0 1-3 3.9M6.2 6.2A21.8 21.8 0 0 0 2 12s3.5 7 10 7a10.8 10.8 0 0 0 5.8-1.8M10 10a2.8 2.8 0 0 0 4 4"/></svg>,
   upload: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg>,
@@ -6966,7 +6967,7 @@ function BoardStage({
   focusMode = false, reviewAttentionCount = 0, onOpenPendingReview,
   panelCollapsed = false, onOpenPanel, panelReopenRef,
   recentSessions = [], onRestoreRecentSession, restoringSessionId, recentSessionRestoreBlocked = false,
-  handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null,
+  handleFiles, triggerUpload, addMockSample, canAddDummy = false, runtimeDiagnostics = null, onOpenGallery,
   aiEnabled = true, userSettings = null,
   onRecognizeSession, canRecognizeSession, recognitionDisabledReason, sourcePageCount = 0, sessionEditState,
 }){
@@ -7868,6 +7869,7 @@ function BoardStage({
       <div className="stage">
         {items.length === 0 ? (
           <HomeDashboard
+            onOpenGallery={onOpenGallery}
             onUpload={triggerUpload || addSample}
             onFilesDropped={handleFiles}
             onAddMockSample={addMockSample}
@@ -8233,7 +8235,7 @@ function BoardStage({
 function HomeDashboard({
   onUpload, onFilesDropped, onAddMockSample, canAddDummy,
   recentSessions, onRestoreRecentSession, restoringSessionId,
-  recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey,
+  recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey, onOpenGallery,
 }){
   const [dropActive, setDropActive] = useState(false);
   const [recentLimit, setRecentLimit] = useState(6);
@@ -8327,6 +8329,14 @@ function HomeDashboard({
         </section>
 
         <section className="home-start-launch" aria-labelledby="home-launch-title">
+        <div className="home-purpose-picker" role="group" aria-label="작업 목적 선택">
+          <button type="button" className="home-purpose-card on" aria-pressed="true">
+            {Icon.board}<span><strong>EDB 만들기</strong><small>수업 칠판으로 제작</small></span>
+          </button>
+          <button type="button" className="home-purpose-card" aria-pressed="false" onClick={onOpenGallery} disabled={!onOpenGallery}>
+            {Icon.fileText}<span><strong>대량 · 문제만 추출</strong><small>문제별 PNG로 저장</small></span>
+          </button>
+        </div>
         <div className="home-launch-heading">
           <span className="home-launch-step">01 · 새 작업</span>
           <h2 id="home-launch-title">어떤 자료로 시작할까요?</h2>
@@ -15358,6 +15368,7 @@ async function saveUserSettings(settings){
 
 // ─── APP ──────────────────────────────────────────────────────────────────
 function App(){
+  const onOpenGallery = useCallback(() => { window.location.hash = 'extract'; }, []);
   const [t, setTweak] = useTweaks(useMemo(initialTweakValues, []));
   useEffect(() => {
     document.body.classList.toggle('dark', !!t.dark);
@@ -18487,6 +18498,7 @@ function App(){
           />
         ) : (
           <BoardStage
+            onOpenGallery={onOpenGallery}
             items={items}
             activeId={activeId}
             setActive={selectBoardItem}
@@ -18709,8 +18721,527 @@ function App(){
   );
 }
 
+// ─── PROBLEM-ONLY GALLERY ────────────────────────────────────────────────
+const GALLERY_PAGE_SIZE = 48;
+const GALLERY_SAVE_OPTIONS = [
+  { value: 'raw', label: '기본 자르기', description: '원본 색상과 배경 유지' },
+  { value: 'transparent', label: '배경 제거', description: '투명 배경 · 글자 색상 유지' },
+  { value: 'both', label: '둘 다', description: '두 버전을 폴더별로 저장' },
+];
+const isGallerySaveMode = value => GALLERY_SAVE_OPTIONS.some(option => option.value === value);
+
+function galleryProblemLabel(problem){
+  const info = originalProblemNumberInfo({ ...problem, problemNumber: problem.number });
+  if (info.status === 'passage') {
+    const range = problem.passageRange;
+    const suffix = Number.isInteger(range?.start) && Number.isInteger(range?.end) && range.start > 0 && range.end > range.start
+      ? ` ${range.start}~${range.end}번` : '';
+    return { label: `지문${suffix}`, confirmed: true, description: '여러 문제에 공통으로 쓰이는 지문입니다.' };
+  }
+  if (info.status === 'known') return { label: `${info.number}번`, confirmed: true, description: '원본에서 읽은 문제 번호입니다.' };
+  return { label: '번호 확인 필요', confirmed: false, description: problem.labelError || (info.status === 'inferred'
+    ? `앞뒤 순서로는 ${info.number}번으로 추정됩니다. 자동 인식 후에도 확인되지 않으면 원본을 확인하세요.`
+    : problem.labelRecognitionAttempted ? '자동 인식으로 번호를 확인하지 못했습니다. 다시 인식하거나 원본을 확인하세요.'
+    : '이미지 속 번호와 지문을 자동으로 확인합니다.') };
+}
+const galleryNeedsReview = problem => problem.riskFlags?.length > 0 || !galleryProblemLabel(problem).confirmed;
+const galleryNeedsAutoRecognition = problem => !problem.labelRecognitionAttempted && !galleryProblemLabel(problem).confirmed;
+
+function gallerySelectionClick(ids, selected, anchor, target, modifiers = {}){
+  const next = new Set(selected);
+  if (!ids.includes(target)) return { selected: next, anchor };
+  if (modifiers.shiftKey) {
+    const start = ids.indexOf(anchor);
+    const end = ids.indexOf(target);
+    if (!modifiers.ctrlKey && !modifiers.metaKey) ids.forEach(id => next.delete(id));
+    ids.slice(Math.min(start < 0 ? end : start, end), Math.max(start < 0 ? end : start, end) + 1).forEach(id => next.add(id));
+    return { selected: next, anchor: start < 0 ? target : anchor };
+  }
+  if (next.has(target)) next.delete(target); else next.add(target);
+  return { selected: next, anchor: target };
+}
+
+function galleryMarqueeHits(cards, box){
+  return cards.filter(card => card.left < box.left + box.width && card.right > box.left
+    && card.top < box.top + box.height && card.bottom > box.top).map(card => card.id);
+}
+
+function useGalleryMarquee(gridRef, selected, setSelected, closeHover){
+  const [box, setBox] = useState(null);
+  const dragRef = useRef(null);
+  const suppressClickRef = useRef(false);
+  const stop = (cancelled = false) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    cancelAnimationFrame(drag.frame);
+    window.removeEventListener('pointermove', drag.move);
+    window.removeEventListener('pointerup', drag.end);
+    window.removeEventListener('pointercancel', drag.cancel);
+    window.removeEventListener('blur', drag.cancel);
+    window.removeEventListener('keydown', drag.key);
+    if (drag.grid.hasPointerCapture?.(drag.pointerId)) drag.grid.releasePointerCapture(drag.pointerId);
+    if (drag.active) {
+      suppressClickRef.current = true;
+      if (cancelled) setSelected(drag.before);
+    }
+    setBox(null);
+  };
+  useEffect(() => () => stop(), []);
+  const start = event => {
+    suppressClickRef.current = false;
+    if (event.button !== 0 || event.pointerType === 'touch') return;
+    if (event.target.closest('input, label, a, button:not(.gallery-card-image)')) return;
+    const grid = gridRef.current;
+    if (!grid) return;
+    stop(); closeHover();
+    const rect = grid.getBoundingClientRect();
+    const results = grid.closest('.gallery-results');
+    const scroller = getComputedStyle(results).overflowY === 'auto' ? results : grid.closest('.gallery-workspace');
+    const drag = {
+      grid, scroller, pointerId: event.pointerId, active: false, frame: null,
+      startX: event.clientX - rect.left, startY: event.clientY - rect.top,
+      initialX: event.clientX, initialY: event.clientY, x: event.clientX, y: event.clientY,
+      before: new Set(selected), base: event.ctrlKey || event.metaKey || event.shiftKey ? new Set(selected) : new Set(),
+      cards: Array.from(grid.querySelectorAll('[data-gallery-id]'), card => {
+        const bounds = card.getBoundingClientRect();
+        return { id: card.dataset.galleryId, left: bounds.left - rect.left, right: bounds.right - rect.left,
+          top: bounds.top - rect.top, bottom: bounds.bottom - rect.top };
+      }),
+    };
+    const update = () => {
+      drag.frame = null;
+      if (dragRef.current !== drag || !drag.active) return;
+      const bounds = grid.getBoundingClientRect();
+      const x = Math.max(0, Math.min(grid.clientWidth, drag.x - bounds.left));
+      const y = Math.max(0, Math.min(grid.clientHeight, drag.y - bounds.top));
+      const nextBox = { left: Math.min(drag.startX, x), top: Math.min(drag.startY, y), width: Math.abs(x - drag.startX), height: Math.abs(y - drag.startY) };
+      const hits = galleryMarqueeHits(drag.cards, nextBox);
+      const signature = hits.join('|');
+      if (signature !== drag.signature) {
+        drag.signature = signature;
+        setSelected(new Set([...drag.base, ...hits]));
+      }
+      setBox(nextBox);
+      const viewport = scroller.getBoundingClientRect();
+      const top = Math.max(0, viewport.top), bottom = Math.min(window.innerHeight, viewport.bottom);
+      const delta = drag.y < top + 40 ? -Math.min(18, Math.ceil((top + 40 - drag.y) / 3))
+        : drag.y > bottom - 40 ? Math.min(18, Math.ceil((drag.y - bottom + 40) / 3)) : 0;
+      const previous = scroller.scrollTop;
+      if (drag.x >= viewport.left && drag.x <= viewport.right) scroller.scrollTop += delta;
+      if (scroller.scrollTop !== previous) drag.frame = requestAnimationFrame(update);
+    };
+    drag.move = pointer => {
+      if (pointer.pointerId !== drag.pointerId) return;
+      drag.x = pointer.clientX; drag.y = pointer.clientY;
+      if (!drag.active && Math.hypot(drag.x - drag.initialX, drag.y - drag.initialY) < 6) return;
+      if (!drag.active) {
+        drag.active = true;
+        grid.setPointerCapture?.(drag.pointerId);
+      }
+      pointer.preventDefault();
+      if (drag.frame == null) drag.frame = requestAnimationFrame(update);
+    };
+    drag.end = pointer => {
+      if (pointer.pointerId !== drag.pointerId) return;
+      if (drag.active) {
+        cancelAnimationFrame(drag.frame);
+        drag.x = pointer.clientX; drag.y = pointer.clientY;
+        update();
+      }
+      stop();
+    };
+    drag.cancel = () => stop(true);
+    drag.key = key => { if (key.key === 'Escape') { key.preventDefault(); key.stopImmediatePropagation(); stop(true); } };
+    dragRef.current = drag;
+    window.addEventListener('pointermove', drag.move, { passive: false });
+    window.addEventListener('pointerup', drag.end);
+    window.addEventListener('pointercancel', drag.cancel);
+    window.addEventListener('blur', drag.cancel);
+    window.addEventListener('keydown', drag.key);
+  };
+  const suppressClick = event => {
+    if (!suppressClickRef.current) return;
+    suppressClickRef.current = false;
+    event.preventDefault(); event.stopPropagation();
+  };
+  return { box, start, stop, suppressClick, dragging: () => Boolean(dragRef.current?.active) };
+}
+
+function GallerySaveOptions({ mode, onChange, disabled, name = 'gallery-save-mode' }){
+  return <fieldset className="gallery-save-options" disabled={disabled}>
+    <legend>PNG 저장 옵션</legend>
+    <div className="gallery-save-choices">{GALLERY_SAVE_OPTIONS.map(option => (
+      <label key={option.value} className={mode === option.value ? 'on' : ''}>
+        <input type="radio" name={name} value={option.value} checked={mode === option.value} onChange={() => onChange(option.value)} />
+        <span><strong>{option.label}</strong><small>{option.description}</small></span>
+      </label>
+    ))}</div>
+    <p>개별·묶음 저장에 같은 옵션을 적용합니다. 배경 제거는 처음 저장할 때 시간이 걸릴 수 있어요.</p>
+  </fieldset>;
+}
+
+function filterGalleryProblems(jobs, sourceId, query, needsReview){
+  const needle = query.trim().toLocaleLowerCase();
+  return jobs.flatMap(job => job.problems || []).filter(problem => (
+    (sourceId === 'all' || problem.jobId === sourceId)
+    && (!needsReview || galleryNeedsReview(problem))
+    && (!needle || `${galleryProblemLabel(problem).label} ${problem.title} ${problem.number ?? ''} ${problem.sourceName} ${problem.pageNumbers.join(' ')}`.toLocaleLowerCase().includes(needle))
+  ));
+}
+
+async function galleryRequest(action, payload){
+  const response = await fetch(`/api/parser/${action}`, payload === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  return expectOkJson(response, '문제 추출 요청에 실패했습니다.');
+}
+
+function GalleryProblemPreview({ problem, onClose, mode, onModeChange, onDownload, saving, message }){
+  const dialogRef = useRef(null);
+  const label = galleryProblemLabel(problem);
+  useEffect(() => {
+    dialogRef.current?.showModal();
+  }, []);
+  return (
+    <dialog ref={dialogRef} className="gallery-preview" aria-labelledby="gallery-preview-title" onCancel={onClose} onClose={onClose}>
+      <div className="gallery-preview-head">
+        <div><strong id="gallery-preview-title" title={label.description}>{label.label}</strong><small>{problem.sourceName} · {problem.pageNumbers.join(', ')}쪽</small></div>
+        <button className="btn btn-ghost" type="button" onClick={onClose} aria-label="문제 미리보기 닫기">{Icon.close}</button>
+      </div>
+      <div className="gallery-preview-image"><img src={problem.imageUrl} alt={label.label} /></div>
+      <div className="gallery-preview-options"><GallerySaveOptions mode={mode} onChange={onModeChange} disabled={saving} name="gallery-preview-save-mode" /><small>미리보기는 기본 자르기 이미지입니다.</small></div>
+      <div className="gallery-preview-footer">
+        <span role="status">{message || (!label.confirmed ? label.description : problem.riskFlags?.length > 0 ? '원본과 비교해 문제와 지문의 잘림을 확인하세요.' : '')}</span>
+        <button className="btn primary" type="button" disabled={saving} onClick={onDownload}>{Icon.download}{saving ? '저장 준비 중…' : `${GALLERY_SAVE_OPTIONS.find(option => option.value === mode).label} 저장`}</button>
+      </div>
+    </dialog>
+  );
+}
+
+function ProblemGalleryApp({ onBack }){
+  const [jobs, setJobs] = useState([]);
+  const [files, setFiles] = useState([]);
+  const [sourceId, setSourceId] = useState('all');
+  const [query, setQuery] = useState('');
+  const [needsReview, setNeedsReview] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [page, setPage] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [paused, setPaused] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState('');
+  const [status, setStatus] = useState('');
+  const [downloading, setDownloading] = useState(false);
+  const [preview, setPreview] = useState(null);
+  const [dropActive, setDropActive] = useState(false);
+  const [saveMode, setSaveMode] = useState(() => readStoredPreference('edb.gallery.saveMode', 'raw', isGallerySaveMode));
+  const [density, setDensity] = useState(() => readStoredPreference('edb.gallery.density', 'compact', value => ['compact', 'comfortable'].includes(value)));
+  const [hover, setHover] = useState(null);
+  const [recognizing, setRecognizing] = useState(false);
+  const fileRef = useRef(null);
+  const gridRef = useRef(null);
+  const anchorRef = useRef(null);
+  const hoverTimerRef = useRef(null);
+  const busyRef = useRef(false);
+  const pauseRef = useRef(false);
+  const downloadRef = useRef(false);
+  const autoAttemptedRef = useRef(new Set());
+  const autoPausedRef = useRef(false);
+  const changeSaveMode = mode => { setSaveMode(mode); writeStoredPreference('edb.gallery.saveMode', mode); };
+
+  useEffect(() => {
+    const theme = initialTweakValues();
+    document.body.classList.toggle('dark', !!theme.dark);
+    document.documentElement.style.setProperty('--accent', theme.accent);
+    let mounted = true;
+    galleryRequest('jobs').then(result => {
+      if (mounted) { setJobs(result.jobs); setLoaded(true); }
+    }).catch(error => { if (mounted) setError(error.message); });
+    return () => { mounted = false; pauseRef.current = true; };
+  }, []);
+
+  const closeHover = () => { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; setHover(null); };
+  const marquee = useGalleryMarquee(gridRef, selected, setSelected, closeHover);
+  useEffect(() => {
+    const hide = () => closeHover();
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
+    return () => {
+      clearTimeout(hoverTimerRef.current);
+      window.removeEventListener('scroll', hide, true);
+      window.removeEventListener('resize', hide);
+    };
+  }, []);
+  useEffect(() => { closeHover(); marquee.stop(true); }, [page, query, sourceId, needsReview, density]);
+
+  const allProblems = useMemo(() => jobs.flatMap(job => job.problems || []), [jobs]);
+  const filtered = useMemo(() => filterGalleryProblems(jobs, sourceId, query, needsReview), [jobs, sourceId, query, needsReview]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / GALLERY_PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const visible = filtered.slice((currentPage - 1) * GALLERY_PAGE_SIZE, currentPage * GALLERY_PAGE_SIZE);
+  const pendingJobs = jobs.filter(job => job.processedPages < job.sourcePageCount);
+  const allFilteredSelected = filtered.length > 0 && filtered.every(problem => selected.has(problem.id));
+  const reviewCount = allProblems.filter(galleryNeedsReview).length;
+  const recognitionTargets = (selected.size ? allProblems.filter(problem => selected.has(problem.id)) : filtered)
+    .filter(problem => !galleryProblemLabel(problem).confirmed);
+  const filteredIds = useMemo(() => filtered.map(problem => problem.id), [filtered]);
+  const hiddenSelectedCount = selected.size - filtered.filter(problem => selected.has(problem.id)).length;
+  const scheduleHover = (problem, event) => {
+    if (preview || marquee.dragging() || (event.pointerType && event.pointerType !== 'mouse')) return;
+    if (event.type === 'focus' && !event.currentTarget.matches(':focus-visible')) return;
+    closeHover();
+    const target = event.currentTarget;
+    hoverTimerRef.current = setTimeout(() => {
+      if (!target.isConnected || marquee.dragging()) return;
+      const rect = target.getBoundingClientRect();
+      const width = Math.min(420, window.innerWidth - 24);
+      const height = Math.min(480, window.innerHeight - 24);
+      const left = rect.right + width + 20 <= window.innerWidth ? rect.right + 10 : rect.left - width - 10;
+      setHover({ problem, width, height, left: Math.max(12, Math.min(left, window.innerWidth - width - 12)),
+        top: Math.max(12, Math.min(rect.top, window.innerHeight - height - 12)) });
+    }, 220);
+  };
+  const openPreview = problem => { closeHover(); setPreview(problem); };
+  const changeDensity = value => { setDensity(value); writeStoredPreference('edb.gallery.density', value); };
+
+  const upsertJob = job => setJobs(previous => {
+    const found = previous.some(existing => existing.id === job.id);
+    return found ? previous.map(existing => existing.id === job.id ? job : existing) : [job, ...previous];
+  });
+
+  const addFiles = incoming => {
+    if (busyRef.current) return;
+    const accepted = [], rejected = [];
+    for (const file of Array.from(incoming || [])) {
+      if (!/\.(pdf|png|jpe?g|webp|bmp)$/i.test(file.name)) rejected.push(`${file.name}: 지원하지 않는 형식입니다.`);
+      else if (!file.size || file.size > 512 * 1024 * 1024) rejected.push(`${file.name}: 512MB 이하의 파일을 선택하세요.`);
+      else accepted.push(file);
+    }
+    setFiles(previous => {
+      const keys = new Set(previous.map(fileQueueKey));
+      return [...previous, ...accepted.filter(file => {
+        const key = fileQueueKey(file);
+        if (keys.has(key)) return false;
+        keys.add(key);
+        return true;
+      })];
+    });
+    setError(rejected.join('\n'));
+    if (fileRef.current) fileRef.current.value = '';
+  };
+
+  const run = async () => {
+    if (busyRef.current || downloadRef.current || !loaded) return;
+    busyRef.current = true;
+    pauseRef.current = false;
+    autoPausedRef.current = false;
+    setBusy(true); setPaused(false); setError('');
+    const failures = [];
+    let work = [...pendingJobs].reverse();
+    try {
+      for (const file of files) {
+        if (pauseRef.current) break;
+        setStatus(`${file.name} · 파일을 올리는 중`);
+        try {
+          const response = await fetch(`/api/parser/upload?name=${encodeURIComponent(file.name)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file,
+          });
+          const result = await expectOkJson(response, '파일을 올리지 못했습니다.');
+          upsertJob(result.job);
+          work.push(result.job);
+          setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)));
+        } catch (error) { failures.push(`${file.name}: ${error.message}`); }
+      }
+      for (let job of work) {
+        while (job.processedPages < job.sourcePageCount && !pauseRef.current) {
+          setStatus(`${job.sourceName} · ${job.processedPages + 1}–${Math.min(job.processedPages + 12, job.sourcePageCount)} / ${job.sourcePageCount}쪽 추출 중`);
+          try {
+            const result = await galleryRequest('next', { jobId: job.id, expectedProcessedPages: job.processedPages });
+            if (!result.job || result.job.id !== job.id || !Number.isInteger(result.job.processedPages)
+                || result.job.processedPages <= job.processedPages || result.job.processedPages > job.sourcePageCount) {
+              throw new Error('추출이 진행되지 않았습니다. 완료된 결과를 확인하고 다시 시도해 주세요.');
+            }
+            job = result.job;
+            upsertJob(job);
+          } catch (error) {
+            failures.push(`${job.sourceName}: ${error.message}`);
+            // The server keeps completed batches even if this response failed.
+            try { setJobs((await galleryRequest('jobs')).jobs); } catch (_) { /* keep visible results */ }
+            break;
+          }
+        }
+        if (pauseRef.current) break;
+      }
+      setStatus(pauseRef.current ? '중지했습니다. 완료된 결과는 저장됐습니다. 이어서 추출할 수 있어요.' : failures.length ? '일부 자료를 처리하지 못했습니다. 완료된 문제는 다운로드할 수 있어요.' : '추출을 마쳤습니다. 필요한 문제를 골라 저장하세요.');
+      setError(failures.join('\n'));
+    } finally {
+      busyRef.current = false;
+      setBusy(false); setPaused(false);
+    }
+  };
+
+  const download = async (problemId = null) => {
+    if (downloadRef.current || busyRef.current) return;
+    const ids = problemId ? [problemId] : selected.size ? Array.from(selected) : filtered.map(problem => problem.id);
+    if (!ids.length) return;
+    downloadRef.current = true; setDownloading(true); setError('');
+    const label = GALLERY_SAVE_OPTIONS.find(option => option.value === saveMode).label;
+    setStatus(`${ids.length}개 문제 · ${label} 저장 준비 중…`);
+    try {
+      const result = await galleryRequest('export-images', { problemIds: ids, mode: saveMode, single: !!problemId });
+      const anchor = document.createElement('a');
+      anchor.href = result.url; anchor.download = result.fileName || '문제_이미지.zip';
+      document.body.appendChild(anchor); anchor.click(); anchor.remove();
+      setStatus(`${result.count}개 문제 · ${label} PNG ${result.fileCount || result.count}개를 준비했습니다.`);
+    } catch (error) { setError(error.message); setStatus('저장하지 못했습니다. 추출된 문제는 보관되어 있어 다시 저장할 수 있어요.'); }
+    finally { downloadRef.current = false; setDownloading(false); }
+  };
+
+  const recognizeLabels = async (targets = recognitionTargets, automatic = false) => {
+    if (busyRef.current || downloadRef.current || !targets.length) return;
+    const ids = targets.map(problem => problem.id);
+    // Prevent an HTTP failure from re-triggering the automatic effect forever.
+    // Persisted attempts handle refresh; this set covers failures before a save.
+    ids.forEach(id => autoAttemptedRef.current.add(id));
+    busyRef.current = true; pauseRef.current = false;
+    setBusy(true); setRecognizing(true); setPaused(false); setError(''); closeHover();
+    let completed = 0, recognized = 0, unconfirmed = 0, errors = 0;
+    try {
+      while (completed < ids.length && !pauseRef.current) {
+        setStatus(`번호·지문 ${automatic ? '자동 ' : ''}인식 중 · ${completed} / ${ids.length}개`);
+        const batch = ids.slice(completed, completed + 8);
+        const result = await galleryRequest('recognize-labels', { problemIds: batch, automatic });
+        result.jobs.forEach(upsertJob);
+        completed += batch.length; recognized += result.recognized; unconfirmed += result.unconfirmed; errors += result.errors;
+      }
+      setStatus(`${pauseRef.current ? '인식을 중지했습니다. ' : ''}${completed}개 확인 · ${recognized}개 인식 · ${unconfirmed}개 번호 확인 필요`);
+      if (errors) setError(`${errors}개 이미지를 읽지 못했습니다. 해당 카드를 다시 선택해 인식할 수 있습니다.`);
+    } catch (error) {
+      setError(error.message); setStatus('완료된 인식 결과는 보관됩니다. 다시 시도할 수 있어요.');
+      try { setJobs((await galleryRequest('jobs')).jobs); } catch (_) { /* preserve current results */ }
+    } finally {
+      busyRef.current = false; setBusy(false); setRecognizing(false); setPaused(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!loaded || busy || downloading || busyRef.current || downloadRef.current || autoPausedRef.current) return;
+    const targets = allProblems.filter(problem => galleryNeedsAutoRecognition(problem) && !autoAttemptedRef.current.has(problem.id));
+    if (targets.length) void recognizeLabels(targets, true);
+  }, [loaded, jobs, busy, downloading]);
+
+  const toggleSelected = (id, event = {}) => {
+    closeHover();
+    const result = gallerySelectionClick(filteredIds, selected, anchorRef.current, id, event);
+    anchorRef.current = result.anchor;
+    setSelected(result.selected);
+  };
+  const selectVisible = () => setSelected(previous => new Set([...previous, ...visible.map(problem => problem.id)]));
+  const invertSelection = () => setSelected(previous => {
+    const next = new Set(previous);
+    filteredIds.forEach(id => next.has(id) ? next.delete(id) : next.add(id));
+    return next;
+  });
+  const clearSelection = () => { anchorRef.current = null; setSelected(new Set()); };
+  const selectionKey = event => {
+    if (event.target.closest?.('input:not([type="checkbox"]), textarea, select, [contenteditable="true"]')) return;
+    if (event.key === 'Escape') {
+      event.preventDefault(); event.stopPropagation(); closeHover();
+      if (marquee.dragging()) marquee.stop(true); else clearSelection();
+    } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
+      event.preventDefault();
+      if (event.shiftKey) clearSelection(); else setSelected(previous => new Set([...previous, ...filteredIds]));
+    }
+  };
+  const changeSource = id => { setSourceId(id); setPage(1); };
+
+  return (
+    <div className="app editor-basic-mode problem-gallery-app" data-density={density}>
+      <header className="topbar gallery-topbar">
+        <div className="brand"><BrandMark /><span className="brand-name">문제 추출</span></div>
+        <span className="gallery-mode-badge">대량 자료 · PNG</span>
+        <div className="spacer" />
+        <button className="btn btn-ghost" type="button" onClick={onBack} disabled={busy || downloading}>시작 화면으로</button>
+        <button className="btn primary" type="button" onClick={() => download()} disabled={busy || downloading || (!selected.size && !filtered.length)} title={busy ? '현재 묶음 후 중지한 뒤 저장할 수 있어요.' : `${GALLERY_SAVE_OPTIONS.find(option => option.value === saveMode).label} · ZIP으로 저장`}>
+          {Icon.download}{downloading ? '저장 준비 중…' : `${selected.size ? `선택 ${selected.size}` : `전체 ${filtered.length}`}개 PNG 받기`}
+        </button>
+      </header>
+      <main className={`gallery-workspace ${dropActive ? 'is-dragging' : ''}`}
+        onDragOver={event => { if (event.dataTransfer?.types?.includes('Files')) { event.preventDefault(); setDropActive(true); } }}
+        onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget)) setDropActive(false); }}
+        onDrop={event => { event.preventDefault(); setDropActive(false); addFiles(event.dataTransfer?.files); }}>
+        <aside className="gallery-sources" aria-label="원본 자료와 추출 작업">
+          <div className="gallery-source-heading"><h2>원본 자료</h2><span>{jobs.length + files.length}</span></div>
+          <button className="gallery-upload" type="button" onClick={() => fileRef.current?.click()} disabled={busy}>
+            {Icon.plus}<strong>자료 추가</strong><span>끌어다 놓아도 됩니다</span><small>PDF · PNG · JPG · WEBP · BMP<br />파일당 최대 512MB</small>
+          </button>
+          <button className="btn primary gallery-run" type="button" onClick={run} disabled={busy || downloading || !loaded || (!files.length && !pendingJobs.length)}>
+            {Icon.sparkle}{busy ? recognizing ? '번호 인식 중…' : '추출 중…' : pendingJobs.length ? '이어서 추출' : '문제 추출하기'}
+          </button>
+          {busy && <button className="btn gallery-run" type="button" disabled={paused} onClick={() => { pauseRef.current = true; autoPausedRef.current = true; setPaused(true); setStatus('현재 묶음을 마치고 중지합니다.'); }}>{paused ? '중지하는 중…' : '현재 묶음 후 중지'}</button>}
+          <p className="gallery-source-help">API 키 없이 문제 이미지를 추출합니다. 완료된 결과는 다음에 열어도 이어집니다.</p>
+          {files.length > 0 && <div className="gallery-pending"><h3>업로드 대기 · {files.length}</h3>{files.map(file => (
+            <div className="gallery-pending-file" key={fileQueueKey(file)}><span title={file.name}>{file.name}</span><button type="button" disabled={busy} aria-label={`${file.name} 대기열에서 제거`} onClick={() => setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)))}>{Icon.close}</button></div>
+          ))}</div>}
+          <button type="button" className={`gallery-source ${sourceId === 'all' ? 'on' : ''}`} aria-pressed={sourceId === 'all'} onClick={() => changeSource('all')}><strong>전체 문제</strong><span>{allProblems.length}개</span></button>
+          <div className="gallery-source-list">{jobs.map(job => (
+            <div className="gallery-source-entry" key={job.id}>
+            <button type="button" className={`gallery-source ${sourceId === job.id ? 'on' : ''}`} aria-pressed={sourceId === job.id} onClick={() => changeSource(job.id)}>
+              <strong title={job.sourceName}>{job.sourceName}</strong><span>{job.problems.length}문제</span>
+              <small>{job.processedPages} / {job.sourcePageCount}쪽 · {job.status === 'failed' ? '다시 시도 필요' : job.status === 'complete' ? '완료' : job.processedPages ? '이어서 추출 가능' : '추출 대기'}</small>
+              <progress value={job.processedPages} max={job.sourcePageCount} aria-label={`${job.sourceName} 추출 진행률`} />
+            </button>
+            <a className="gallery-source-original" href={job.sourceUrl} target="_blank" rel="noreferrer" aria-label={`${job.sourceName} 원본 보기`}>원본 보기 {Icon.arrowRight}</a>
+            </div>
+          ))}</div>
+        </aside>
+        <section className="gallery-results" aria-labelledby="gallery-title" onKeyDown={selectionKey}>
+          <div className="gallery-intro"><div><h1 id="gallery-title">문제 갤러리 <span>{allProblems.length}</span></h1><p>번호·지문은 자동으로 인식합니다. 필요한 문제를 골라 저장하세요.</p></div><div className="gallery-density" role="group" aria-label="갤러리 카드 크기"><button type="button" aria-pressed={density === 'compact'} onClick={() => changeDensity('compact')}>작게</button><button type="button" aria-pressed={density === 'comfortable'} onClick={() => changeDensity('comfortable')}>보통</button></div></div>
+          <GallerySaveOptions mode={saveMode} onChange={changeSaveMode} disabled={downloading} />
+          <div className="gallery-status" role="status" aria-live="polite">{!loaded ? '저장된 결과를 불러오는 중…' : status || `${allProblems.length}개 문제 · ${reviewCount}개 확인 필요`}</div>
+          {error && <div className="gallery-error" role="alert"><span>{error}</span>{!loaded && <button type="button" className="btn" onClick={async () => { try { const result = await galleryRequest('jobs'); setJobs(result.jobs); setLoaded(true); setError(''); } catch (error) { setError(error.message); } }}>다시 불러오기</button>}</div>}
+          <div className="gallery-toolbar">
+            <label className="gallery-search">{Icon.search}<input type="search" aria-label="문제 번호, 제목, 파일, 페이지 검색" placeholder="문제 번호, 제목, 파일, 페이지 검색" value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} /></label>
+            <button type="button" className="btn" disabled={busy || downloading || !recognitionTargets.length} onClick={() => recognizeLabels()} title={`${selected.size ? '선택한 카드' : '현재 검색 결과'} 중 미확인 ${recognitionTargets.length}개의 번호·지문을 다시 읽습니다. 이미지와 자른 영역은 유지됩니다.`}>{Icon.scan} 번호·지문 다시 인식</button>
+            <button type="button" className={`btn ${needsReview ? 'on' : ''}`} aria-pressed={needsReview} onClick={() => { setNeedsReview(previous => !previous); setPage(1); }}>{Icon.alert} 확인 필요</button>
+          </div>
+          <div className="gallery-selection-bar">
+            <label><input type="checkbox" checked={allFilteredSelected} disabled={!filtered.length} onChange={() => setSelected(previous => { const next = new Set(previous); filtered.forEach(problem => allFilteredSelected ? next.delete(problem.id) : next.add(problem.id)); return next; })} />현재 결과 전체 선택 <span>{filtered.length}개</span></label>
+            <div className="gallery-selection-actions">{pageCount > 1 && <button className="btn ghost" type="button" onClick={selectVisible}>이 페이지 선택</button>}<button className="btn ghost" type="button" disabled={!filtered.length} onClick={invertSelection}>선택 반전</button>{selected.size > 0 && <button className="btn ghost" type="button" onClick={clearSelection}>{selected.size}개 선택 해제</button>}</div>
+          </div>
+          <div className="gallery-selection-help" id="gallery-selection-help"><span>드래그로 여러 문제 선택 · {PRIMARY_MODIFIER_LABEL}+클릭 추가 선택 · Shift+클릭 범위 선택 · Esc 해제</span><span aria-live="polite">{selected.size}개 선택{hiddenSelectedCount > 0 ? ` · 다른 조건의 ${hiddenSelectedCount}개 포함` : ''}</span></div>
+          {visible.length ? <div ref={gridRef} className={`gallery-grid ${marquee.box ? 'is-selecting' : ''}`} tabIndex={0} aria-label="문제 이미지 갤러리" aria-describedby="gallery-selection-help" onPointerDown={marquee.start} onClickCapture={marquee.suppressClick}>{visible.map(problem => (
+            <article key={problem.id} data-gallery-id={problem.id} className={`gallery-card ${selected.has(problem.id) ? 'is-selected' : ''}`}>
+              <div className="gallery-card-head"><label><input type="checkbox" checked={selected.has(problem.id)} onChange={event => toggleSelected(problem.id, event?.nativeEvent || event)} aria-label={`${galleryProblemLabel(problem).label} 선택`} /><strong title={galleryProblemLabel(problem).description}>{galleryProblemLabel(problem).label}</strong></label>{problem.riskFlags?.some(flag => flag !== 'number_unconfirmed') && <span className="gallery-review-badge" title="원본과 비교해 문제와 지문의 잘림을 확인하세요">확인 필요</span>}</div>
+              <button type="button" className="gallery-card-image" onPointerEnter={event => scheduleHover(problem, event)} onPointerLeave={closeHover} onFocus={event => scheduleHover(problem, event)} onBlur={closeHover} onClick={event => event?.ctrlKey || event?.metaKey || event?.shiftKey ? toggleSelected(problem.id, event) : openPreview(problem)} aria-label={`${galleryProblemLabel(problem).label} 크게 보기`}><img src={problem.previewUrl} alt={galleryProblemLabel(problem).label} draggable={false} loading="lazy" decoding="async" width={problem.width} height={problem.height} /></button>
+              <div className="gallery-card-footer"><span title={problem.sourceName}>{problem.sourceName}<small>{problem.pageNumbers.join(', ')}쪽</small></span><button className="btn btn-ghost" type="button" disabled={busy || downloading} onClick={() => download(problem.id)} aria-label={`${galleryProblemLabel(problem).label} PNG 다운로드`} title={`${GALLERY_SAVE_OPTIONS.find(option => option.value === saveMode).label} 저장`}>{Icon.download}</button></div>
+            </article>
+          ))}{marquee.box && <div className="gallery-marquee" aria-hidden="true" style={marquee.box} />}</div> : <div className="gallery-empty">{Icon.fileText}<h2>{allProblems.length ? '조건에 맞는 문제가 없어요' : busy ? '문제를 추출하고 있어요' : jobs.length && !pendingJobs.length ? '인식된 문제가 없어요' : '문제들이 이곳에 모입니다'}</h2><p>{allProblems.length ? '검색어나 원본 자료, 확인 필요 조건을 바꿔보세요.' : busy ? '한 묶음이 끝나면 결과가 차례로 나타납니다.' : jobs.length && !pendingJobs.length ? '원본에 문제 번호와 본문이 있는지 확인하고 다른 자료를 추가해 주세요.' : '자료를 추가하고 문제 추출하기를 눌러주세요.'}</p></div>}
+          {pageCount > 1 && <nav className="gallery-pagination" aria-label="문제 갤러리 페이지"><button className="btn" type="button" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>이전</button><span>{currentPage} / {pageCount}</span><button className="btn" type="button" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>다음</button></nav>}
+        </section>
+      </main>
+      <input ref={fileRef} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp" hidden onChange={event => addFiles(event.target.files)} />
+      {hover && !preview && !marquee.box && <div className="gallery-hover-preview" role="tooltip" style={{ left: hover.left, top: hover.top, width: hover.width, height: hover.height }}><div><strong>{galleryProblemLabel(hover.problem).label}</strong><small>{hover.problem.sourceName} · {hover.problem.pageNumbers.join(', ')}쪽</small></div><img src={hover.problem.previewUrl} alt="" /><span>클릭하면 크게 보기 · 드래그하면 여러 문제 선택</span></div>}
+      {preview && <GalleryProblemPreview problem={preview} onClose={() => setPreview(null)} mode={saveMode} onModeChange={changeSaveMode} onDownload={() => download(preview.id)} saving={busy || downloading} message={error || (downloading ? status : '')} />}
+    </div>
+  );
+}
+
+function StartModeRouter(){
+  const [gallery, setGallery] = useState(() => window.location.hash === '#extract');
+  useEffect(() => {
+    const onHashChange = () => setGallery(window.location.hash === '#extract');
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+  return gallery
+    ? <ProblemGalleryApp onBack={() => { window.location.hash = ''; }} />
+    : <App />;
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <AppErrorBoundary>
-    <App />
+    <StartModeRouter />
   </AppErrorBoundary>
 );

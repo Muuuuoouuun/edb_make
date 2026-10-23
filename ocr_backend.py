@@ -554,21 +554,24 @@ class PaddleOCRBackend(OCRBackend):
 class TesseractOCRBackend(OCRBackend):
     name = "tesseract"
 
-    def __init__(self, *, lang: str = "kor+eng") -> None:
+    def __init__(self, *, lang: str = "kor+eng", config: str = "") -> None:
         if pytesseract is None:
             raise RuntimeError("pytesseract is not installed")
         self.lang = lang
+        self.config = config
 
     @property
     def cache_fingerprint(self) -> str:
-        return ocr_cache_fingerprint(self.engine_name, lang=self.lang)
+        fingerprint = ocr_cache_fingerprint(self.engine_name, lang=self.lang)
+        return hashlib.sha256(f"{fingerprint}:{self.config}".encode()).hexdigest() if self.config else fingerprint
 
     def ocr_image(self, image: Image.Image) -> OCRResult:
         started_at = time.perf_counter()
         prepped = _prep_crop_for_ocr(image)
         
         try:
-            data = pytesseract.image_to_data(prepped, lang=self.lang, output_type=pytesseract.Output.DICT)
+            data = pytesseract.image_to_data(prepped, lang=self.lang, config=self.config,
+                output_type=pytesseract.Output.DICT, timeout=30)
         except Exception as exc:
             return OCRResult(
                 text="",
