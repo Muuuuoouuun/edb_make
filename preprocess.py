@@ -52,7 +52,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-PDF_NORMALIZED_CACHE_VERSION = 4
+PDF_NORMALIZED_CACHE_VERSION = 5
 IMAGE_NORMALIZED_CACHE_VERSION = 2
 HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
@@ -3442,41 +3442,44 @@ PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE = 0.8
 
 
 def _promote_pdf_badge_markers_when_numeric_missing(pages: list[NormalizedPageImage]) -> bool:
-    """Use badge numbers as problem markers when "N." markers are absent.
+    """Fill badge-only pages without replacing trusted ``N.`` markers.
 
-    Accepted only when the badges read as one document-wide numbering: no
-    repeated number, every page's numbers come after the previous page's, and
-    the run from first to last number is mostly filled in.
+    Validate the effective numbering of the whole document: numeric markers
+    take precedence on their page, and badges are candidates only on pages
+    without numeric markers. Repeated/backwards/sparse runs remain unpromoted.
     """
-    numeric_count = 0
-    badge_pages: list[list[dict[str, Any]]] = []
+    effective_pages: list[list[dict[str, Any]]] = []
+    badge_pages: list[tuple[NormalizedPageImage, list[dict[str, Any]]]] = []
     for page in pages:
         numeric = page.metadata.get("pdf_problem_markers")
-        numeric_count += len(numeric) if isinstance(numeric, list) else 0
         badges = page.metadata.get("pdf_badge_markers")
-        badge_pages.append(list(badges) if isinstance(badges, list) else [])
+        numeric = list(numeric) if isinstance(numeric, list) else []
+        badges = list(badges) if isinstance(badges, list) else []
+        if numeric:
+            effective_pages.append(numeric)
+        else:
+            effective_pages.append(badges)
+            if badges:
+                badge_pages.append((page, badges))
 
-    badge_numbers = [int(marker["number"]) for badges in badge_pages for marker in badges]
-    if len(badge_numbers) < PDF_BADGE_MARKER_MIN_COUNT or numeric_count >= len(badge_numbers):
+    numbers = [int(marker["number"]) for markers in effective_pages for marker in markers]
+    if not badge_pages or len(numbers) < PDF_BADGE_MARKER_MIN_COUNT:
         return False
-    if len(set(badge_numbers)) != len(badge_numbers):
+    if len(set(numbers)) != len(numbers):
         return False
     previous_page_max = 0
-    for badges in badge_pages:
-        if not badges:
+    for markers in effective_pages:
+        if not markers:
             continue
-        page_numbers = [int(marker["number"]) for marker in badges]
+        page_numbers = [int(marker["number"]) for marker in markers]
         if min(page_numbers) <= previous_page_max:
             return False
         previous_page_max = max(page_numbers)
-    span = max(badge_numbers) - min(badge_numbers) + 1
-    if len(badge_numbers) / span < PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE:
+    span = max(numbers) - min(numbers) + 1
+    if len(numbers) / span < PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE:
         return False
 
-    for page, badges in zip(pages, badge_pages):
-        numeric = page.metadata.get("pdf_problem_markers")
-        if isinstance(numeric, list) and numeric:
-            page.metadata["pdf_numeric_problem_markers"] = list(numeric)
+    for page, badges in badge_pages:
         page.metadata["pdf_problem_markers"] = badges
         page.metadata["pdf_problem_marker_source"] = "badge"
     return True

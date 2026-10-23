@@ -191,6 +191,44 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertTrue(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(clean))
         self.assertEqual([5, 6, 7], [m["number"] for m in clean[1].metadata["pdf_problem_markers"]])
 
+    def test_mixed_numeric_and_badge_pages_keep_original_question_numbers(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "mixed-numbering.pdf"
+            with fitz.open() as document:
+                for index in range(4):
+                    page = document.new_page(width=300, height=420)
+                    page.insert_text((30, 60), "1. Real question" if index == 0 else f"{index + 1:02d}", fontsize=12)
+                    page.draw_rect((30, 90, 260, 190), color=(0, 0, 0))
+                document.save(source)
+            prepared = prepare_source_pages(source, pdf_dpi=72, deskew=False, crop_margins=False)
+            numbers = []
+            for page in prepared:
+                segmented = segment_page(page, page_id=page.page_id, subject=Subject.MATH)
+                self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+                numbers.extend(block.metadata.get("problem_number") for block in segmented.blocks)
+            self.assertEqual([1, 2, 3, 4], numbers)
+            self.assertNotEqual("badge", prepared[0].metadata.get("pdf_problem_marker_source"))
+            self.assertEqual([1], [marker["number"] for marker in prepared[0].metadata["pdf_problem_markers"]])
+            self.assertTrue(all(page.metadata.get("pdf_problem_marker_source") == "badge" for page in prepared[1:]))
+
+    def test_mixed_badge_promotion_rejects_conflicting_document_numbers(self):
+        def page(number, *, badge):
+            return preprocess_module.NormalizedPageImage("page", "source.pdf", "page.png", 0, 300, 420, {
+                "pdf_problem_markers": [] if badge else [{"number": number}],
+                "pdf_badge_markers": [{"number": number}] if badge else [],
+            })
+        for numbers in ((1, 1, 2, 3), (5, 2, 3, 4), (1, 50, 51, 52)):
+            with self.subTest(numbers=numbers):
+                pages = [page(numbers[0], badge=False), *(page(number, badge=True) for number in numbers[1:])]
+                self.assertFalse(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(pages))
+                self.assertEqual([{"number": numbers[0]}], pages[0].metadata["pdf_problem_markers"])
+                self.assertTrue(all(not item.metadata["pdf_problem_markers"] for item in pages[1:]))
+        # A short badge tail is valid when trusted numeric pages establish the
+        # complete document-wide sequence; numeric counts must not suppress it.
+        pages = [page(1, badge=False), page(2, badge=False), page(3, badge=True)]
+        self.assertTrue(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(pages))
+        self.assertEqual([[1], [2], [3]], [[marker["number"] for marker in item.metadata["pdf_problem_markers"]] for item in pages])
+
     def test_pdf_problem_markers_keep_leading_sequence_before_question_ten(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "leading_sequence_exam.pdf"

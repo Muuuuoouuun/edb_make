@@ -257,6 +257,52 @@ def test_document_and_app_errors_are_not_misreported_as_file_too_large(exception
     assert "too_large" not in payload["code"]
 
 
+@pytest.mark.parametrize("filename", [
+    "ordinary.pdf", "out of memory.pdf", "password protected.pdf",
+    "bundled PyMuPDF.pdf", "exceeds ClassIn's 50-page limit.pdf",
+])
+def test_corrupt_pdf_filename_does_not_override_document_error(tmp_path, filename):
+    import preprocess
+
+    source = tmp_path / filename
+    source.write_bytes(b"not a PDF")
+    with pytest.raises(ValueError) as caught:
+        preprocess.render_pdf_pages(source, tmp_path / "rendered")
+    payload = app_server._export_error_payload(caught.value)
+    assert payload["code"] == "pdf_invalid_document"
+    assert filename in payload["detail"]
+
+
+def test_known_source_name_does_not_turn_program_bug_into_capacity_or_password_error():
+    class PageError(RuntimeError):
+        code = "pdf_page_processing_failed"
+        source_file = "out of memory password protected bundled pymupdf.pdf"
+        page_start = 2
+        page_end = 2
+
+    error = PageError(f"Failed to process {PageError.source_file}: invalid renderer state")
+    error.cause = RuntimeError("invalid renderer state")
+    payload = app_server._export_error_payload(error)
+    assert payload["code"] == "pdf_page_processing_failed"
+    assert payload["sourceFile"] == error.source_file
+
+
+def test_missing_file_with_disk_full_in_filename_is_not_disk_exhaustion(tmp_path):
+    error = FileNotFoundError(errno.ENOENT, "No such file or directory", str(tmp_path / "disk full.pdf"))
+    payload = app_server._export_error_payload(error)
+    assert payload["code"] == "input_file_missing"
+
+
+def test_true_memory_and_password_errors_still_win_with_misleading_source_names(tmp_path):
+    memory = MemoryError("out of memory")
+    memory.source_file = "password protected.pdf"
+    assert app_server._export_error_payload(memory)["code"] == "processing_memory_exhausted"
+
+    password = ValueError("PDF document is password protected: out of memory.pdf")
+    password.source_file = "out of memory.pdf"
+    assert app_server._export_error_payload(password)["code"] == "pdf_password_protected"
+
+
 def test_zero_length_and_exact_file_limit(tmp_path):
     empty, empty_responses = handler_for(data=b"")
     accepted, accepted_responses = handler_for(data=b"1234")
@@ -276,6 +322,44 @@ def test_connection_reset_is_transfer_failure_not_storage_error(tmp_path):
     with patch.object(app_server, "UPLOAD_DIR", tmp_path):
         call_upload(handler)
     assert responses[0][0]["code"] == "upload_incomplete"
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("stage,exception,expected_code", [
+    ("mkdir", PermissionError(errno.EACCES, "upload folder denied"), "runtime_storage_access_denied"),
+    ("disk_usage", OSError(errno.EIO, "disk statistics unavailable"), "runtime_storage_error"),
+    ("disk_usage", MemoryError("allocation failed"), "processing_memory_exhausted"),
+    ("read", MemoryError("allocation failed"), "processing_memory_exhausted"),
+])
+def test_upload_resource_failures_include_only_sanitized_selected_filename(tmp_path, stage, exception, expected_code):
+    handler, responses = handler_for(filename="../private/수업 자료.pdf")
+    with patch.object(app_server, "UPLOAD_DIR", tmp_path):
+        if stage == "mkdir":
+            with patch.object(Path, "mkdir", side_effect=exception):
+                call_upload(handler)
+        elif stage == "disk_usage":
+            with patch.object(app_server.shutil, "disk_usage", side_effect=exception):
+                call_upload(handler)
+        else:
+            handler.rfile = SimpleNamespace(read=lambda *_: (_ for _ in ()).throw(exception))
+            call_upload(handler)
+    payload = responses[0][0]
+    assert payload["code"] == expected_code
+    assert payload["sourceFile"] == "수업 자료.pdf"
+    assert payload["fileName"] == "수업 자료.pdf"
+    assert "private" not in payload["sourceFile"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_invalid_upload_name_is_rejected_without_reflecting_unsafe_input(tmp_path):
+    handler, responses = handler_for(filename="private\n.pdf")
+    handler.rfile = SimpleNamespace(read=lambda *_: pytest.fail("invalid name body was read"))
+    with patch.object(app_server, "UPLOAD_DIR", tmp_path):
+        call_upload(handler)
+    payload = responses[0][0]
+    assert payload["code"] == "upload_invalid_name"
+    assert "sourceFile" not in payload
+    assert "private" not in payload["error"]
     assert not list(tmp_path.iterdir())
 
 

@@ -417,6 +417,7 @@ def _validate_update_metadata(payload: dict[str, Any], *, expected_app_id: str =
 def _smoke_edb_export(
     base_url: str, source: Path, output_dir: Path, *, input_intent: str = "page-as-is",
     expected_records: int | None = None, publish_after_import: bool = False,
+    expected_problem_numbers: list[int] | None = None, minimum_parts: int = 1,
 ) -> dict[str, Any]:
     resolved_source = source.expanduser().resolve()
     if not resolved_source.is_file():
@@ -512,6 +513,14 @@ def _smoke_edb_export(
                                "sha256": hashlib.sha256(part_path.read_bytes()).hexdigest()})
     if actual_records != record_count:
         raise RuntimeError("EDB parts lost or duplicated records relative to the export result")
+    if len(edb_parts) < minimum_parts:
+        raise RuntimeError(f"packaged PDF export expected at least {minimum_parts} EDB parts")
+    problem_numbers = None
+    if expected_problem_numbers is not None:
+        state = _json_request(f"{base_url}/api/session/latest")
+        problem_numbers = [problem.get("problemNumber") for problem in (state.get("session") or {}).get("problems", [])]
+        if problem_numbers != expected_problem_numbers:
+            raise RuntimeError(f"packaged PDF question numbers changed: {problem_numbers}")
     return {
         "fileName": edb_path.name,
         "bytes": edb_path.stat().st_size,
@@ -520,6 +529,7 @@ def _smoke_edb_export(
         "partCount": len(edb_parts),
         "pageCountHint": int(validation.get("pageCountHint") or 0),
         "parts": verified_parts,
+        **({"problemNumbers": problem_numbers} if problem_numbers is not None else {}),
     }
 
 
@@ -529,7 +539,10 @@ def _smoke_pdf_exports(base_url: str, workspace: Path) -> list[dict[str, Any]]:
     import pymupdf
 
     results = []
-    for name, page_count, badges in (("badge-16", 4, True), ("raster-5", 5, False), ("text-23", 23, False)):
+    for name, page_count, badges in (
+        ("badge-16", 4, True), ("mixed-numbering", 4, False),
+        ("raster-5", 5, False), ("text-23", 23, False), ("page-stack-60", 60, False),
+    ):
         source = workspace / f"PDF 한글 {name}.pdf"
         with pymupdf.open() as document:
             for page_index in range(page_count):
@@ -540,6 +553,9 @@ def _smoke_pdf_exports(base_url: str, workspace: Path) -> list[dict[str, Any]]:
                         page.insert_text((x, y), f"{number:02d}", fontsize=10)
                         page.insert_text((x + 30, y), "category label", fontsize=9)
                         page.draw_rect(pymupdf.Rect(x, y + 20, x + 200, y + 150), color=(0, 0, 0))
+                elif name == "mixed-numbering":
+                    page.insert_text((60, 120), "1. Real question" if page_index == 0 else f"{page_index + 1:02d}", fontsize=12)
+                    page.draw_rect(pymupdf.Rect(60, 150, 500, 400), color=(0, 0, 0))
                 elif name.startswith("raster"):
                     # An image-only PDF must render even without a text layer/OCR.
                     from PIL import Image, ImageDraw
@@ -554,9 +570,11 @@ def _smoke_pdf_exports(base_url: str, workspace: Path) -> list[dict[str, Any]]:
             document.save(source)
         result = _smoke_edb_export(
             base_url, source, workspace / f"PDF 출력 {name}",
-            input_intent="multi-problem" if badges else "page-as-is",
+            input_intent="multi-problem" if badges or name == "mixed-numbering" else "page-as-is",
             expected_records=16 if badges else page_count,
             publish_after_import=name == "text-23",
+            expected_problem_numbers=[1, 2, 3, 4] if name == "mixed-numbering" else None,
+            minimum_parts=2 if name == "page-stack-60" else 1,
         )
         result.update(fixture=name, sourcePageCount=page_count)
         results.append(result)
