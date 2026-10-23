@@ -26,15 +26,15 @@ jobs:
         run: |
           gh run download 39938842927 --repo $env:GITHUB_REPOSITORY --name windows-installer --dir "$env:RUNNER_TEMP/edb-host-baseline"
           if ($LASTEXITCODE -ne 0) { throw "Baseline download failed" }
-      - name: Probe Windows PowerShell and original updater helper
+      - name: Probe real original API and identical-installer reinstall
         shell: pwsh
         run: |
-          python scripts/debug_windows_updater_host.py "$env:RUNNER_TEMP/edb-host-baseline/ClassInEDBMVP-Setup.exe" --output evidence/windows-updater-host.json
+          python scripts/debug_windows_updater_reinstall.py "$env:RUNNER_TEMP/edb-host-baseline/ClassInEDBMVP-Setup.exe" --output evidence/windows-api-reinstall.json
           if ($LASTEXITCODE -ne 0) { throw "Native host diagnosis failed" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: windows-updater-host-diagnostics
-          path: evidence/windows-updater-host.json
+          path: evidence
           if-no-files-found: error
           retention-days: 7
