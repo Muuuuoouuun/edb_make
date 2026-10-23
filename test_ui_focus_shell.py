@@ -21,22 +21,19 @@ class FocusShellStyleTests(unittest.TestCase):
             self.assertIn(".editor-focus-mode", selector)
         self.assertNotRegex(css, r"(?:^|\})\s*:root\s*\{")
 
-    def test_inspector_gutter_is_reserved_outside_pointer_surface(self):
-        self.assertIn("--focus-panel-gutter: calc(var(--focus-panel-width) + 32px)", self.css)
-        self.assertIn(
-            "padding: 12px calc(var(--focus-panel-gutter) + 20px) 20px 20px",
-            self.css,
-        )
+    def test_inspector_floats_over_the_full_width_board(self):
+        self.assertNotIn("--focus-panel-gutter", self.css)
+        self.assertIn("padding: 12px 20px 20px", self.css)
         self.assertIn("width: var(--focus-panel-width)", self.css)
-        self.assertIn("top: 76px", self.css, "inspector starts below the single toolbar")
+        self.assertIn("top: var(--focus-panel-top, 76px)", self.css, "inspector starts below the single toolbar")
+        self.assertIn("left: var(--focus-panel-left, auto)", self.css)
+        self.assertIn("bottom: auto", self.css)
+        self.assertIn("height: min(700px, calc(100% - 112px))", self.css)
         self.assertIn("view-transition-name: none", self.css, "toolbar overlays must escape the center stacking context")
         self.assertNotIn("--focus-dock-space", self.css)
 
-    def test_collapsing_the_inspector_reclaims_width_without_destroying_panel_state(self):
-        self.assertRegex(
-            self.css,
-            r"focus-panel-collapsed:not\(\.home-mode\)\s*\{\s*--focus-panel-gutter:\s*0px",
-        )
+    def test_collapsing_the_inspector_preserves_board_width_and_panel_state(self):
+        self.assertNotRegex(self.css, r"focus-panel-collapsed[^{}]*\{[^}]*padding:")
         self.assertRegex(
             self.css,
             r"focus-panel-collapsed\s*>\s*\.col\.right\s*\{[^}]*visibility:\s*hidden;[^}]*pointer-events:\s*none",
@@ -52,13 +49,13 @@ class FocusShellStyleTests(unittest.TestCase):
         self.assertIn("outline: 2px solid var(--accent-ink)", self.css)
         self.assertIn("@media (prefers-reduced-motion: reduce)", self.css)
 
-    def test_narrow_panes_release_the_inspector_gutter_and_absolute_position(self):
+    def test_narrow_panes_release_the_inspector_position_and_height(self):
         narrow = self.css.split('@media (max-width: 900px)', 1)[1]
-        self.assertIn('--focus-panel-gutter: 0px', narrow)
         panel = narrow.split('.main.editor-focus-mode > .col.right', 1)[1].split('}', 1)[0]
         self.assertIn('position: static', panel)
         self.assertIn('inset: auto', panel)
         self.assertIn('width: auto', panel)
+        self.assertIn('height: auto', panel)
         active = narrow.split('focus-panel-collapsed[data-mobile-pane="panel"]', 1)[1].split('}', 1)[0]
         self.assertIn('visibility: visible', active)
         self.assertIn('pointer-events: auto', active)

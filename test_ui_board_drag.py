@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from test_ui_placement_details import NODE_SETUP, run_node
+
+PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 DRAG_SETUP = NODE_SETUP + r"""
@@ -30,6 +33,8 @@ Object.assign(sandbox, {
   positionDragRef: { current: null }, positionDragFrameRef: { current: null }, syncLock: { current: 0 },
   syncLockOriginIdRef: { current: null }, boardSelectionIntentRef: { current: null },
   suppressClickRef: { current: null }, boardDropTargetRef: { current: null },
+  reorderPreviewShiftsRef: { current: null },
+  unshiftedTileRect: element => element?.getBoundingClientRect?.(),
   pageH: 200, contentW: 800, columnCount: 1,
   items: [{ id: 'p1', heightFrac: 0.8, startYPages: 0 }, { id: 'p2', heightFrac: 0.8, startYPages: 1.2 }], boardOrderSignature: 'p1|p2',
   setPositioningId() {}, setCurrentBoardDropTarget() {}, setActive() {}, setDragMagnet() {},
@@ -94,6 +99,20 @@ const followActiveSelection = selectionEffects[0];
 
 
 class TestUiBoardDrag(unittest.TestCase):
+    def test_edge_autoscroll_reads_the_latest_pointer_and_stops_at_board_end(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        step = source.split("  const stepBoardAutoScroll = (timestamp) => {", 1)[1].split("  const applyBoardAutoScroll =", 1)[0]
+        self.assertIn("const clientY = drag?.lastClientY ?? autoScrollRef.current.clientY;", step)
+        self.assertIn("BOARD_DRAG_AUTOSCROLL_MAX_HOLD_MULTIPLIER", step)
+        self.assertIn("contentEnd", step)
+
+    def test_smart_reorder_previews_neighbours_from_resting_positions(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        self.assertIn("previewShift={reorderPreviewShifts?.get(String(it.id)) || 0}", source)
+        self.assertIn("transform: `translate3d(0, ${previewShift}px, 0)`", source)
+        self.assertIn(": unshiftedTileRect(tileRefs.current[item.id]);", source)
+        self.assertIn("resetVerticalOffset: drag.smartMode", source)
+
     def test_pending_scroll_event_cannot_replace_a_tile_click_selection(self) -> None:
         run_node(SCROLL_SELECTION_SETUP + r"""
         sandbox.tileClick('p2');sandbox.activeId='p2';sandbox.nearestIndex=0;
@@ -386,7 +405,12 @@ class TestUiBoardDrag(unittest.TestCase):
             },
           };
         });
-        vm.runInContext(section('  const findSmartBoardDropTarget =', '  const updateBoardDropTarget ='), sandbox);
+        sandbox.layout.positions = sandbox.items.map((item, index) => ({
+          top: index * 240, yRatio: 0, rowHeightPages: 1.2, renderedHeightPages: .8,
+        }));
+        sandbox.contentRef.current.getBoundingClientRect = () => ({ width: 800, top: -sandbox.scrollRef.current.scrollTop });
+        vm.runInContext(section('  const findSmartBoardDropTarget =', '  const updateBoardDropTarget =')
+          + section('function smartBoardEndInsertionTarget(', 'function BoardTileContents('), sandbox);
         sandbox.smartMove = true;
         const thirdPlacement = { top: 480, startPages: 2.4, snappedNext: 3.6, xRatio: 0, yRatio: 0, columnCount: 1 };
 
@@ -411,20 +435,32 @@ class TestUiBoardDrag(unittest.TestCase):
         }
         assert.equal(saved.length, 0);
 
-        // Beyond the CARD but inside the viewport is free placement, not reorder.
+        // Below the LAST card (inside the viewport) moves the problem to the end.
         sandbox.begin(event(100, 180), { id: 'p3' }, thirdPlacement);
         sandbox.move(event(100, 510));
         sandbox.end(event(100, 510));
-        assert.equal(reorders.length, 3);
-        assert.equal(saved.length, 1);
+        assert.equal(reorders.length, 4);
+        assert.equal(reorders[3].slice(0, 3).join('|'), 'p3|p4|after');
+        assert.equal(saved.length, 0);
 
         // Beyond the VIEWPORT is cancellation, even if a card extends below it.
         sandbox.begin(event(100, 180), { id: 'p3' }, thirdPlacement);
         sandbox.move(event(100, 601));
         sandbox.end(event(100, 601));
-        assert.equal(reorders.length, 3);
-        assert.equal(saved.length, 1);
+        assert.equal(reorders.length, 4);
+        assert.equal(saved.length, 0);
         assert.equal(listeners.size, 0);
+
+        // Above the FIRST card moves the problem to the front.
+        sandbox.scrollRef.current.scrollTop = 0;
+        sandbox.layout.positions[0].top = 60;
+        sandbox.tileRefs.current.p1.getBoundingClientRect = () => ({ left: 0, right: 200, top: 60, bottom: 220, width: 200, height: 160 });
+        sandbox.begin(event(100, 500), { id: 'p3' }, thirdPlacement);
+        sandbox.move(event(100, 30));
+        sandbox.end(event(100, 30));
+        assert.equal(reorders.length, 5);
+        assert.equal(reorders[4].slice(0, 3).join('|'), 'p3|p1|before');
+        assert.equal(saved.length, 0);
         """)
 
     def test_actual_smart_finder_uses_target_rect_after_autoscroll(self) -> None:

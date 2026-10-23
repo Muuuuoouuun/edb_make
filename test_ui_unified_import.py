@@ -12,7 +12,7 @@ function scheduler() {
   const sandbox = {
     initialSessionLoaded:true, loading:null, mutating:false, hasRunningBackgroundJobs:false,
     recognitionReview:null, confirmingRecognition:false, hasPendingSessionConflict:false,
-    operationRecovery:null, reviewEditorActive:false, splitMode:'recognize',
+    importRecoveryBlocking:false, publishBusy:false, refreshing:false, reviewEditorActive:false, splitMode:'recognize',
     pendingFiles:[{name:'a.pdf'},{name:'b.pdf'}], autoProcessKeysRef:{current:new Set(['a.pdf','b.pdf'])},
     fileQueueKey:file=>file.name, normalizeSplitMode:value=>value,
     processQueuedFiles:(mode,target,keys)=>calls.push({mode,keys:Array.from(keys)}),
@@ -43,12 +43,12 @@ class TestUnifiedImport(unittest.TestCase):
     def test_restore_errors_and_local_edits_delay_without_losing_pending_work(self):
         run_node(SETUP + r"""
         const {sandbox:s,calls,tick}=scheduler();
-        for(const key of ['initialSessionLoaded','reviewEditorActive','operationRecovery']) {
-          s.initialSessionLoaded=true;s.reviewEditorActive=false;s.operationRecovery=null;
+        for(const key of ['initialSessionLoaded','reviewEditorActive','importRecoveryBlocking','publishBusy','refreshing']) {
+          s.initialSessionLoaded=true;s.reviewEditorActive=false;s.importRecoveryBlocking=false;s.publishBusy=false;s.refreshing=false;
           s[key]=key==='initialSessionLoaded'?false:true;tick();
           assert.equal(calls.length,0);assert.equal(s.autoProcessKeysRef.current.size,2);
         }
-        s.operationRecovery=null;tick();assert.equal(calls.length,1);
+        s.refreshing=false;tick();assert.equal(calls.length,1);
         """)
 
     def test_append_preserves_inflight_generation_but_removal_invalidates_it(self):

@@ -133,7 +133,7 @@ class TestClassinBoardRatio(unittest.TestCase):
         focus_board = rule(FOCUS_CSS, ".main.editor-focus-mode .stage-board ")
         self.assertNotRegex(focus_board, r"(?:flex|width|max-width|height|aspect-ratio):")
         self.assertNotIn("--stage-preview-max-width:", FOCUS_CSS)
-        self.assertIn("--focus-panel-gutter: 0px", FOCUS_CSS)
+        self.assertNotIn("--focus-panel-gutter", FOCUS_CSS)
 
     def test_real_images_remain_contained_and_top_aligned(self) -> None:
         image = rule(CSS, ".tile-img")

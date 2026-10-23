@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import io
 from unittest.mock import patch
 
+import pytest
 from PIL import Image, ImageDraw
 
 from build_problem_board_edb import (
@@ -20,6 +21,47 @@ from build_problem_board_edb import (
 from edb_builder import CROP_FORMAT_V1
 from preprocess import _extract_pdf_media_regions, _transform_pdf_text_geometry
 from structured_schema import Box, ProblemUnit, Subject
+
+
+@pytest.mark.parametrize("subject", list(Subject))
+def test_default_stage2_removes_figure_background_in_preview_and_export(tmp_path, subject):
+    source = Image.new("RGB", (1100, 500), "white")
+    draw = ImageDraw.Draw(source)
+    draw.line((350, 100, 650, 100), fill="black", width=5)
+    draw.rectangle((400, 150, 450, 200), fill=(180, 40, 60))
+    region = {"kind": "image", "source": "pdf_image_block", "confidence": .99,
+              "bbox": {"left": 300, "top": 50, "right": 750, "bottom": 400}}
+    task = _ProblemAssetTask(
+        source_image=source, bounds=Box(left=0, top=0, width=1100, height=500),
+        crop_path=tmp_path / "crop.png", board_render_path=tmp_path / "board.png",
+        chalk_color=_resolve_chalk_color("charcoal"), subject=subject,
+        trim_edge_guides=False, pad_edges=False, source_media_regions=(region,),
+        detect_color_media=True,
+    )
+    _render_problem_asset(task)
+    assert task.rendered_media_regions == []
+    with Image.open(task.board_render_path) as preview:
+        assert preview.getpixel((500, 250))[3] == 0
+        assert preview.getpixel((500, 100)) == task.chalk_color + (255,)
+    # A saved render can still contain the old white rectangle. Export must
+    # honor the default even if stale detected regions remain in the session.
+    source.save(task.board_render_path)
+    entry = ProblemEntry(
+        problem_id="p1", title="1", problem_number=1, subject=subject,
+        source_page_id="page1", source_path="worksheet.pdf", prepared_page=None,
+        bounds=task.bounds, crop_path=task.crop_path, board_render_path=task.board_render_path,
+        blocks=[], actual_height_pages=1, overflow_allowed=False, reading_heavy=False,
+        risk_flags=[], processing_step="s2", preserve_media_regions=[region],
+    )
+    placement = SimpleNamespace(metadata={"crop_path": str(task.crop_path),
+                                          "board_render_path": str(task.board_render_path)})
+    payload = _build_image_only_record_image(
+        placement, entry, dark_board=True, board_theme="charcoal",
+        crop_format=CROP_FORMAT_V1, target_image_width_px=0, continuous_flow=False,
+    )
+    with Image.open(io.BytesIO(payload.image_bytes)) as exported:
+        assert exported.getpixel((500, 250))[3] == 0
+        assert exported.getpixel((500, 100)) == task.chalk_color + (255,)
 
 
 class _FakePdfPage:
@@ -127,7 +169,7 @@ def test_selective_overlay_changes_only_the_media_rectangle() -> None:
     assert selective.getpixel((100, 70)) == rendered.getpixel((100, 70))
 
 
-def test_default_stage2_asset_restores_pdf_media(tmp_path: Path) -> None:
+def test_opt_in_stage2_asset_restores_pdf_media(tmp_path: Path) -> None:
     source = Image.new("RGB", (1100, 500), "white")
     draw = ImageDraw.Draw(source)
     draw.rectangle((300, 120, 699, 379), fill=(188, 52, 74))
@@ -155,6 +197,7 @@ def test_default_stage2_asset_restores_pdf_media(tmp_path: Path) -> None:
                 },
             },
         ),
+        preserve_media_mode="auto",
     )
 
     assert _render_problem_asset(task) == (1100, 500)
@@ -194,6 +237,7 @@ def test_trimmed_stage2_asset_maps_pdf_media_after_vertical_trim(tmp_path: Path)
                 },
             },
         ),
+        preserve_media_mode="auto",
     )
 
     from dataclasses import replace
@@ -238,6 +282,7 @@ def test_math_stage2_asset_keeps_figures_as_chalk_cutouts(tmp_path: Path) -> Non
                 },
             },
         ),
+        preserve_media_mode="auto",
     )
 
     assert _stage2_prefers_chalk_math_media(Subject.MATH, "s2")
@@ -303,6 +348,7 @@ def test_math_stage2_edb_export_does_not_restore_white_figure_box(tmp_path: Path
         risk_flags=[],
         processing_step="s2",
         preserve_media_regions=regions,
+        preserve_media_mode="auto",
     )
     placement = SimpleNamespace(
         metadata={
@@ -358,6 +404,7 @@ def test_fresh_math_stage2_edb_export_reuses_preprocessed_board_render(
         risk_flags=[],
         processing_step="s2",
         board_render_preprocessed=True,
+        preserve_media_mode="auto",
     )
     placement = SimpleNamespace(
         metadata={
@@ -403,6 +450,7 @@ def test_text_priority_asset_does_not_run_horizontal_page_chrome_trimmers(
         pad_edges=False,
         text_priority=True,
         subject=Subject.KOREAN,
+        preserve_media_mode="auto",
     )
 
     with patch(
@@ -439,6 +487,7 @@ def test_text_priority_asset_adds_safe_side_padding_without_changing_source_boun
         pad_edges=True,
         text_priority=True,
         subject=Subject.ENGLISH,
+        preserve_media_mode="auto",
     )
 
     assert _render_problem_asset(task) == (732, 448)
@@ -486,6 +535,7 @@ def test_text_priority_edb_export_restores_media_after_final_normalization(tmp_p
         risk_flags=[],
         processing_step="s2",
         preserve_media_regions=regions,
+        preserve_media_mode="auto",
     )
     placement = SimpleNamespace(
         metadata={

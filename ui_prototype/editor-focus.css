@@ -1,11 +1,10 @@
 /* 5b: the existing editor in a spacious, desktop-focused board shell.
-   Load after editor-layout.css. The inspector has its own reserved gutter:
-   it never covers the board's pointer/drag surface. All controls still use
-   the existing application state and action handlers. */
+   Load after editor-layout.css. The movable inspector floats over the board
+   without reserving canvas space. All controls still use the existing
+   application state and action handlers. */
 .app > .main.editor-basic-mode.editor-focus-mode:not(.home-mode) {
   --focus-rail-width: 96px;
   --focus-panel-width: 330px;
-  --focus-panel-gutter: calc(var(--focus-panel-width) + 32px);
   position: relative;
   isolation: isolate;
   grid-template-columns: var(--focus-rail-width) minmax(0, 1fr);
@@ -13,10 +12,6 @@
   gap: 16px;
   padding: 0 22px 22px;
   overflow: hidden;
-}
-
-.app > .main.editor-basic-mode.editor-focus-mode.focus-panel-collapsed:not(.home-mode) {
-  --focus-panel-gutter: 0px;
 }
 
 .app > .main.editor-basic-mode.editor-focus-mode:not(.left-collapsed) {
@@ -107,7 +102,7 @@ body.dark .main.editor-focus-mode .stage-wrap {
   min-height: 0;
   align-items: center;
   gap: 12px;
-  padding: 12px calc(var(--focus-panel-gutter) + 20px) 20px 20px;
+  padding: 12px 20px 20px;
   background: transparent;
 }
 
@@ -126,10 +121,12 @@ body.dark .main.editor-focus-mode .stage-wrap {
 .main.editor-focus-mode > .col.right {
   position: absolute;
   z-index: 16;
-  top: 76px;
+  top: var(--focus-panel-top, 76px);
+  left: var(--focus-panel-left, auto);
   right: 38px;
-  bottom: 42px;
+  bottom: auto;
   width: var(--focus-panel-width);
+  height: min(700px, calc(100% - 112px));
   min-width: 0;
   min-height: 0;
   border: 1px solid var(--line);
@@ -158,17 +155,31 @@ body.dark .main.editor-focus-mode .stage-wrap {
   border-bottom: 1px solid var(--line);
 }
 
-.main.editor-focus-mode .focus-panel-heading > div {
-  display: grid;
-  gap: 2px;
+.main.editor-focus-mode .focus-panel-drag-handle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 
-.main.editor-focus-mode .focus-panel-heading > div > span {
+.main.editor-focus-mode .focus-panel-drag-handle:active {
+  cursor: grabbing;
+}
+
+.main.editor-focus-mode .focus-panel-drag-handle > .ic {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
   color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: 1.4;
 }
 
 .main.editor-focus-mode .focus-panel-heading strong {
@@ -196,7 +207,7 @@ body.dark .main.editor-focus-mode .stage-wrap {
   padding-left: 12px;
 }
 
-.main.editor-focus-mode :is(.focus-panel-toggle, .focus-panel-reopen):focus-visible {
+.main.editor-focus-mode :is(.focus-panel-toggle, .focus-panel-reopen, .focus-panel-drag-handle):focus-visible {
   outline: 2px solid var(--accent-ink);
   outline-offset: 2px;
 }
@@ -233,11 +244,9 @@ body.dark .main.editor-focus-mode .stage-wrap {
 
 }
 
-/* The shared pane navigation owns visibility in narrow windows. A hidden
-   inspector must neither reserve board width nor float over another pane. */
+/* The shared pane navigation owns visibility in narrow windows. */
 @media (max-width: 900px) {
   .app > .main.editor-basic-mode.editor-focus-mode:not(.home-mode) {
-    --focus-panel-gutter: 0px;
     gap: 8px;
     padding: 8px;
   }
@@ -246,6 +255,12 @@ body.dark .main.editor-focus-mode .stage-wrap {
     position: static;
     inset: auto;
     width: auto;
+    height: auto;
+  }
+
+  .main.editor-focus-mode .focus-panel-drag-handle {
+    cursor: default;
+    touch-action: auto;
   }
 
   .main.editor-focus-mode.focus-panel-collapsed[data-mobile-pane="panel"] > .col.right {

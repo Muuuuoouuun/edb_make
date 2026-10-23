@@ -3976,6 +3976,7 @@ def _build_guarded_board_payload(
         subject=resolve_subject(options["subject"]),
         source_hints=(options["sourceName"],),
         text_priority=_problem_prefers_text_preservation(options["subject"], options["sourceName"]),
+        preserve_media_mode=options["mode"],
         rendered_media_regions=regions,
     )
     image = _lazy_call("build_problem_board_edb", "_build_problem_board_asset", source, task)
@@ -5593,6 +5594,7 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                     or None
                 ),
                 force_full_page_bounds=bool(problem.get("forceFullPageBounds") or problem.get("force_full_page_bounds")),
+                fit_width_converted=_lazy_call("build_problem_board_edb", "problem_payload_fit_width_converted", problem),
                 preserve_media_regions=[
                     dict(region)
                     for region in (
@@ -5956,8 +5958,8 @@ def _crop_refreshes_board_render(problem: dict[str, Any]) -> bool:
 
 
 def _media_mode(problem: dict[str, Any]) -> str:
-    mode = problem.get("preserveMediaMode", problem.get("preserve_media_mode", "auto"))
-    return mode if mode in {"auto", "manual", "off", "grayscale"} else "auto"
+    mode = problem.get("preserveMediaMode", problem.get("preserve_media_mode", "off"))
+    return mode if mode in {"auto", "manual", "off", "grayscale"} else "off"
 
 
 def _set_media_regions(problem: dict[str, Any], regions: list[dict[str, Any]]) -> None:
@@ -6114,6 +6116,7 @@ def _render_board_crop_from_raw(
                 subject=resolve_subject((problem or {}).get("subject")),
                 source_hints=(str((problem or {}).get("sourceFileName") or ""),),
                 text_priority=_problem_prefers_text_preservation((problem or {}).get("subject"), (problem or {}).get("sourceFileName")),
+                preserve_media_mode=_media_mode(problem or {}),
                 rendered_media_regions=(problem or {}).get("preserveMediaRegions") or [],
             )
             _lazy_call("build_problem_board_edb", "_render_problem_board_asset", image, task)
@@ -6179,7 +6182,7 @@ def _mutate_preserve_media(session: dict[str, Any], problem_id: str, mode: str, 
 
 
 def _mutate_preserve_media_many(session: dict[str, Any], problem_ids: list[str], mode: str) -> dict[str, Any]:
-    if mode not in {"auto", "grayscale"} or not problem_ids:
+    if mode not in {"auto", "grayscale", "off"} or not problem_ids:
         raise ValueError("그림 색상 설정과 적용할 자료를 선택해 주세요.")
     updated = _clone_jsonish(session)
     for problem_id in dict.fromkeys(problem_ids):
@@ -6501,6 +6504,7 @@ def _copy_publish_problem_layout_metadata(target: dict[str, Any], source: dict[s
         ("inputIntent", "input_intent"),
         ("placementMode", "placement_mode"),
         ("forceFullPageBounds", "force_full_page_bounds"),
+        ("fitWidthConverted", "fit_width_converted"),
         ("preserveLegacyPlacementScale", "preserve_legacy_placement_scale"),
         ("placementGapAfterPages", "placement_gap_after_pages"),
         ("placementAutoFitDisabled", "placement_auto_fit_disabled"),
@@ -6511,6 +6515,7 @@ def _copy_publish_problem_layout_metadata(target: dict[str, Any], source: dict[s
         _copy_session_metadata_aliases_overwrite(target, source, aliases)
     for aliases in (
         ("forceFullPageBounds", "force_full_page_bounds"),
+        ("fitWidthConverted", "fit_width_converted"),
         ("preserveLegacyPlacementScale", "preserve_legacy_placement_scale"),
         ("placementAutoFitDisabled", "placement_auto_fit_disabled"),
         ("placementXEdited", "placement_x_edited"),
@@ -6951,6 +6956,135 @@ def _remove_problems(session: dict[str, Any], problem_ids: set[str]) -> list[dic
     return removed
 
 
+SPLIT_CUT_SNAP_MAX_PX = 24
+SPLIT_CUT_SNAP_RATIO = 0.02
+SPLIT_CUT_INK_THRESHOLD = 232
+
+
+def _split_crop_source_height(problem: dict[str, Any], crop_path: Path, crop_size: tuple[int, int]) -> float:
+    """Height of the shown crop in page pixels.
+
+    고화질 (and other enhancement) replaces ``imagePath`` with an upscaled copy
+    while ``cropSourceOffset`` still describes the first-generation crop, so
+    measure the cut against that crop when it is the same picture, smaller.
+    """
+    crop_width, crop_height = crop_size
+    original_path = _resolve_session_path(problem.get("originalImagePath") or problem.get("original_image_path"))
+    if original_path is None or not original_path.exists():
+        return float(crop_height)
+    try:
+        if original_path.resolve() == crop_path.resolve():
+            return float(crop_height)
+        from PIL import Image
+
+        with Image.open(original_path) as original:
+            original_width, original_height = original.size
+    except (OSError, ValueError):
+        return float(crop_height)
+    if original_width <= 0 or original_height <= 0 or crop_width <= 0 or crop_height <= 0:
+        return float(crop_height)
+    if original_height >= crop_height:
+        return float(crop_height)
+    crop_aspect = crop_width / crop_height
+    original_aspect = original_width / original_height
+    if abs(crop_aspect - original_aspect) > original_aspect * 0.01:
+        return float(crop_height)
+    return float(original_height)
+
+
+def _snap_split_cut_to_blank_row(session: dict[str, Any], problem: dict[str, Any], cut_y: float) -> float:
+    """Move a page cut that lands on ink to the nearest blank row close by.
+
+    The board snaps its line to a blank band of the shown crop; a cut that
+    still touches text after mapping to the page (rounding, legacy crops with
+    no recorded offset) is nudged into the same gap instead of slicing glyphs.
+    """
+    bbox = problem.get("bbox") or {}
+    try:
+        left = float(bbox.get("left", 0.0))
+        top = float(bbox.get("top", 0.0))
+        width = float(bbox.get("width", 0.0))
+        height = float(bbox.get("height", 0.0))
+    except (TypeError, ValueError):
+        return cut_y
+    page_id = str(problem.get("sourcePageId") or "")
+    try:
+        page = _find_page(session, page_id)
+    except (KeyError, ValueError):
+        return cut_y
+    page_path = _resolve_session_path(page.get("sourceImagePath") or page.get("sourceImageUri"))
+    if page_path is None or not page_path.exists() or width <= 0 or height <= 0:
+        return cut_y
+    tolerance = int(max(2, min(SPLIT_CUT_SNAP_MAX_PX, round(height * SPLIT_CUT_SNAP_RATIO))))
+    from PIL import Image
+
+    try:
+        with Image.open(page_path) as page_image:
+            x0 = max(0, int(math.floor(left)))
+            x1 = min(page_image.width, int(math.ceil(left + width)))
+            row = int(math.floor(cut_y))
+            y0 = max(int(math.floor(top)) + 1, row - tolerance)
+            y1 = min(page_image.height, int(math.ceil(top + height)) - 1, row + tolerance + 1)
+            if x1 <= x0 or y1 <= y0 or not (y0 <= row < y1):
+                return cut_y
+            band = page_image.crop((x0, y0, x1, y1)).convert("L").point(
+                lambda px: 255 if px < SPLIT_CUT_INK_THRESHOLD else 0
+            )
+    except (OSError, ValueError):
+        return cut_y
+    blank_rows = [
+        y0 + index for index in range(band.height)
+        if band.crop((0, index, band.width, index + 1)).getbbox() is None
+    ]
+    if not blank_rows or row in blank_rows:
+        return cut_y
+    nearest = min(blank_rows, key=lambda candidate: (abs(candidate - row), candidate))
+    # Cut through the middle of that blank band (as far as the search window
+    # sees it), so neither half ends right on the glyph edge.
+    blank = set(blank_rows)
+    start = end = nearest
+    while start - 1 in blank:
+        start -= 1
+    while end + 1 in blank:
+        end += 1
+    return (start + end + 1) / 2
+
+
+def _split_ratio_from_crop_ratio(session: dict[str, Any], problem_id: str, crop_y_ratio: float) -> float:
+    """Map a cut chosen on the board image to a ratio of the problem's page box.
+
+    The board shows the problem's crop, which may be trimmed and padded around
+    its page box; ``cropSourceOffset`` records where the crop starts on the page.
+    """
+    if not (0.0 < crop_y_ratio < 1.0):
+        raise ValueError("자를 위치가 문제 밖에 있어요")
+    _index, problem = _find_problem(session, problem_id)
+    bbox = problem.get("bbox") or {}
+    top = float(bbox.get("top", 0.0))
+    height = float(bbox.get("height", 0.0))
+    if height <= 0:
+        raise ValueError("problem bbox is empty — cannot split")
+    crop_path = _resolve_session_path(problem.get("imagePath") or problem.get("image_path"))
+    if crop_path is None or not crop_path.exists():
+        raise FileNotFoundError(f"crop image missing for {problem_id}: {crop_path}")
+    from PIL import Image
+
+    with Image.open(crop_path) as crop:
+        crop_size = crop.size
+    offset = problem.get("cropSourceOffset") or problem.get("crop_source_offset")
+    if isinstance(offset, dict):
+        offset_top = float(offset.get("top", top))
+        cut_y = offset_top + crop_y_ratio * _split_crop_source_height(problem, crop_path, crop_size)
+    else:
+        # No recorded origin: the crop stands for the page box itself.
+        cut_y = top + crop_y_ratio * height
+    cut_y = _snap_split_cut_to_blank_row(session, problem, cut_y)
+    ratio = (cut_y - top) / height
+    if not (0.05 < ratio < 0.95):
+        raise ValueError("문제 위아래 끝에 너무 가까워 나눌 수 없어요. 조금 더 안쪽을 골라 주세요")
+    return ratio
+
+
 def _mutate_split(session: dict[str, Any], problem_id: str, split_y_ratio: float) -> dict[str, Any]:
     if not (0.05 < split_y_ratio < 0.95):
         raise ValueError("splitYRatio must be between 0.05 and 0.95")
@@ -6978,14 +7112,18 @@ def _mutate_split(session: dict[str, Any], problem_id: str, split_y_ratio: float
     page_image = Image.open(page_image_path).convert("RGB")
     upper_id = _next_problem_id(session, str(problem.get("id")), "u")
     upper_crop_path = crop_dir / _make_crop_filename(upper_id, "u")
-    recrop_problem(page_image, upper, upper_crop_path)
+    upper_offset: dict[str, int] = {}
+    recrop_problem(page_image, upper, upper_crop_path, source_offset_output=upper_offset)
     lower_id = _next_problem_id({**session, "problems": session.get("problems", []) + [{"id": upper_id}]}, str(problem.get("id")), "l")
     lower_crop_path = crop_dir / _make_crop_filename(lower_id, "l")
-    recrop_problem(page_image, lower, lower_crop_path)
+    lower_offset: dict[str, int] = {}
+    recrop_problem(page_image, lower, lower_crop_path, source_offset_output=lower_offset)
 
     parent_title = str(problem.get("title") or problem_id)
 
-    def make_entry(new_id: str, new_bbox: Box, crop_path: Path, suffix: str) -> dict[str, Any]:
+    def make_entry(
+        new_id: str, new_bbox: Box, crop_path: Path, suffix: str, crop_offset: dict[str, int],
+    ) -> dict[str, Any]:
         entry = _problem_skeleton_from_parent(problem)
         entry["id"] = new_id
         entry["title"] = f"{parent_title} ({suffix})"
@@ -7000,11 +7138,15 @@ def _mutate_split(session: dict[str, Any], problem_id: str, split_y_ratio: float
             "width": new_bbox.width,
             "height": new_bbox.height,
         }
+        if crop_offset:
+            # The recrop is trimmed and padded; record where it starts on the
+            # page so a second board split cuts where its preview line is.
+            entry["cropSourceOffset"] = dict(crop_offset)
         _refresh_mutated_crop_layout(entry, crop_path)
         return entry
 
-    upper_entry = make_entry(upper_id, upper, upper_crop_path, "위")
-    lower_entry = make_entry(lower_id, lower, lower_crop_path, "아래")
+    upper_entry = make_entry(upper_id, upper, upper_crop_path, "위", upper_offset)
+    lower_entry = make_entry(lower_id, lower, lower_crop_path, "아래", lower_offset)
     _replace_problem(session, index, [upper_entry, lower_entry])
     return session
 
@@ -7049,7 +7191,8 @@ def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, 
 
     from PIL import Image
     page_image = Image.open(page_image_path).convert("RGB")
-    recrop_problem(page_image, merged, new_crop_path)
+    merged_offset: dict[str, int] = {}
+    recrop_problem(page_image, merged, new_crop_path, source_offset_output=merged_offset)
 
     merged_entry = _problem_skeleton_from_parent(primary)
     merged_entry["id"] = new_id
@@ -7063,6 +7206,8 @@ def _mutate_merge(session: dict[str, Any], problem_ids: list[str]) -> dict[str, 
         "width": merged.width,
         "height": merged.height,
     }
+    if merged_offset:
+        merged_entry["cropSourceOffset"] = dict(merged_offset)
     _refresh_mutated_crop_layout(merged_entry, new_crop_path)
     # remove all originals; the page's problemIds will be cleaned up too.
     _remove_problems(session, {str(pid) for pid in problem_ids})
@@ -11246,12 +11391,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         try:
             if action == "split":
                 problem_id = str(payload.get("problemId") or payload.get("problem_id") or "")
+                crop_ratio = payload.get("splitCropYRatio")
+                if crop_ratio is None:
+                    crop_ratio = payload.get("split_crop_y_ratio")
                 raw_ratio = payload.get("splitYRatio")
                 if raw_ratio is None:
                     raw_ratio = payload.get("split_y_ratio")
-                if raw_ratio is None:
-                    raw_ratio = 0.5
-                split_ratio = float(raw_ratio)
+                if crop_ratio is not None:
+                    split_ratio = _split_ratio_from_crop_ratio(session, problem_id, float(crop_ratio))
+                else:
+                    split_ratio = float(0.5 if raw_ratio is None else raw_ratio)
                 new_session = _mutate_split(session, problem_id, split_ratio)
             elif action == "merge":
                 ids_raw = payload.get("problemIds") or payload.get("problem_ids") or []
@@ -12690,7 +12839,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
                     crop_format=crop_format,
                     input_intent=input_intent,
-                    preserve_media_mode=str(payload.get("preserveMediaMode") or "auto"),
+                    preserve_media_mode=str(payload.get("preserveMediaMode") or "off"),
+                    trim_page_whitespace=_coerce_bool(payload.get("trimPageWhitespace"), default=False),
                     page_tile_mode=str(
                         payload.get("pageTileMode")
                         or payload.get("page_tile_mode")

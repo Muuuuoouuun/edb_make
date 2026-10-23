@@ -113,7 +113,9 @@ class TestUiPerformance(unittest.TestCase):
         self.assertIn("flex: 1 1 0", stage_board_css)
         self.assertIn("min-height: 0", stage_board_css)
         self.assertNotIn("aspect-ratio:", stage_board_css)
-        self.assertIn("flex: 0 0 52px", toolbar_css)
+        # The toolbar stays in the flow (never over the board) and may wrap.
+        self.assertIn("flex: 0 0 auto", toolbar_css)
+        self.assertIn("min-height: 52px", toolbar_css)
         self.assertIn("position: relative", toolbar_css)
         self.assertNotIn(".stage-estimate-bar", board)
 
@@ -124,8 +126,8 @@ class TestUiPerformance(unittest.TestCase):
         toggle_css = board.split(".stage-estimate-details-toggle{", 1)[1].split("}", 1)[0]
         details_css = board.split(".stage-estimate-details{", 1)[1].split("}", 1)[0]
 
-        self.assertIn("height: 52px", estimate_css)
-        self.assertIn("flex-wrap: nowrap", estimate_css)
+        self.assertIn("min-height: 52px", estimate_css)
+        self.assertIn("flex-wrap: wrap", estimate_css)
         self.assertIn("min-width: var(--control-touch)", toggle_css)
         self.assertIn("min-height: var(--control-touch)", toggle_css)
         self.assertIn("position: fixed", details_css)
