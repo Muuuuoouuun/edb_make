@@ -1,0 +1,42 @@
+name: Stage exact EDB 0.2.10 test installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stage-exact-edb-030-draft-421851198
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    if: github.repository == 'Muuuuoouuun/edb_make' && github.ref == 'refs/heads/chore/stage-edb-030-test-installers'
+    name: Verify and attach draft assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - name: Install hashed metadata verification tools
+        run: python -m pip install --disable-pip-version-check --require-hashes -r requirements-release-bootstrap.lock
+      - name: Verify source run and attach exact artifacts to existing draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m unittest -q test_stage_edb_030_test_installers
+          python scripts/stage_edb_030_test_installers.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staged-release-evidence
+          path: |
+            dist/staged-edb-030/staging-report.json
+            dist/staged-edb-030/assets/release-evidence.zip
+          if-no-files-found: error
+          retention-days: 14
