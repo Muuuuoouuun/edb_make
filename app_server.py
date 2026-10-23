@@ -2381,6 +2381,11 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
 
     return {
         "ok": True,
+        "pdfRenderer": {
+            "available": preprocess.fitz is not None,
+            "bundled": bool(getattr(sys, "frozen", False)),
+            "importError": preprocess._PDF_RENDERER_IMPORT_ERROR,
+        },
         "hangul": {
             "status": status,
             "label": label,

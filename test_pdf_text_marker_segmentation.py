@@ -1409,6 +1409,35 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
 
         self.assertIn(expected, candidates)
 
+    def test_packaged_pdf_uses_bundled_renderer_without_external_python(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "자료 with spaces.pdf"
+            with fitz.open() as document:
+                document.new_page().insert_text((50, 80), "1. Bundled PDF renderer")
+                document.save(source)
+            with (
+                patch.object(preprocess_module.sys, "frozen", True, create=True),
+                patch.object(preprocess_module.sys, "executable", "ClassInEDBMVP.exe"),
+                patch.object(preprocess_module.subprocess, "run", side_effect=AssertionError("external Python invoked")),
+            ):
+                pages = preprocess_module.render_pdf_pages(source, Path(temp_dir) / "rendered", dpi=72)
+            self.assertEqual(1, len(pages))
+            self.assertTrue(Path(pages[0].normalized_path).is_file())
+
+    def test_packaged_missing_renderer_never_relaunches_app_or_searches_python(self):
+        with (
+            patch.object(preprocess_module.sys, "frozen", True, create=True),
+            patch.object(preprocess_module.sys, "executable", "ClassInEDBMVP.exe"),
+            patch.object(preprocess_module, "fitz", None),
+            patch.object(preprocess_module, "_PDF_RENDERER_IMPORT_ERROR", "DLL load failed: test"),
+            patch.object(preprocess_module.shutil, "which", side_effect=AssertionError("Python search")),
+            patch.object(preprocess_module.subprocess, "run", side_effect=AssertionError("app relaunched")),
+            tempfile.TemporaryDirectory() as temp_dir,
+        ):
+            self.assertEqual([], preprocess_module._iter_external_pymupdf_python_candidates())
+            with self.assertRaisesRegex(RuntimeError, "bundled PyMuPDF: DLL load failed: test"):
+                preprocess_module.render_pdf_pages(Path(temp_dir) / "source.pdf", Path(temp_dir) / "out")
+
     def test_pdf_problem_markers_ignore_chrome_print_date_header(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "chrome_header.pdf"

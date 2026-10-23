@@ -25,9 +25,11 @@ from PIL import Image, ImageOps
 
 from passage_detection import parse_shared_passage_range_header
 
+_PDF_RENDERER_IMPORT_ERROR = ""
 try:
-    import fitz  # type: ignore
-except ImportError:  # pragma: no cover
+    import pymupdf as fitz  # type: ignore
+except ImportError as exc:  # pragma: no cover
+    _PDF_RENDERER_IMPORT_ERROR = str(exc)
     fitz = None
 
 try:
@@ -412,6 +414,11 @@ print(json.dumps(pages, ensure_ascii=True))
 
 
 def _iter_external_pymupdf_python_candidates() -> list[Path]:
+    # A PyInstaller executable is the app, not a Python interpreter. Packaged
+    # PDF handling must use the bundled renderer and never depend on a PC's
+    # development environment (or relaunch the app with Python's -c flag).
+    if getattr(sys, "frozen", False):
+        return []
     base_dir = Path(__file__).resolve().parent
     virtual_env = os.environ.get("VIRTUAL_ENV")
     raw_candidates: list[str | Path | None] = [
@@ -447,6 +454,12 @@ def _render_pdf_pages_with_external_pymupdf(
     *,
     dpi: int,
 ) -> list[NormalizedPageImage]:
+    if getattr(sys, "frozen", False):
+        raise RuntimeError(
+            "설치된 앱의 PDF 렌더러를 불러오지 못했습니다. 최신 설치파일로 다시 설치해 주세요. "
+            "별도 Python 설치는 필요하지 않습니다. "
+            f"(bundled PyMuPDF: {_PDF_RENDERER_IMPORT_ERROR or 'unavailable'})"
+        )
     errors: list[str] = []
     for python_exe in _iter_external_pymupdf_python_candidates():
         command = [

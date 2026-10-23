@@ -153,7 +153,7 @@ a = Analysis(
         if project_path(source).exists()
     ] + APP_CONFIG_DATAS,
     hiddenimports=HIDDEN_IMPORTS,
-    hookspath=[],
+    hookspath=[str(project_path("packaging/pyinstaller_hooks"))],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],

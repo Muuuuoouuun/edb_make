@@ -494,6 +494,7 @@ DATA_ARGS=()
 DATA_ARGS+=(--add-data "$APP_UPDATE_CONFIG:.")
 DATA_ARGS+=(--add-data "${RELEASE_METADATA_DIR}:release_metadata")
 HIDDEN_IMPORT_ARGS=(
+  --additional-hooks-dir "$PROJECT_ROOT/packaging/pyinstaller_hooks"
   --hidden-import preprocess
   --hidden-import build_mvp_export
   --hidden-import build_problem_board_edb
