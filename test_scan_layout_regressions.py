@@ -25,16 +25,11 @@ from page_repair import build_ai_fallback_config
 from preprocess import _estimate_skew_angle_by_projection, prepare_source_pages
 from structured_schema import Subject
 
-FONT_CANDIDATES = (
-    "/usr/share/fonts/truetype/sand-box/google/Nanum Gothic/NanumGothic-Regular.ttf",
-    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
-    "/Library/Fonts/NanumGothic.ttf",
-    "C:/Windows/Fonts/malgun.ttf",
-)
-FONT = next((path for path in FONT_CANDIDATES if Path(path).exists()), None)
-# PyMuPDF ships a Korean-capable font, so CI must exercise these regressions
-# even when the runner has no system Korean fonts installed.
-FONT_BUFFER = fitz.Font("korea").buffer if FONT is None else None
+# Use the same Korean glyph metrics on every runner. Native fonts differ across
+# Windows, macOS and Linux, which changes synthetic question line widths and
+# makes this layout fixture test different documents on different platforms.
+FONT = None
+FONT_BUFFER = fitz.Font("korea").buffer
 
 
 def _install_exam_font(page):
