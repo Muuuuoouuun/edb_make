@@ -569,8 +569,20 @@ class PdfPageProcessingError(RuntimeError):
 
 
 def _is_pdf_resource_error(exc: Exception) -> bool:
-    if isinstance(exc, MemoryError) or (isinstance(exc, OSError) and exc.errno == errno.ENOMEM):
+    if isinstance(exc, MemoryError) or (
+        isinstance(exc, OSError)
+        and (exc.errno == errno.ENOMEM or getattr(exc, "winerror", None) in {8, 14, 1455})
+    ):
         return True
+    if cv2 is not None and isinstance(exc, cv2.error):
+        # cv2.error derives directly from Exception, not RuntimeError. Native
+        # allocation failures have StsNoMem (-4); argument/assertion errors
+        # must not become capacity errors just because their text mentions it.
+        native_code = getattr(exc, "code", None)
+        if native_code is not None:
+            return native_code == -4
+        # Some Python wrappers retain only the native diagnostic string.
+        return re.search(r"\(-4:\s*insufficient memory\)", str(exc), re.IGNORECASE) is not None
     return isinstance(exc, RuntimeError) and any(
         token in str(exc).lower()
         for token in ("out of memory", "cannot allocate", "malloc failed", "failed to allocate")

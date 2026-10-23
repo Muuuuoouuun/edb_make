@@ -21,10 +21,17 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+if not __package__:
+    # Direct invocation puts only scripts/ on sys.path. The independent EDB
+    # parser lives at the repository root, including on clean native runners.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from inspect_edb import parse_edb
+
 try:
     from .verify_frontend_package import EXTRA_UI_STYLESHEETS
 except ImportError:  # pragma: no cover - direct script execution
-    from verify_frontend_package import EXTRA_UI_STYLESHEETS
+    from scripts.verify_frontend_package import EXTRA_UI_STYLESHEETS
 
 
 _WINDOWS_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -488,7 +495,6 @@ def _smoke_edb_export(
     if not isinstance(edb_parts, list) or not edb_parts:
         raise RuntimeError("packaged EDB smoke export omitted EDB part metadata")
     # Read every part independently, including parts after the primary file.
-    from inspect_edb import parse_edb
     verified_parts = []
     actual_records = 0
     for part in edb_parts:

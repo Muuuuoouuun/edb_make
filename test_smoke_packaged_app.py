@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -57,6 +58,17 @@ class TestPackagedStylesheetSmoke(unittest.TestCase):
 
 
 class TestPackagedSmokeProcessTree(unittest.TestCase):
+    def test_direct_script_loads_edb_parser_without_repository_on_pythonpath(self) -> None:
+        script = Path(__file__).resolve().parent / "scripts" / "smoke_packaged_app.py"
+        with tempfile.TemporaryDirectory() as unrelated_cwd:
+            result = subprocess.run(
+                [sys.executable, "-I", "-c",
+                 "import runpy, sys; ns = runpy.run_path(sys.argv[1]); "
+                 "assert callable(ns['parse_edb'])", str(script)],
+                cwd=unrelated_cwd, capture_output=True, text=True, timeout=15,
+            )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_windows_environment_case_does_not_break_python_free_launch(self) -> None:
         for key in ("SystemRoot", "SYSTEMROOT", "systemroot"):
             with self.subTest(key=key), patch.dict(os.environ, {

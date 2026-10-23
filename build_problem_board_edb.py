@@ -65,7 +65,7 @@ from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from page_tiling import PageTilingOptions, tile_page_columns
 from passage_quality import assess_passage_crop_quality
 from placement_engine import place_problems, normalize_placement_extra_slots
-from preprocess import PDF_PROCESSING_BATCH_PAGES, PdfPageProcessingError, PreparedPage, prepare_source_pages
+from preprocess import PDF_PROCESSING_BATCH_PAGES, PdfPageProcessingError, PreparedPage, _is_pdf_resource_error, prepare_source_pages
 from raster_media import detect_color_media_regions, stage2_media_regions
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
 
@@ -2754,7 +2754,9 @@ def build_pages(
                 ocr_semaphore=ocr_semaphore,
                 global_ocr_worker_limit=global_ocr_worker_limit,
             )
-        except MemoryError as exc:
+        except Exception as exc:
+            if not _is_pdf_resource_error(exc):
+                raise
             if len(batch) <= 1:
                 number = batch[0].page_number
                 raise PdfPageProcessingError(source, number, number, exc, resource_exhausted=True) from exc

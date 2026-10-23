@@ -127,6 +127,65 @@ verify_packaged_app_root() {
   "$PYTHON_EXE" "$PROJECT_ROOT/scripts/verify_packaged_app.py" "${verify_args[@]}"
 }
 
+create_dmg_with_retry() (
+  local app_path="$1"
+  local dmg_path="$2"
+  local app_name="$3"
+  local output_dir="$4"
+  local staging_dir=""
+  local error_log=""
+  local created=0
+  local attempt=1
+  local max_attempts=3
+  local create_exit_code=0
+
+  cleanup_dmg_attempt() {
+    [[ -z "$staging_dir" ]] || rm -rf "$staging_dir"
+    [[ -z "$error_log" ]] || rm -f "$error_log"
+    [[ "$created" == "1" ]] || rm -f "$dmg_path"
+  }
+  trap cleanup_dmg_attempt EXIT
+
+  while (( attempt <= max_attempts )); do
+    # Use a fresh staging directory after a busy failure. Keep stderr outside
+    # the source folder, so hdiutil never reads a log that it is still writing.
+    staging_dir="$(mktemp -d "$output_dir/${app_name}.dmg.XXXXXX")"
+    error_log="$(mktemp "$output_dir/${app_name}.dmg-create.XXXXXX")"
+    rm -f "$dmg_path"
+    /usr/bin/ditto "$app_path" "$staging_dir/$app_name.app"
+    ln -s /Applications "$staging_dir/Applications"
+    if hdiutil create \
+      -volname "$app_name" \
+      -srcfolder "$staging_dir" \
+      -ov \
+      -format UDZO \
+      -imagekey zlib-level=9 \
+      "$dmg_path" >/dev/null 2>"$error_log"; then
+      if [[ ! -s "$dmg_path" ]]; then
+        echo "hdiutil reported success but did not create a nonempty DMG: $dmg_path" >&2
+        return 1
+      fi
+      [[ ! -s "$error_log" ]] || cat "$error_log" >&2
+      created=1
+      return 0
+    else
+      create_exit_code=$?
+    fi
+    cat "$error_log" >&2
+    if ! LC_ALL=C grep -Eq 'hdiutil: create failed - Resource busy([[:space:]]|$)' "$error_log" \
+      || (( attempt >= max_attempts )); then
+      return "$create_exit_code"
+    fi
+    echo "DMG creation is temporarily busy; retrying attempt $((attempt + 1))/$max_attempts." >&2
+    rm -rf "$staging_dir"
+    rm -f "$error_log" "$dmg_path"
+    staging_dir=""
+    error_log=""
+    sleep "$((attempt * 2))"
+    attempt=$((attempt + 1))
+  done
+)
+
 verify_dmg_contains_app() {
   local dmg_path="$1"
   local app_name="$2"
@@ -650,18 +709,7 @@ if [[ "$ZIP" == "1" && -d "$APP_PATH" ]]; then
 fi
 
 if [[ "$DMG" == "1" && -d "$APP_PATH" ]]; then
-  STAGING_DIR="$(mktemp -d "$RESOLVED_OUTPUT_DIR/${APP_NAME}.dmg.XXXXXX")"
-  rm -f "$DMG_PATH"
-  /usr/bin/ditto "$APP_PATH" "$STAGING_DIR/$APP_NAME.app"
-  ln -s /Applications "$STAGING_DIR/Applications"
-  hdiutil create \
-    -volname "$APP_NAME" \
-    -srcfolder "$STAGING_DIR" \
-    -ov \
-    -format UDZO \
-    -imagekey zlib-level=9 \
-    "$DMG_PATH" >/dev/null
-  rm -rf "$STAGING_DIR"
+  create_dmg_with_retry "$APP_PATH" "$DMG_PATH" "$APP_NAME" "$RESOLVED_OUTPUT_DIR"
   require_nonempty_file "$DMG_PATH" "DMG installer"
   if [[ -n "$SIGN_IDENTITY" && "$SIGN_IDENTITY" != "-" ]] && command -v codesign >/dev/null 2>&1; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG_PATH"

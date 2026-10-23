@@ -2501,6 +2501,10 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
         causes.append(current)
         current = getattr(current, "cause", None) or current.__cause__
     combined = " ".join(str(item) for item in causes).lower()
+    native_cv2_causes = [item for item in causes if type(item).__module__ == "cv2"]
+    native_memory_exhausted = any(
+        _preprocess_module()._is_pdf_resource_error(item) for item in native_cv2_causes
+    )
     if isinstance(exc, UploadRequestError):
         code, kind, summary = exc.code, "upload_failed", message
         context.update(exc.context)
@@ -2516,8 +2520,13 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
         summary = "작업 폴더에 파일을 저장하지 못했습니다. 파일 잠금 또는 폴더 쓰기 권한을 확인해 주세요."
         steps = ["해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.", "OneDrive 동기화 상태와 Windows 보안의 제어된 폴더 액세스 알림을 확인해 주세요.", "계속 실패하면 쓰기 가능한 작업 폴더에서 다시 실행한 뒤 오류 상세를 복사해 신고해 주세요."]
         retryable = True
-    elif any(isinstance(item, MemoryError) or isinstance(item, OSError) and (item.errno == errno.ENOMEM or getattr(item, "winerror", None) in {8, 14, 1455}) for item in causes) or getattr(exc, "code", "") == "pdf_resource_exhausted" or any(
-        signal in combined for signal in ("out of memory", "cannot allocate memory", "malloc failed", "memory allocation failed")
+    elif (
+        any(isinstance(item, MemoryError) or isinstance(item, OSError) and (item.errno == errno.ENOMEM or getattr(item, "winerror", None) in {8, 14, 1455}) for item in causes)
+        or native_memory_exhausted
+        or getattr(exc, "code", "") == "pdf_resource_exhausted"
+        or (not native_cv2_causes and any(
+            signal in combined for signal in ("out of memory", "cannot allocate memory", "malloc failed", "memory allocation failed")
+        ))
     ):
         code, kind = "processing_memory_exhausted", "memory_exhausted"
         summary = "처리할 자료가 사용 가능한 메모리보다 커서 작업을 완료하지 못했습니다."
