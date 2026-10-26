@@ -916,6 +916,8 @@
     inset: 0;
     overflow-y: auto;
     overflow-x: hidden;
+    /* A drag grows the content; a new scrollbar must not narrow it (that cancels the drag). */
+    scrollbar-gutter: stable;
     overscroll-behavior: contain;
     padding: 26px 26px 70px;
     z-index: 1;

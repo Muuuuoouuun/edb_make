@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -215,6 +216,14 @@ class TestUiBoardDrag(unittest.TestCase):
         flush();
         assert.equal(tile.style.transition, '', 'hover transition comes back afterwards');
         """)
+
+    def test_board_keeps_its_width_when_a_drag_adds_a_scrollbar(self) -> None:
+        # A plain drag grows .stage-content, so a short board gains a scrollbar.
+        # BoardStage cancels a drag when the content width changes; keep it fixed.
+        css = (PROJECT_ROOT / "ui_prototype" / "board.css").read_text(encoding="utf-8")
+        rule = re.search(r"(?m)^  \.stage-scroll\{([^}]+)\}", css)
+        self.assertIsNotNone(rule)
+        self.assertIn("scrollbar-gutter: stable", rule[1])
 
     def test_click_or_cancel_does_not_save_a_placement(self) -> None:
         run_node(DRAG_SETUP + r"""
