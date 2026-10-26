@@ -25,6 +25,7 @@ from app_server import (
 )
 from build_mvp_export import _render_problem_crops, build_ui_session as build_mvp_ui_session, run_export as run_mvp_export
 from build_problem_board_edb import (
+    _erase_corner_page_badges,
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
     PROCESSING_STEP_RECONSTRUCT,
     ProblemEntry,
@@ -9138,3 +9139,30 @@ class TestEdbPublishFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCornerBadgeEraserKeepsProblemBadges(unittest.TestCase):
+    def test_faint_watermark_tint_does_not_bridge_problem_badge_to_crop_edge(self):
+        # Right-column crops start at the page midpoint, where a light page
+        # watermark sits behind the problem's own "07" number badge. The tint
+        # must not count as ink that connects the badge to the crop edge.
+        crop = Image.new("RGB", (760, 500), "white")
+        draw = ImageDraw.Draw(crop)
+        draw.rectangle((0, 0, 140, 120), fill=(240, 232, 214))  # watermark tint
+        draw.rectangle((36, 14, 96, 50), fill=(40, 48, 96))  # number badge box
+        draw.text((48, 20), "07", fill="white")
+        draw.text((110, 22), "category label", fill=(120, 120, 120))
+        draw.text((40, 90), "10. problem stem text", fill="black")
+
+        erased = _erase_corner_page_badges(crop)
+        badge_pixel = erased.convert("RGB").getpixel((66, 32))
+        self.assertEqual((40, 48, 96), badge_pixel)
+
+    def test_real_corner_page_number_is_still_erased(self):
+        crop = Image.new("RGB", (760, 500), "white")
+        draw = ImageDraw.Draw(crop)
+        draw.text((40, 60), "10. problem stem text", fill="black")
+        draw.rectangle((0, 470, 28, 500), fill=(90, 90, 90))  # page number glued to the corner
+
+        erased = _erase_corner_page_badges(crop)
+        self.assertEqual((255, 255, 255), erased.convert("RGB").getpixel((12, 488)))

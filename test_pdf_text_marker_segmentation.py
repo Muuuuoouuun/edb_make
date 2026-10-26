@@ -1759,6 +1759,87 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         )
         self.assertGreater(bottom, 1050.0)
 
+    def test_isolated_footer_page_number_is_trimmed_even_when_its_rows_fragment(self):
+        # "- 6 -" renders as a dash row, a digit body and another dash row,
+        # each only a couple of rows tall. The isolated-footer check must see
+        # them as one block instead of judging the last fragment against the
+        # fragment right above it.
+        from segment import _trim_isolated_pdf_footer_bottom
+
+        image = Image.new("RGB", (1000, 1400), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((80, 700, 900, 980), outline="black", width=3)
+        draw.text((120, 760), "content block", fill="black")
+        draw.rectangle((480, 1340, 496, 1343), fill="black")  # left dash
+        draw.rectangle((504, 1336, 512, 1352), fill="black")  # digit body
+        draw.rectangle((520, 1340, 536, 1343), fill="black")  # right dash
+
+        bottom = _trim_isolated_pdf_footer_bottom(
+            image,
+            left=0.0,
+            right=1000.0,
+            top=680.0,
+            bottom=1400.0,
+        )
+        self.assertLess(bottom, 1100.0)
+        self.assertGreater(bottom, 980.0)
+
+    def test_pdf_page_watermark_image_is_removed_before_rendering(self):
+        # A light logo stamped at one spot on every page is page chrome: it
+        # must not reach the rendered page or the media-region list, while a
+        # figure that appears on a single page is kept.
+        from preprocess import render_pdf_pages
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "watermarked.pdf"
+            watermark = Image.new("RGB", (120, 120), (235, 225, 200))
+            ImageDraw.Draw(watermark).ellipse((10, 10, 110, 110), outline=(200, 180, 120), width=6)
+            watermark_png = Path(temp_dir) / "wm.png"
+            watermark.save(watermark_png)
+            figure = Image.new("RGB", (160, 90), "white")
+            ImageDraw.Draw(figure).rectangle((5, 5, 154, 84), outline="black", width=4)
+            figure_png = Path(temp_dir) / "figure.png"
+            figure.save(figure_png)
+
+            doc = fitz.open()
+            watermark_rect = fitz.Rect(200, 300, 400, 500)
+            watermark_xref = None
+            for page_index in range(4):
+                page = doc.new_page(width=600, height=800)
+                page.insert_text((60, 80), f"{page_index + 1:02d}", fontsize=12)
+                page.insert_text((90, 80), "category label", fontsize=9)
+                watermark_xref = page.insert_image(
+                    watermark_rect,
+                    filename=str(watermark_png),
+                    xref=watermark_xref or 0,
+                )
+                if page_index == 1:
+                    page.insert_image(fitz.Rect(60, 120, 380, 300), filename=str(figure_png))
+            doc.save(pdf_path)
+            doc.close()
+
+            pages = render_pdf_pages(pdf_path, Path(temp_dir) / "render", dpi=72)
+            self.assertEqual(4, len(pages))
+            for rendered in pages:
+                self.assertTrue(rendered.metadata.get("pdf_watermark_image_xrefs"))
+                with Image.open(rendered.normalized_path) as page_image:
+                    center = page_image.convert("RGB").getpixel((300, 400))
+                self.assertEqual((255, 255, 255), center)
+                for region in rendered.metadata.get("pdf_media_regions") or []:
+                    box = region["bbox"]
+                    self.assertFalse(
+                        abs(box["left"] - 200) < 3 and abs(box["top"] - 300) < 3,
+                        "watermark placeholder must not become a media region",
+                    )
+            figure_page = pages[1]
+            self.assertTrue(
+                any(
+                    abs(region["bbox"]["left"] - 60) < 3 and abs(region["bbox"]["top"] - 120) < 3
+                    for region in figure_page.metadata.get("pdf_media_regions") or []
+                ),
+                "single-page figure must stay a media region",
+            )
+
     def test_pdf_marker_terminal_problem_stops_after_last_choice_text_line(self):
         image = Image.new("RGB", (600, 800), "white")
         draw = ImageDraw.Draw(image)

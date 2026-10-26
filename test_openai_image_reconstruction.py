@@ -809,3 +809,29 @@ class TestImageReconstructionMutation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_flat_gray_fill_fades_while_text_on_it_stays_opaque() -> None:
+    from PIL import Image, ImageDraw
+
+    from image_reconstruction_backend import clean_problem_image_transparency
+
+    page = Image.new("RGB", (400, 240), "white")
+    draw = ImageDraw.Draw(page)
+    draw.rectangle((40, 40, 360, 120), fill=(180, 180, 180))  # shaded header cell
+    draw.rectangle((120, 60, 160, 100), fill="black")  # bold glyph on the fill
+    draw.rectangle((120, 160, 160, 200), fill="black")  # bold glyph on paper
+    draw.line((40, 220, 360, 220), fill=(150, 150, 150), width=2)  # thin gray rule
+
+    # Bold mid-gray digit: flat enough to look like a fill, but it encloses
+    # no darker ink, so it must stay opaque chalk.
+    draw.ellipse((300, 150, 360, 220), outline=(114, 114, 114), width=14)
+
+    cleaned, _stats = clean_problem_image_transparency(page, transparent_background=True)
+    alpha = cleaned.getchannel("A")
+    assert alpha.getpixel((306, 185)) >= 230  # gray digit stroke stays
+    assert alpha.getpixel((300, 80)) < 100  # fill interior fades
+    assert alpha.getpixel((140, 80)) >= 230  # glyph on the fill stays chalk
+    assert alpha.getpixel((140, 180)) == 255  # glyph on paper unchanged
+    assert alpha.getpixel((200, 220)) >= 200  # thin rule unchanged
+    assert alpha.getpixel((20, 20)) == 0  # paper transparent
