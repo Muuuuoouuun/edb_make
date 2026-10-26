@@ -52,7 +52,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-PDF_NORMALIZED_CACHE_VERSION = 5
+PDF_NORMALIZED_CACHE_VERSION = 6
 IMAGE_NORMALIZED_CACHE_VERSION = 2
 HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
@@ -365,6 +365,15 @@ def extract_pdf_media_regions(page, scale, data=None):
         area_ratio = width * height / page_area
         if width < 12.0 or height < 12.0 or area_ratio < 0.0005 or area_ratio > 0.25:
             continue
+        # A removed watermark leaves a 1x1 placeholder image at its old bbox.
+        pixel_width = block.get("width")
+        pixel_height = block.get("height")
+        if (
+            isinstance(pixel_width, (int, float))
+            and isinstance(pixel_height, (int, float))
+            and (pixel_width <= 2 or pixel_height <= 2)
+        ):
+            continue
         regions.append(
             {
                 "kind": "image",
@@ -414,9 +423,36 @@ scale = dpi / 72.0
 matrix = fitz.Matrix(scale, scale)
 doc = fitz.open(source_path)
 pages = []
+placements = {}
+if doc.page_count >= 3:
+    for page_index in range(doc.page_count):
+        seen_on_page = set()
+        try:
+            infos = doc.load_page(page_index).get_image_info(xrefs=True)
+        except Exception:
+            infos = []
+        for info in infos or []:
+            xref = int(info.get("xref") or 0)
+            bbox = info.get("bbox")
+            if xref <= 0 or xref in seen_on_page or not bbox or len(bbox) != 4:
+                continue
+            seen_on_page.add(xref)
+            placements.setdefault(xref, []).append(tuple(int(round(float(v))) for v in bbox))
+min_watermark_pages = max(3, (doc.page_count * 6 + 9) // 10)
+watermark_xrefs = {
+    xref for xref, boxes in placements.items()
+    if len(boxes) >= min_watermark_pages and len(set(boxes)) == 1
+}
 try:
     for page_index in range(doc.page_count):
         page = doc.load_page(page_index)
+        removed_watermarks = []
+        for xref in sorted(watermark_xrefs):
+            try:
+                page.delete_image(xref)
+            except Exception:
+                continue
+            removed_watermarks.append(xref)
         pix = page.get_pixmap(matrix=matrix, alpha=False)
         out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
         pix.save(out_path.as_posix())
@@ -435,6 +471,7 @@ try:
                 "metadata": {
                     "source_type": "pdf",
                     "dpi": dpi,
+                    "pdf_watermark_image_xrefs": removed_watermarks,
                     "pdf_page_width_pt": float(page.rect.width),
                     "pdf_page_height_pt": float(page.rect.height),
                     "pdf_problem_markers": extract_pdf_problem_markers(page, scale, page_dict),
@@ -590,7 +627,8 @@ def _is_pdf_resource_error(exc: Exception) -> bool:
 
 
 def _render_pdf_document_pages(doc: Any, source_path: Path, target_dir: Path,
-                               dpi: int, page_start: int, page_end: int) -> list[NormalizedPageImage]:
+                               dpi: int, page_start: int, page_end: int,
+                               watermark_xrefs: set[int] | frozenset[int] = frozenset()) -> list[NormalizedPageImage]:
     pages: list[NormalizedPageImage] = []
     page_index = page_start
     try:
@@ -598,6 +636,7 @@ def _render_pdf_document_pages(doc: Any, source_path: Path, target_dir: Path,
         matrix = fitz.Matrix(scale, scale)
         for page_index in range(page_start, page_end):
             page = doc.load_page(page_index)
+            removed_watermarks = _remove_pdf_watermark_images(page, watermark_xrefs)
             pix = page.get_pixmap(matrix=matrix, alpha=False)
             out_path = target_dir / f"{source_path.stem}_page_{page_index + 1:03d}.png"
             pix.save(out_path.as_posix())
@@ -620,6 +659,7 @@ def _render_pdf_document_pages(doc: Any, source_path: Path, target_dir: Path,
                         "pdf_batch_start_page": page_start + 1,
                         "pdf_batch_end_page": page_end,
                         "dpi": dpi,
+                        "pdf_watermark_image_xrefs": removed_watermarks,
                         "pdf_page_width_pt": float(page.rect.width),
                         "pdf_page_height_pt": float(page.rect.height),
                         "pdf_problem_markers": _extract_pdf_problem_markers(page, scale, page_dict),
@@ -636,6 +676,62 @@ def _render_pdf_document_pages(doc: Any, source_path: Path, target_dir: Path,
             raise
         raise PdfPageProcessingError(source_path, page_index + 1, page_index + 1, exc) from exc
     return pages
+
+
+PDF_WATERMARK_MIN_PAGE_COUNT = 3
+PDF_WATERMARK_MIN_PAGE_RATIO = 0.6
+
+
+def _pdf_repeating_image_xrefs(doc: Any) -> set[int]:
+    """Image xrefs drawn at the same spot on most pages (page watermarks/logos).
+
+    Workbook PDFs stamp a light logo behind every page. Rendered into the
+    page it leaves faint strokes in the chalk cutout and its tint bridges
+    real ink to the crop edge, so it is removed before rendering. A figure
+    reused on a few pages never repeats at one identical place on most of
+    them, which keeps real content out of this set.
+    """
+    page_count = int(getattr(doc, "page_count", 0) or 0)
+    if page_count < PDF_WATERMARK_MIN_PAGE_COUNT:
+        return set()
+    placements: dict[int, list[tuple[int, int, int, int]]] = {}
+    for page_index in range(page_count):
+        try:
+            infos = doc.load_page(page_index).get_image_info(xrefs=True)
+        except Exception:
+            continue
+        seen_on_page: set[int] = set()
+        for info in infos or []:
+            if not isinstance(info, dict):
+                continue
+            try:
+                xref = int(info.get("xref") or 0)
+            except (TypeError, ValueError):
+                continue
+            bbox = info.get("bbox")
+            if xref <= 0 or xref in seen_on_page or not bbox or len(bbox) != 4:
+                continue
+            seen_on_page.add(xref)
+            placements.setdefault(xref, []).append(
+                tuple(int(round(float(value))) for value in bbox)  # type: ignore[arg-type]
+            )
+    min_pages = max(PDF_WATERMARK_MIN_PAGE_COUNT, int(math.ceil(page_count * PDF_WATERMARK_MIN_PAGE_RATIO)))
+    return {
+        xref
+        for xref, boxes in placements.items()
+        if len(boxes) >= min_pages and len(set(boxes)) == 1
+    }
+
+
+def _remove_pdf_watermark_images(page: Any, xrefs: set[int]) -> list[int]:
+    removed: list[int] = []
+    for xref in sorted(xrefs):
+        try:
+            page.delete_image(xref)
+        except Exception:
+            continue
+        removed.append(xref)
+    return removed
 
 
 def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160) -> list[NormalizedPageImage]:
@@ -658,7 +754,9 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
             # expose hidden answer layers or alter form/annotation appearance.
             # Only this range is loaded; original catalog/OCG state survives.
             with fitz.open(source_path) as chunk:
-                return _render_pdf_document_pages(chunk, source_path, target_dir, dpi, first, last)
+                return _render_pdf_document_pages(
+                    chunk, source_path, target_dir, dpi, first, last, watermark_xrefs,
+                )
         except Exception as exc:
             if not _is_pdf_resource_error(exc):
                 if isinstance(exc, PdfPageProcessingError):
@@ -678,6 +776,9 @@ def render_pdf_pages(source: str | Path, output_dir: str | Path, dpi: int = 160)
             raise ValueError(f"PDF document is password protected: {source_path.name}")
         if document.page_count < 1:
             raise ValueError(f"PDF document has no pages: {source_path.name}")
+        # Judged on the whole document: each range below reopens the file,
+        # and xrefs are stable across those reopens.
+        watermark_xrefs = _pdf_repeating_image_xrefs(document)
         for first in range(0, document.page_count, PDF_PROCESSING_BATCH_PAGES):
             pages.extend(render_range(first, min(first + PDF_PROCESSING_BATCH_PAGES, document.page_count)))
     finally:
@@ -3441,21 +3542,110 @@ PDF_BADGE_MARKER_MIN_COUNT = 3
 PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE = 0.8
 
 
+def _pdf_markers_form_one_sequence(marker_pages: list[list[dict[str, Any]]]) -> bool:
+    numbers = [int(marker["number"]) for markers in marker_pages for marker in markers]
+    if len(set(numbers)) != len(numbers):
+        return False
+    previous_page_max = 0
+    for markers in marker_pages:
+        if not markers:
+            continue
+        page_numbers = [int(marker["number"]) for marker in markers]
+        if min(page_numbers) <= previous_page_max:
+            return False
+        previous_page_max = max(page_numbers)
+    span = max(numbers) - min(numbers) + 1
+    return len(numbers) / span >= PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE
+
+
+def _pdf_badges_form_compiled_runs(
+    pages: list[NormalizedPageImage],
+    badge_pages: list[list[dict[str, Any]]],
+) -> bool:
+    """Accept a handout stitched together from several numbered workbooks.
+
+    Its numbering restarts at page breaks and skips the problems left out, so
+    the one-sequence check rejects it. Real badges still show what stray
+    two-digit lines (table values, fractions) do not: they sit at a few shared
+    column positions, never on top of each other, count up in reading order on
+    every page, and only restart where a new page begins.
+    """
+    tolerance = max(4.0, max((float(page.width_px) for page in pages), default=0.0) * 0.01)
+
+    def box(marker: dict[str, Any]) -> tuple[float, float]:
+        bbox = marker.get("bbox") or {}
+        return float(bbox.get("left") or 0.0), float(bbox.get("top") or 0.0)
+
+    lefts = sorted(box(marker)[0] for badges in badge_pages for marker in badges)
+    columns: list[list[float]] = []
+    for left in lefts:
+        if columns and left - columns[-1][0] <= tolerance:
+            columns[-1].append(left)
+        else:
+            columns.append([left])
+    if len(columns) > 3 or min(len(column) for column in columns) < 2:
+        return False
+    column_lefts = [column[0] for column in columns]
+
+    def column_of(left: float) -> int:
+        return min(range(len(column_lefts)), key=lambda index: abs(column_lefts[index] - left))
+
+    run_sizes: list[int] = []
+    previous_page_max: int | None = None
+    for badges in badge_pages:
+        if not badges:
+            continue
+        positions = [box(marker) for marker in badges]
+        for index, (left, top) in enumerate(positions):
+            for other_left, other_top in positions[index + 1:]:
+                if abs(left - other_left) <= tolerance and abs(top - other_top) <= tolerance:
+                    return False
+
+        by_top = sorted(zip(positions, badges), key=lambda item: item[0][1])
+        rows: list[tuple[int, float, dict[str, Any]]] = []
+        row_index, row_top = 0, by_top[0][0][1]
+        for (left, top), marker in by_top:
+            if top - row_top > tolerance:
+                row_index, row_top = row_index + 1, top
+            rows.append((row_index, left, marker))
+        row_major = [int(marker["number"]) for _row, _left, marker in sorted(rows, key=lambda item: item[:2])]
+        column_major = [
+            int(marker["number"])
+            for (left, top), marker in sorted(zip(positions, badges), key=lambda item: (column_of(item[0][0]), item[0][1]))
+        ]
+        if not any(
+            all(earlier < later for earlier, later in zip(order, order[1:]))
+            for order in (row_major, column_major)
+        ):
+            return False
+
+        page_numbers = [int(marker["number"]) for marker in badges]
+        if previous_page_max is None or min(page_numbers) <= previous_page_max:
+            run_sizes.append(0)
+        run_sizes[-1] += len(page_numbers)
+        previous_page_max = max(page_numbers)
+    return bool(run_sizes) and min(run_sizes) >= 2
+
+
 def _promote_pdf_badge_markers_when_numeric_missing(pages: list[NormalizedPageImage]) -> bool:
     """Fill badge-only pages without replacing trusted ``N.`` markers.
 
     Validate the effective numbering of the whole document: numeric markers
     take precedence on their page, and badges are candidates only on pages
-    without numeric markers. Repeated/backwards/sparse runs remain unpromoted.
+    without numeric markers. Repeated/backwards/sparse runs remain unpromoted
+    unless they read as a handout compiled from several numbered workbooks
+    (see ``_pdf_badges_form_compiled_runs``).
     """
     effective_pages: list[list[dict[str, Any]]] = []
     badge_pages: list[tuple[NormalizedPageImage, list[dict[str, Any]]]] = []
+    has_numeric_page = False
     for page in pages:
         numeric = page.metadata.get("pdf_problem_markers")
         badges = page.metadata.get("pdf_badge_markers")
         numeric = list(numeric) if isinstance(numeric, list) else []
         badges = list(badges) if isinstance(badges, list) else []
         if numeric:
+            has_numeric_page = True
             effective_pages.append(numeric)
         else:
             effective_pages.append(badges)
@@ -3465,18 +3655,12 @@ def _promote_pdf_badge_markers_when_numeric_missing(pages: list[NormalizedPageIm
     numbers = [int(marker["number"]) for markers in effective_pages for marker in markers]
     if not badge_pages or len(numbers) < PDF_BADGE_MARKER_MIN_COUNT:
         return False
-    if len(set(numbers)) != len(numbers):
-        return False
-    previous_page_max = 0
-    for markers in effective_pages:
-        if not markers:
-            continue
-        page_numbers = [int(marker["number"]) for marker in markers]
-        if min(page_numbers) <= previous_page_max:
-            return False
-        previous_page_max = max(page_numbers)
-    span = max(numbers) - min(numbers) + 1
-    if len(numbers) / span < PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE:
+    if not (
+        _pdf_markers_form_one_sequence(effective_pages)
+        # Badge placement is the only evidence for a compiled handout, so a
+        # document with trusted "N." pages keeps the strict check above.
+        or (not has_numeric_page and _pdf_badges_form_compiled_runs(pages, effective_pages))
+    ):
         return False
 
     for page, badges in badge_pages:
@@ -3647,6 +3831,15 @@ def _extract_pdf_media_regions(
         height = max(0.0, float(bbox[3]) - float(bbox[1]))
         area_ratio = width * height / page_area
         if width < 12.0 or height < 12.0 or area_ratio < 0.0005 or area_ratio > 0.25:
+            continue
+        # A removed watermark leaves a 1x1 placeholder image at its old bbox.
+        pixel_width = block.get("width")
+        pixel_height = block.get("height")
+        if (
+            isinstance(pixel_width, (int, float))
+            and isinstance(pixel_height, (int, float))
+            and (pixel_width <= 2 or pixel_height <= 2)
+        ):
             continue
         regions.append(
             {

@@ -3521,17 +3521,10 @@ function TopBar({
           onClick={onUndo}
           disabled={pageReviewActive || operationBusy || !canUndo}
         >{Icon.undo}</button>}
-        <button className="btn ghost topbar-update" type="button"
-          onClick={onOpenUpdateSettings}
-          disabled={pageReviewActive || operationBusy}
-          title="앱 업데이트 확인 및 설치 설정 열기"
-          aria-label={updateAvailable ? '업데이트 · 새 버전' : '업데이트'}>
-          <span className={updateBusy ? 'spin-ic' : ''}>{Icon.refresh}</span>
-          <span className="topbar-update-label">업데이트</span>{updateAvailable && <span className="topbar-update-badge">새 버전</span>}
-        </button>
         <ToolbarActionMenu
           id="topbar-more"
-          label="수업 작업 더보기"
+          label={updateAvailable ? '수업 작업 더보기 · 새 버전 있음' : '수업 작업 더보기'}
+          icon={<>{Icon.more}{updateAvailable && <span className="topbar-more-badge" aria-hidden="true" />}</>}
           items={[
             ...(view === 'review'
               ? [{ id: 'board', icon: Icon.board, label: '칠판으로 돌아가기',
@@ -3541,6 +3534,9 @@ function TopBar({
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
             { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
             { id: 'settings', icon: Icon.rows3, label: '설정', description: 'AI·API 키, 화면, 한글 변환, 업데이트', disabled: !onOpenSettings, onSelect: onOpenSettings },
+            { id: 'update', icon: Icon.download, label: updateAvailable ? '업데이트 · 새 버전' : '업데이트',
+              description: updateBusy ? '업데이트 확인 중…' : '앱 업데이트 확인 및 설치 설정',
+              disabled: pageReviewActive || operationBusy, onSelect: onOpenUpdateSettings },
             { id: 'support', icon: Icon.fileText, label: '문제 신고', description: '오류나 불편한 점을 알려 주세요', onSelect: onOpenBugReport },
             { id: 'shutdown', icon: Icon.power, label: '종료', onSelect: onShutdown },
           ]}
@@ -4226,6 +4222,16 @@ function ReviewStage({
     };
   };
 
+  // Re-read the canvas size on every move: zoom, layout swaps or lazy image
+  // loads can resize it mid-drag, and a scale captured at mousedown would then
+  // cut or stretch the box by hundreds of source pixels.
+  const liveDragScale = (drag, pageWidth, pageHeight) => {
+    const rect = drag.canvas?.getBoundingClientRect?.();
+    return rect?.width && rect?.height
+      ? [pageWidth / rect.width, pageHeight / rect.height]
+      : [drag.scaleX, drag.scaleY];
+  };
+
   const manualSplitBoxFromPoints = (startPoint, endPoint, page) => clampReviewBox({
     left: Math.min(startPoint.x, endPoint.x),
     top: Math.min(startPoint.y, endPoint.y),
@@ -4808,6 +4814,7 @@ function ReviewStage({
     manualSplitDragRef.current = {
       mode: 'move',
       page,
+      canvas,
       startX: evt.clientX,
       startY: evt.clientY,
       scaleX: (Number(page.width) || 1) / rect.width,
@@ -4831,6 +4838,7 @@ function ReviewStage({
       mode: 'resize',
       resizeMode: mode,
       page,
+      canvas,
       regionId,
       startX: evt.clientX,
       startY: evt.clientY,
@@ -5112,6 +5120,7 @@ function ReviewStage({
     boxEditDragRef.current = {
       mode,
       segmentId: segment?.id || null,
+      canvas,
       startX: evt.clientX,
       startY: evt.clientY,
       initialBox: { ...initialBox },
@@ -5357,8 +5366,9 @@ function ReviewStage({
         setBoxEditDraftBox({ pageId: drag.page.id, bbox });
         return;
       }
-      const dx = (evt.clientX - drag.startX) * drag.scaleX;
-      const dy = (evt.clientY - drag.startY) * drag.scaleY;
+      const [scaleX, scaleY] = liveDragScale(drag, drag.pageWidth, drag.pageHeight);
+      const dx = (evt.clientX - drag.startX) * scaleX;
+      const dy = (evt.clientY - drag.startY) * scaleY;
       const minWidth = Math.min(drag.pageWidth, Math.max(12, Math.min(36, drag.pageWidth * 0.02)));
       const minHeight = Math.min(drag.pageHeight, Math.max(12, Math.min(36, drag.pageHeight * 0.02)));
       const initial = drag.initialBox;
@@ -5496,9 +5506,11 @@ function ReviewStage({
         return;
       }
 
+      const [scaleX, scaleY] = liveDragScale(drag, Number(drag.page?.width) || 1, Number(drag.page?.height) || 1);
+      const dx = (evt.clientX - drag.startX) * scaleX;
+      const dy = (evt.clientY - drag.startY) * scaleY;
+
       if (drag.mode === 'move') {
-        const dx = (evt.clientX - drag.startX) * drag.scaleX;
-        const dy = (evt.clientY - drag.startY) * drag.scaleY;
         const translated = translateManualSplitBoxes(drag.initialBoxes, drag.page, dx, dy);
         setManualSplit(prev => {
           if (!prev) return prev;
@@ -5514,8 +5526,6 @@ function ReviewStage({
       }
 
       if (drag.mode === 'resize') {
-        const dx = (evt.clientX - drag.startX) * drag.scaleX;
-        const dy = (evt.clientY - drag.startY) * drag.scaleY;
         const initial = drag.initialBox;
         let left = initial.left;
         let top = initial.top;
@@ -9226,8 +9236,13 @@ function BoardStage({
         setPlacement?.(drag.id, drag.pendingPlacement);
       }
     }
-    drag.tile.style.transform = '';
-    drag.tile.style.zIndex = '';
+    // Clearing the transform while .positioning drops would re-arm the 120ms
+    // hover transition in the same frame and fling the tile past its new spot.
+    const droppedTile = drag.tile;
+    droppedTile.style.transition = 'none';
+    droppedTile.style.transform = '';
+    droppedTile.style.zIndex = '';
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => { droppedTile.style.transition = ''; }));
     removePositionDragWindowListeners(drag);
     const captureTarget = drag.captureTarget || evt.currentTarget;
     if (captureTarget?.hasPointerCapture?.(evt.pointerId)) captureTarget.releasePointerCapture(evt.pointerId);

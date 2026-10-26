@@ -291,6 +291,10 @@ def test_math_stage2_asset_keeps_figures_as_chalk_cutouts(tmp_path: Path) -> Non
         "s2",
         "2026_math_exam.pdf",
     )
+    # KMA (Korea Mathematics Assessment) workbooks rarely name the subject.
+    assert _stage2_prefers_chalk_math_media(Subject.UNKNOWN, "s2", "2학년 3회차 kma 특강 자료.pdf")
+    assert _stage2_prefers_chalk_math_media(Subject.UNKNOWN, "s2", "2단원_곱셈구구_KMA기출모음_A4.pdf")
+    assert not _stage2_prefers_chalk_math_media(Subject.UNKNOWN, "s2", "skmax_report.pdf")
     assert not _stage2_prefers_chalk_math_media(Subject.MATH, "raw")
     assert not _stage2_prefers_chalk_math_media(Subject.KOREAN, "s2")
     assert not _stage2_prefers_chalk_math_media(

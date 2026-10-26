@@ -229,6 +229,54 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertTrue(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(pages))
         self.assertEqual([[1], [2], [3]], [[marker["number"] for marker in item.metadata["pdf_problem_markers"]] for item in pages])
 
+    def test_pdf_badge_numbers_accepted_for_handout_compiled_from_several_workbooks(self):
+        # A teacher's handout pulls pages from several workbooks: numbering
+        # restarts at page breaks and skips problems left out (14 -> 01,
+        # 18 -> 31), but every badge sits at a card corner in one of two columns.
+        slots = ((100, 214), (867, 214), (100, 1242), (867, 1242))
+
+        def page(numbers, positions=slots):
+            return preprocess_module.NormalizedPageImage(
+                page_id="page",
+                source_path="handout.pdf",
+                normalized_path="page.png",
+                page_index=0,
+                width_px=1654,
+                height_px=2339,
+                metadata={
+                    "pdf_badge_markers": [
+                        {
+                            "number": number,
+                            "marker_kind": "badge",
+                            "bbox": {"left": left, "top": top, "right": left + 30, "bottom": top + 25},
+                        }
+                        for number, (left, top) in zip(numbers, positions)
+                    ],
+                },
+            )
+
+        handout = [
+            page([1, 2, 3, 4]),
+            page([13, 14]),
+            page([1, 2, 3]),
+            page([17, 18]),
+            page([31, 32, 33]),
+        ]
+        self.assertTrue(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(handout))
+        self.assertEqual("badge", handout[2].metadata.get("pdf_problem_marker_source"))
+
+        # Two-digit values scattered through tables are not badges, even when
+        # they happen to count up on each page.
+        scattered = [
+            page([10, 20, 30], positions=((140, 600), (520, 610), (930, 900))),
+            page([12, 25], positions=((310, 700), (1180, 300))),
+        ]
+        self.assertFalse(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(scattered))
+
+        # Badges counting down within a page are not a numbering either.
+        reversed_page = [page([4, 3, 2, 1]), page([2, 1])]
+        self.assertFalse(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(reversed_page))
+
     def test_pdf_problem_markers_keep_leading_sequence_before_question_ten(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "leading_sequence_exam.pdf"
@@ -1651,6 +1699,221 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertTrue(block.metadata.get("visual_column_bounds_used"))
         self.assertGreater(block.bbox.left, 285)
         self.assertLess(block.bbox.width, 315)
+
+    def test_pdf_full_width_card_between_two_column_rows_keeps_page_width(self):
+        # Workbook layout: row one is two columns (1 left, 2 right), then a
+        # full-width mock-exam card (3) whose badge sits in the left column
+        # and whose body image runs across the page. The card must not be
+        # cropped to the left column, and problem 2 must stop above it.
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((300, 90, 300, 400), fill=(20, 20, 20), width=2)
+        draw.text((40, 100), "1", fill=(20, 20, 20))
+        draw.text((330, 100), "2", fill=(20, 20, 20))
+        draw.text((40, 450), "3", fill=(20, 20, 20))
+        draw.rectangle((40, 130, 280, 300), outline=(20, 20, 20), width=2)
+        draw.rectangle((330, 130, 560, 300), outline=(20, 20, 20), width=2)
+        draw.rectangle((40, 480, 560, 600), outline=(20, 20, 20), width=2)
+        # Centered page watermark that crosses the column boundary must not
+        # promote the two-column problems to full width.
+        draw.rectangle((200, 320, 400, 390), outline=(230, 230, 230), width=1)
+
+        def _box(left, top, right, bottom):
+            return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {"number": 1, "marker_kind": "badge", "text": "1", "bbox": _box(40, 100, 52, 114)},
+                        {"number": 2, "marker_kind": "badge", "text": "2", "bbox": _box(330, 100, 342, 114)},
+                        {"number": 3, "marker_kind": "badge", "text": "3", "bbox": _box(40, 450, 52, 464)},
+                    ],
+                    "pdf_text_lines": [
+                        {"text": "1", "bbox": _box(40, 100, 52, 114)},
+                        {"text": "2", "bbox": _box(330, 100, 342, 114)},
+                        {"text": "3", "bbox": _box(40, 450, 52, 464)},
+                    ],
+                    "pdf_media_regions": [
+                        {"kind": "image", "bbox": _box(40, 130, 280, 300)},
+                        {"kind": "image", "bbox": _box(330, 130, 560, 300)},
+                        {"kind": "image", "bbox": _box(200, 320, 400, 390)},
+                        {"kind": "image", "bbox": _box(40, 480, 560, 600)},
+                    ],
+                }
+                self.source_path = "synthetic-full-width-card.pdf"
+
+        segmented = segment_page(Source(image), page_id="full-width-page", subject=Subject.MATH)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, segmented.metadata.get("pdf_full_width_marker_count"))
+        by_number = {block.metadata.get("problem_number"): block for block in segmented.blocks}
+        self.assertEqual({1, 2, 3}, set(by_number))
+
+        card = by_number[3]
+        self.assertTrue(card.metadata.get("full_width_card"))
+        self.assertLessEqual(card.bbox.left, 1.0)
+        self.assertGreaterEqual(card.bbox.right, 599.0)
+        self.assertGreater(card.bbox.bottom, 600.0)
+
+        first = by_number[1]
+        self.assertFalse(first.metadata.get("full_width_card"))
+        self.assertLess(first.bbox.width, 315.0)
+        self.assertLess(first.bbox.bottom, 450.0)
+
+        second = by_number[2]
+        self.assertFalse(second.metadata.get("full_width_card"))
+        self.assertGreater(second.bbox.left, 285.0)
+        # Column two has no later marker, so without the full-width stop the
+        # crop would run to the page bottom and swallow the card's right half.
+        self.assertLess(second.bbox.bottom, 450.0)
+
+    def test_page_number_in_text_layer_caps_crop_even_close_below_a_figure(self):
+        # A figure ending ~100px above "- 12 -" is too close for the pixel
+        # footer check; the text layer still names the page number.
+        from segment import _trim_pdf_footer_text_bottom
+
+        def line(text, left, top, right, bottom):
+            return {"text": text, "bbox": {"left": left, "top": top, "right": right, "bottom": bottom}}
+
+        lines = [
+            line("다음 도형에서 찾을 수 있는 직각은 모두 몇 개입니까?", 140, 1600, 1500, 1640),
+            line("- 12 -", 800, 2270, 853, 2300),
+        ]
+        bottom = _trim_pdf_footer_text_bottom(
+            lines, left=0.0, right=1654.0, top=1580.0, bottom=2339.0, image_height=2339
+        )
+        self.assertLess(bottom, 2270.0)
+        self.assertGreater(bottom, 2250.0)
+
+        # A number in the problem body, high on the page, is not a footer.
+        body = [line("12", 800, 1700, 830, 1730)]
+        self.assertEqual(
+            2339.0,
+            _trim_pdf_footer_text_bottom(
+                body, left=0.0, right=1654.0, top=1580.0, bottom=2339.0, image_height=2339
+            ),
+        )
+
+    def test_dashed_row_divider_close_below_content_is_trimmed(self):
+        # The dashed divider between card rows sits right above the next
+        # badge. Content ending ~150px above it is too close for the
+        # detached-tail rule, so the divider itself must be recognized.
+        from segment import _trim_pdf_problem_bottom_to_ink
+
+        image = Image.new("RGB", (800, 2300), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((60, 200, 700, 900), outline="black", width=3)
+        draw.text((100, 300), "content block", fill="black")
+        for x in range(160, 640, 11):
+            draw.rectangle((x, 1050, x + 5, 1051), fill=(160, 160, 160))
+
+        bottom, trimmed = _trim_pdf_problem_bottom_to_ink(
+            image,
+            left=0.0,
+            right=800.0,
+            top=150.0,
+            bottom=1080.0,
+        )
+        self.assertTrue(trimmed)
+        self.assertLess(bottom, 1000.0)
+
+        # A solid rule in the same spot is kept: it may be part of the problem.
+        solid = Image.new("RGB", (800, 2300), "white")
+        draw = ImageDraw.Draw(solid)
+        draw.rectangle((60, 200, 700, 900), outline="black", width=3)
+        draw.rectangle((160, 1050, 640, 1051), fill=(160, 160, 160))
+        bottom, _ = _trim_pdf_problem_bottom_to_ink(
+            solid,
+            left=0.0,
+            right=800.0,
+            top=150.0,
+            bottom=1080.0,
+        )
+        self.assertGreater(bottom, 1050.0)
+
+    def test_isolated_footer_page_number_is_trimmed_even_when_its_rows_fragment(self):
+        # "- 6 -" renders as a dash row, a digit body and another dash row,
+        # each only a couple of rows tall. The isolated-footer check must see
+        # them as one block instead of judging the last fragment against the
+        # fragment right above it.
+        from segment import _trim_isolated_pdf_footer_bottom
+
+        image = Image.new("RGB", (1000, 1400), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((80, 700, 900, 980), outline="black", width=3)
+        draw.text((120, 760), "content block", fill="black")
+        draw.rectangle((480, 1340, 496, 1343), fill="black")  # left dash
+        draw.rectangle((504, 1336, 512, 1352), fill="black")  # digit body
+        draw.rectangle((520, 1340, 536, 1343), fill="black")  # right dash
+
+        bottom = _trim_isolated_pdf_footer_bottom(
+            image,
+            left=0.0,
+            right=1000.0,
+            top=680.0,
+            bottom=1400.0,
+        )
+        self.assertLess(bottom, 1100.0)
+        self.assertGreater(bottom, 980.0)
+
+    def test_pdf_page_watermark_image_is_removed_before_rendering(self):
+        # A light logo stamped at one spot on every page is page chrome: it
+        # must not reach the rendered page or the media-region list, while a
+        # figure that appears on a single page is kept.
+        from preprocess import render_pdf_pages
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            pdf_path = Path(temp_dir) / "watermarked.pdf"
+            watermark = Image.new("RGB", (120, 120), (235, 225, 200))
+            ImageDraw.Draw(watermark).ellipse((10, 10, 110, 110), outline=(200, 180, 120), width=6)
+            watermark_png = Path(temp_dir) / "wm.png"
+            watermark.save(watermark_png)
+            figure = Image.new("RGB", (160, 90), "white")
+            ImageDraw.Draw(figure).rectangle((5, 5, 154, 84), outline="black", width=4)
+            figure_png = Path(temp_dir) / "figure.png"
+            figure.save(figure_png)
+
+            doc = fitz.open()
+            watermark_rect = fitz.Rect(200, 300, 400, 500)
+            watermark_xref = None
+            for page_index in range(4):
+                page = doc.new_page(width=600, height=800)
+                page.insert_text((60, 80), f"{page_index + 1:02d}", fontsize=12)
+                page.insert_text((90, 80), "category label", fontsize=9)
+                watermark_xref = page.insert_image(
+                    watermark_rect,
+                    filename=str(watermark_png),
+                    xref=watermark_xref or 0,
+                )
+                if page_index == 1:
+                    page.insert_image(fitz.Rect(60, 120, 380, 300), filename=str(figure_png))
+            doc.save(pdf_path)
+            doc.close()
+
+            pages = render_pdf_pages(pdf_path, Path(temp_dir) / "render", dpi=72)
+            self.assertEqual(4, len(pages))
+            for rendered in pages:
+                self.assertTrue(rendered.metadata.get("pdf_watermark_image_xrefs"))
+                with Image.open(rendered.normalized_path) as page_image:
+                    center = page_image.convert("RGB").getpixel((300, 400))
+                self.assertEqual((255, 255, 255), center)
+                for region in rendered.metadata.get("pdf_media_regions") or []:
+                    box = region["bbox"]
+                    self.assertFalse(
+                        abs(box["left"] - 200) < 3 and abs(box["top"] - 300) < 3,
+                        "watermark placeholder must not become a media region",
+                    )
+            figure_page = pages[1]
+            self.assertTrue(
+                any(
+                    abs(region["bbox"]["left"] - 60) < 3 and abs(region["bbox"]["top"] - 120) < 3
+                    for region in figure_page.metadata.get("pdf_media_regions") or []
+                ),
+                "single-page figure must stay a media region",
+            )
 
     def test_pdf_marker_terminal_problem_stops_after_last_choice_text_line(self):
         image = Image.new("RGB", (600, 800), "white")

@@ -35,7 +35,7 @@ def test_pdf_batches_keep_all_pages_order_geometry_and_hidden_layers(tmp_path):
     original = preprocess._render_pdf_document_pages
     calls = []
 
-    def render(document, source_path, target, dpi, first, last):
+    def render(document, source_path, target, dpi, first, last, watermark_xrefs=frozenset()):
         calls.append((first, last))
         return original(document, source_path, target, dpi, first, last)
 
@@ -59,7 +59,7 @@ def test_pdf_memory_failure_halves_ranges_to_single_pages_without_duplicates(tmp
     original = preprocess._render_pdf_document_pages
     ranges = []
 
-    def render(document, source_path, target, dpi, first, last):
+    def render(document, source_path, target, dpi, first, last, watermark_xrefs=frozenset()):
         ranges.append((first, last))
         if last - first > 2:
             raise MemoryError("fixture allocation failure")

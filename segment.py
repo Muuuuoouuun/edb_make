@@ -107,6 +107,13 @@ PDF_CHOICE_MARKERS = ("①", "②", "③", "④", "⑤")
 PDF_NESTED_MARKER_BOX_RULE_MIN_WIDTH_RATIO = 0.45
 PDF_PASSAGE_TEXT_EDGE_PADDING_PX = 4.0
 PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
+# A problem whose PDF body (image block or text line) starts at its column's
+# left margin but runs past the column boundary is a full-width card laid out
+# between two-column rows (workbook mock-exam items). Keep its crop at page
+# width instead of one column.
+PDF_FULL_WIDTH_MARKER_MIN_OVERRUN_RATIO = 0.04
+PDF_FULL_WIDTH_MARKER_MIN_OVERRUN_PX = 24.0
+PDF_FULL_WIDTH_MARKER_MAX_LEFT_INSET_RATIO = 0.35
 PDF_PASSAGE_RANGE_BRACKET_RE = re.compile(
     r"^\s*[\[［（(<]"
     r"(?P<start>[0-9０-９]{1,3})\s*[~\-〜－]\s*(?P<end>[0-9０-９]{1,3})\s*(?:번)?"
@@ -1075,6 +1082,35 @@ def _trim_isolated_pdf_footer_bottom(
     return bottom
 
 
+def _trim_pdf_footer_text_bottom(
+    text_lines: list[dict[str, Any]],
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+    image_height: int,
+) -> float:
+    """Stop a crop above a page-number footer found in the PDF text layer.
+
+    The pixel check in ``_trim_isolated_pdf_footer_bottom`` needs a wide blank
+    gap above the footer, so a figure running close to the page number keeps
+    it. The text layer names the footer directly.
+    """
+    for line_box, line in _pdf_text_lines_in_region(
+        text_lines,
+        left=left,
+        right=right,
+        top=top,
+        bottom=bottom,
+    ):
+        if line_box.top <= top + 40.0:
+            continue
+        if _looks_like_pdf_footer_text_line(line.get("text"), line_box, image_height):
+            bottom = min(bottom, line_box.top - max(4.0, float(image_height) * 0.003))
+    return bottom
+
+
 def _text_contains_choice_marker(text: Any) -> bool:
     return any(marker in str(text or "") for marker in PDF_CHOICE_MARKERS)
 
@@ -1180,6 +1216,32 @@ def _mask_without_tall_vertical_rules(mask: Image.Image) -> Image.Image:
     return cleaned if changed else mask
 
 
+def _is_dashed_horizontal_rule_run(
+    mask: Image.Image,
+    run: tuple[int, int],
+    *,
+    image_height: int,
+) -> bool:
+    run_top, run_bottom = run
+    if run_bottom - run_top + 1 > max(6, int(float(image_height) * 0.004)):
+        return False
+    band = mask.crop((0, run_top, mask.width, run_bottom + 1))
+    band_bbox = band.getbbox()
+    if band_bbox is None:
+        return False
+    span = band_bbox[2] - band_bbox[0]
+    if span < mask.width * 0.45:
+        return False
+    segments = _find_active_runs(_column_dark_projection(band), threshold=1)
+    if len(segments) < 15:
+        return False
+    widths = [segment_right - segment_left + 1 for segment_left, segment_right in segments]
+    if max(widths) > max(12, int(mask.width * 0.03)):
+        return False
+    ink_ratio = float(sum(widths)) / max(1.0, float(span))
+    return 0.25 <= ink_ratio <= 0.8
+
+
 def _pdf_problem_ink_bottom(
     image: Image.Image,
     *,
@@ -1206,6 +1268,11 @@ def _pdf_problem_ink_bottom(
         for run in _find_active_runs(row_projection, threshold=row_threshold)
         if run[1] - run[0] + 1 >= 2
     ]
+    # A dashed row divider sits right above the next row's badge, so it ends
+    # up as the last ink in the crop. When the problem's own content runs
+    # close to it, the detached-tail check below can't drop it.
+    while runs and _is_dashed_horizontal_rule_run(mask, runs[-1], image_height=image.height):
+        runs.pop()
     if not runs:
         return bottom, False
 
@@ -2563,12 +2630,92 @@ def _indented_nested_enumeration_marker_ids(
     return nested
 
 
+def _pdf_content_boxes_for_full_width_check(
+    text_lines: list[dict[str, Any]] | None,
+    media_regions: list[dict[str, Any]] | None,
+    image_height: int,
+) -> list[Box]:
+    boxes: list[Box] = []
+    for line in text_lines or []:
+        if not isinstance(line, dict):
+            continue
+        box = _marker_bbox(line)
+        if box is None:
+            continue
+        if _looks_like_pdf_footer_text_line(line.get("text"), box, image_height):
+            continue
+        boxes.append(box)
+    for region in media_regions or []:
+        if not isinstance(region, dict):
+            continue
+        box = _marker_bbox(region)
+        if box is None:
+            continue
+        boxes.append(box)
+    return boxes
+
+
+def _pdf_full_width_marker_ids(
+    image: Image.Image,
+    column_entries: list[tuple[int, list[dict[str, Any]], tuple[float, float]]],
+    content_boxes: list[Box],
+    *,
+    excluded_marker_ids: set[int],
+) -> set[int]:
+    """Markers whose own body runs past their column boundary.
+
+    Workbook PDFs mix two-column rows with full-width cards (mock-exam items).
+    The card's number badge sits in the left column, so column assignment
+    alone would crop the card to half the page and lose its right side. A
+    body box counts only when it starts near the column's left margin, which
+    keeps a centered page watermark from promoting every problem.
+    """
+    full_width_ids: set[int] = set()
+    if len(column_entries) < 2 or not content_boxes:
+        return full_width_ids
+    min_overrun = max(
+        PDF_FULL_WIDTH_MARKER_MIN_OVERRUN_PX,
+        float(image.width) * PDF_FULL_WIDTH_MARKER_MIN_OVERRUN_RATIO,
+    )
+    for _column_index, column_markers, (left_bound, right_bound) in column_entries:
+        if right_bound >= float(image.width) - 1.0:
+            continue
+        column_width = max(1.0, right_bound - left_bound)
+        max_left = left_bound + column_width * PDF_FULL_WIDTH_MARKER_MAX_LEFT_INSET_RATIO
+        usable = sorted(
+            (
+                marker
+                for marker in column_markers
+                if id(marker) not in excluded_marker_ids and _marker_bbox(marker) is not None
+            ),
+            key=lambda marker: _marker_bbox(marker).top,
+        )
+        for index, marker in enumerate(usable):
+            marker_box = _marker_bbox(marker)
+            range_top = marker_box.top - max(10.0, image.height * 0.006)
+            range_bottom = (
+                _marker_bbox(usable[index + 1]).top
+                if index + 1 < len(usable)
+                else float(image.height)
+            )
+            for box in content_boxes:
+                if box.top < range_top or box.top >= range_bottom:
+                    continue
+                if box.left < left_bound - 8.0 or box.left > max_left:
+                    continue
+                if box.right >= right_bound + min_overrun:
+                    full_width_ids.add(id(marker))
+                    break
+    return full_width_ids
+
+
 def _segment_pdf_problem_markers(
     image: Image.Image,
     page_id: str,
     markers: list[dict[str, Any]],
     *,
     text_lines: list[dict[str, Any]] | None = None,
+    media_regions: list[dict[str, Any]] | None = None,
 ) -> tuple[list[ContentBlock], dict[str, Any]] | None:
     cleaned_markers: list[dict[str, Any]] = []
     ignored_tiny_markers: list[dict[str, Any]] = []
@@ -2685,7 +2832,25 @@ def _segment_pdf_problem_markers(
     content_bottom_trim_count = 0
     choice_visual_tail_count = 0
 
-    for column_index, column_markers, (left_bound, right_bound) in column_entries:
+    excluded_marker_ids = ignored_tiny_marker_ids | nested_enumeration_marker_ids
+    all_usable_markers = [
+        marker
+        for _column_index, column_markers, _bounds in column_entries
+        for marker in column_markers
+        if id(marker) not in excluded_marker_ids and _marker_bbox(marker) is not None
+    ]
+    full_width_marker_ids = _pdf_full_width_marker_ids(
+        image,
+        column_entries,
+        _pdf_content_boxes_for_full_width_check(
+            usable_text_lines,
+            media_regions if isinstance(media_regions, list) else None,
+            image.height,
+        ),
+        excluded_marker_ids=excluded_marker_ids,
+    )
+
+    for column_index, column_markers, (column_left_bound, column_right_bound) in column_entries:
         usable_column_markers = [
             marker
             for marker in column_markers
@@ -2707,11 +2872,29 @@ def _segment_pdf_problem_markers(
                 if marker_index < len(sorted_markers)
                 else None
             )
+            marker_is_full_width = id(marker) in full_width_marker_ids
+            if marker_is_full_width:
+                left_bound, right_bound = 0.0, float(image.width)
+            else:
+                left_bound, right_bound = column_left_bound, column_right_bound
             marker_padding_y = max(10.0, image.height * 0.006)
             top = max(0.0, marker_box.top - marker_padding_y)
+            next_tops = [next_marker_box.top] if next_marker_box is not None else []
+            # A full-width card ends at whatever marker comes next in either
+            # column, and a column problem must stop above a full-width card
+            # below it even when that card's badge sits in the other column.
+            for other_marker in all_usable_markers:
+                if other_marker is marker:
+                    continue
+                if not (marker_is_full_width or id(other_marker) in full_width_marker_ids):
+                    continue
+                other_box = _marker_bbox(other_marker)
+                if other_box is None or other_box.top <= marker_box.top + 1.0:
+                    continue
+                next_tops.append(other_box.top)
             bottom = (
-                max(top + 40.0, next_marker_box.top - max(8.0, image.height * 0.004))
-                if next_marker_box is not None
+                max(top + 40.0, min(next_tops) - max(8.0, image.height * 0.004))
+                if next_tops
                 else float(image.height)
             )
             bottom = _trim_isolated_pdf_footer_bottom(
@@ -2720,6 +2903,14 @@ def _segment_pdf_problem_markers(
                 right=right_bound,
                 top=top,
                 bottom=bottom,
+            )
+            bottom = _trim_pdf_footer_text_bottom(
+                usable_text_lines,
+                left=left_bound,
+                right=right_bound,
+                top=top,
+                bottom=bottom,
+                image_height=image.height,
             )
             choice_trimmed = False
             choice_visual_tail_attached = False
@@ -2774,6 +2965,7 @@ def _segment_pdf_problem_markers(
                     "marker_kind": str(marker.get("marker_kind") or "number"),
                     "marker_text": marker_text,
                     "visual_column_bounds_used": visual_column_bounds_used,
+                    "full_width_card": marker_is_full_width,
                     "choice_bottom_trimmed": choice_trimmed,
                     "choice_visual_tail_attached": choice_visual_tail_attached,
                 },
@@ -2840,6 +3032,7 @@ def _segment_pdf_problem_markers(
         "pdf_content_bottom_trim_count": content_bottom_trim_count,
         "pdf_choice_visual_tail_count": choice_visual_tail_count,
         "pdf_nested_enumeration_marker_count": len(nested_enumeration_marker_ids),
+        "pdf_full_width_marker_count": len(full_width_marker_ids),
         "pdf_passage_range_block_count": len(passage_range_blocks),
         "pdf_pre_question_text_regions": pre_question_text_regions,
         "document_split_block_count": len(blocks),
@@ -5370,11 +5563,13 @@ def segment_page(
                     usable_text_lines,
                 )
             if marker_result is None:
+                raw_media_regions = source_metadata.get("pdf_media_regions")
                 marker_result = _segment_pdf_problem_markers(
                     image,
                     page_id,
                     raw_markers,
                     text_lines=usable_text_lines if usable_text_lines else None,
+                    media_regions=raw_media_regions if isinstance(raw_media_regions, list) else None,
                 )
         if marker_result is None and usable_text_lines:
             marker_result = _segment_pdf_passage_ranges_only(

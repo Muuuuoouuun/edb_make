@@ -985,12 +985,199 @@ def _remove_background_with_numpy(
         faded = np.clip(((255.0 - luminance) / 37.0) * 255.0, 0.0, 255.0)
         alpha[fade_bright] = np.minimum(original_alpha[fade_bright], np.rint(faded[fade_bright]))
 
+        alpha = _fade_flat_midtone_fills(alpha, luminance, visible & ~remove & ~remove_bright)
+
     next_alpha = np.clip(alpha, 0.0, 255.0).astype(np.uint8)
     out = arr.copy()
     out[..., 3] = next_alpha
     transparent_pixels = int(np.count_nonzero(next_alpha <= 0))
     partial_pixels = int(np.count_nonzero((next_alpha > 0) & (next_alpha < arr[..., 3])))
     return Image.fromarray(out, mode="RGBA"), transparent_pixels, partial_pixels
+
+
+FLAT_FILL_MIN_LUMINANCE = 100.0
+FLAT_FILL_MAX_LUMINANCE = 226.0
+FLAT_FILL_MAX_LOCAL_STD = 14.0
+FLAT_FILL_MAX_MEAN_OFFSET = 10.0
+FLAT_FILL_WINDOW_PX = 7
+FLAT_FILL_GROW_WINDOW_PX = 9
+FLAT_FILL_GROW_ROUNDS = 3
+FLAT_FILL_GROW_LUMINANCE_SLACK = 15.0
+FLAT_FILL_MIN_SEED_PIXELS = 400
+FLAT_FILL_FADE_EXPONENT = 1.5
+FLAT_FILL_ENCLOSED_INK_DELTA = 40.0
+FLAT_FILL_MIN_ENCLOSED_INK_PIXELS = 12
+FLAT_FILL_LARGE_AREA_PIXELS = 8000
+
+
+def _box_mean(values: Any, window: int) -> Any:
+    """Mean over a window x window neighbourhood (edge-padded), via an integral image."""
+    pad = window // 2
+    padded = np.pad(values.astype(np.float64), pad, mode="edge")
+    integral = np.cumsum(np.cumsum(padded, axis=0), axis=1)
+    integral = np.pad(integral, ((1, 0), (1, 0)))
+    height, width = values.shape
+    total = (
+        integral[window : window + height, window : window + width]
+        - integral[:height, window : window + width]
+        - integral[window : window + height, :width]
+        + integral[:height, :width]
+    )
+    return (total / float(window * window)).astype(np.float32)
+
+
+def _label_mask_components(mask: Any) -> tuple[Any, int]:
+    """8-connected component labels for a boolean mask (run-length union-find)."""
+    height, width = mask.shape
+    labels = np.zeros((height, width), dtype=np.int32)
+    parent: list[int] = []
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    previous_runs: list[tuple[int, int, int]] = []
+    row_runs: list[list[tuple[int, int, int]]] = []
+    for y in range(height):
+        row = mask[y]
+        if not row.any():
+            previous_runs = []
+            row_runs.append([])
+            continue
+        padded = np.concatenate(([False], row, [False]))
+        edges = np.flatnonzero(padded[1:] != padded[:-1])
+        starts = edges[0::2]
+        ends = edges[1::2]  # exclusive
+        current_runs: list[tuple[int, int, int]] = []
+        for start, end in zip(starts.tolist(), ends.tolist()):
+            run_id = len(parent)
+            parent.append(run_id)
+            for prev_start, prev_end, prev_id in previous_runs:
+                if prev_end >= start - 1 and prev_start <= end:  # 8-connected overlap
+                    root_a = find(run_id)
+                    root_b = find(prev_id)
+                    if root_a != root_b:
+                        parent[root_a] = root_b
+            current_runs.append((start, end, run_id))
+        previous_runs = current_runs
+        row_runs.append(current_runs)
+
+    root_to_label: dict[int, int] = {}
+    for y, runs in enumerate(row_runs):
+        for start, end, run_id in runs:
+            root = find(run_id)
+            label = root_to_label.get(root)
+            if label is None:
+                label = len(root_to_label) + 1
+                root_to_label[root] = label
+            labels[y, start:end] = label
+    return labels, len(root_to_label)
+
+
+def _component_encloses_ink(component: Any, luminance_patch: Any, fill_luminance: float) -> int:
+    """Count darker pixels that a flat region surrounds on all four sides.
+
+    Text printed on a shaded cell and strokes drawn over a shaded figure sit
+    inside the fill, so rays from them hit fill pixels left, right, above and
+    below. A bold gray glyph has nothing darker inside it, which keeps the
+    glyph itself from being treated as a fill and faded away.
+    """
+    ink = (luminance_patch < fill_luminance - FLAT_FILL_ENCLOSED_INK_DELTA) & ~component
+    if not ink.any():
+        return 0
+    comp = component.astype(np.uint8)
+    left = np.maximum.accumulate(comp, axis=1).astype(bool)
+    right = np.maximum.accumulate(comp[:, ::-1], axis=1)[:, ::-1].astype(bool)
+    up = np.maximum.accumulate(comp, axis=0).astype(bool)
+    down = np.maximum.accumulate(comp[::-1, :], axis=0)[::-1, :].astype(bool)
+    return int(np.count_nonzero(ink & left & right & up & down))
+
+
+def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any:
+    """Fade shaded cells and tinted boxes instead of turning them solid white.
+
+    Any pixel darker than ~210 keeps full alpha on a light page, so a gray
+    table header or a shaded card becomes a solid chalk block and the dark
+    text printed on it turns the same white and disappears. Flat mid-gray
+    areas are gathered (a uniform seed neighbourhood grown over the same
+    brightness so no opaque ring remains around glyphs), and each connected
+    area is faded by its brightness only when it encloses darker ink or is
+    large. Thin lines, glyph strokes and bold gray digits are left as they
+    are.
+    """
+    mean = _box_mean(luminance, FLAT_FILL_WINDOW_PX)
+    mean_sq = _box_mean(luminance * luminance, FLAT_FILL_WINDOW_PX)
+    std = np.sqrt(np.maximum(mean_sq - mean * mean, 0.0))
+    seed = (
+        candidates
+        & (luminance >= FLAT_FILL_MIN_LUMINANCE)
+        & (luminance < FLAT_FILL_MAX_LUMINANCE)
+        & (std <= FLAT_FILL_MAX_LOCAL_STD)
+        & (np.abs(luminance - mean) <= FLAT_FILL_MAX_MEAN_OFFSET)
+    )
+    if int(np.count_nonzero(seed)) < FLAT_FILL_MIN_SEED_PIXELS:
+        return alpha
+    region = seed.copy()
+    fill_luminance = np.where(seed, luminance, 0.0).astype(np.float32)
+    growable = candidates & (luminance < FLAT_FILL_MAX_LUMINANCE)
+    for _round in range(FLAT_FILL_GROW_ROUNDS):
+        region_f = region.astype(np.float32)
+        density = _box_mean(region_f, FLAT_FILL_GROW_WINDOW_PX)
+        local_fill = _box_mean(fill_luminance * region_f, FLAT_FILL_GROW_WINDOW_PX) / np.maximum(density, 1e-6)
+        grown = (
+            growable
+            & ~region
+            & (density > 0.0)
+            & (luminance >= local_fill - FLAT_FILL_GROW_LUMINANCE_SLACK)
+        )
+        if not grown.any():
+            break
+        region |= grown
+        fill_luminance[grown] = local_fill[grown]
+
+    labels, count = _label_mask_components(region)
+    if count == 0:
+        return alpha
+    keep = np.zeros(region.shape, dtype=bool)
+    ys, xs = np.nonzero(region)
+    order = np.argsort(labels[ys, xs], kind="stable")
+    ys, xs = ys[order], xs[order]
+    sorted_labels = labels[ys, xs]
+    boundaries = np.flatnonzero(np.diff(sorted_labels)) + 1
+    starts = np.concatenate(([0], boundaries))
+    ends = np.concatenate((boundaries, [len(sorted_labels)]))
+    for start, end in zip(starts.tolist(), ends.tolist()):
+        area = end - start
+        # Each enclosed row and column needs two of the component's pixels,
+        # and 12 enclosed pixels span at least 4 rows or columns: a component
+        # under 8 px can never qualify. Most components are such specks.
+        if area < 8:
+            continue
+        comp_ys = ys[start:end]
+        comp_xs = xs[start:end]
+        top, bottom = int(comp_ys.min()), int(comp_ys.max()) + 1
+        left, right = int(comp_xs.min()), int(comp_xs.max()) + 1
+        label = int(sorted_labels[start])
+        component = labels[top:bottom, left:right] == label
+        if area >= FLAT_FILL_LARGE_AREA_PIXELS:
+            keep[top:bottom, left:right] |= component
+            continue
+        fill_value = float(np.median(luminance[comp_ys, comp_xs]))
+        enclosed = _component_encloses_ink(component, luminance[top:bottom, left:right], fill_value)
+        if enclosed >= FLAT_FILL_MIN_ENCLOSED_INK_PIXELS:
+            keep[top:bottom, left:right] |= component
+    if not keep.any():
+        return alpha
+    factor = np.clip(
+        (FLAT_FILL_MAX_LUMINANCE - luminance) / (FLAT_FILL_MAX_LUMINANCE - FLAT_FILL_MIN_LUMINANCE),
+        0.0,
+        1.0,
+    ) ** FLAT_FILL_FADE_EXPONENT
+    faded = alpha.copy()
+    faded[keep] = alpha[keep] * factor[keep]
+    return faded
 
 
 def _estimate_border_background(image: Any) -> tuple[int, int, int] | None:

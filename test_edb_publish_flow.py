@@ -25,6 +25,7 @@ from app_server import (
 )
 from build_mvp_export import _render_problem_crops, build_ui_session as build_mvp_ui_session, run_export as run_mvp_export
 from build_problem_board_edb import (
+    _erase_corner_page_badges,
     ONE_PROBLEM_SLOT_HEIGHT_PAGES,
     PROCESSING_STEP_RECONSTRUCT,
     ProblemEntry,
@@ -2094,6 +2095,40 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertTrue(stats["pairedContentFrame"])
         self.assertFalse(stats["hasArtifact"])
         self.assertEqual(0, stats["edgeGuideColumnCount"])
+
+    def test_outer_guide_eraser_tells_frames_from_unrelated_edge_rules(self):
+        def ink_at(image, x, y):
+            return image.convert("L").getpixel((x, y)) < 200
+
+        # A box's two sides start and end on the same rows: kept.
+        framed = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(framed)
+        draw.rectangle((6, 30, 493, 400), outline="black", width=2)
+        draw.text((64, 80), "boxed passage", fill="black")
+        kept = problem_board._erase_text_priority_unpaired_outer_vertical_guide(framed)
+        self.assertTrue(ink_at(kept, 7, 200))
+        self.assertTrue(ink_at(kept, 493, 200))
+
+        # A scan's margin rule on the left and the page divider on the right
+        # span different rows: both go.
+        mixed = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(mixed)
+        draw.line((8, 60, 8, 415), fill="black", width=2)
+        draw.line((494, 0, 494, 419), fill=(190, 199, 214), width=2)
+        draw.text((64, 80), "scanned question", fill="black")
+        erased = problem_board._erase_text_priority_unpaired_outer_vertical_guide(mixed)
+        self.assertFalse(ink_at(erased, 8, 200))
+        self.assertFalse(ink_at(erased, 494, 200))
+        self.assertTrue(ink_at(erased, 66, 84) or ink_at(erased, 70, 86))
+
+        # A rule running through a problem badge is erased only outside it.
+        badged = Image.new("RGB", (500, 420), "white")
+        draw = ImageDraw.Draw(badged)
+        draw.rectangle((2, 10, 40, 34), fill=(30, 50, 90))
+        draw.line((14, 10, 14, 415), fill="black", width=2)
+        erased = problem_board._erase_text_priority_unpaired_outer_vertical_guide(badged)
+        self.assertTrue(ink_at(erased, 14, 20))
+        self.assertFalse(ink_at(erased, 14, 200))
 
     def test_publish_preflight_allows_page_chrome_for_page_as_is_session(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -9138,3 +9173,30 @@ class TestEdbPublishFlow(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCornerBadgeEraserKeepsProblemBadges(unittest.TestCase):
+    def test_faint_watermark_tint_does_not_bridge_problem_badge_to_crop_edge(self):
+        # Right-column crops start at the page midpoint, where a light page
+        # watermark sits behind the problem's own "07" number badge. The tint
+        # must not count as ink that connects the badge to the crop edge.
+        crop = Image.new("RGB", (760, 500), "white")
+        draw = ImageDraw.Draw(crop)
+        draw.rectangle((0, 0, 140, 120), fill=(240, 232, 214))  # watermark tint
+        draw.rectangle((36, 14, 96, 50), fill=(40, 48, 96))  # number badge box
+        draw.text((48, 20), "07", fill="white")
+        draw.text((110, 22), "category label", fill=(120, 120, 120))
+        draw.text((40, 90), "10. problem stem text", fill="black")
+
+        erased = _erase_corner_page_badges(crop)
+        badge_pixel = erased.convert("RGB").getpixel((66, 32))
+        self.assertEqual((40, 48, 96), badge_pixel)
+
+    def test_real_corner_page_number_is_still_erased(self):
+        crop = Image.new("RGB", (760, 500), "white")
+        draw = ImageDraw.Draw(crop)
+        draw.text((40, 60), "10. problem stem text", fill="black")
+        draw.rectangle((0, 470, 28, 500), fill=(90, 90, 90))  # page number glued to the corner
+
+        erased = _erase_corner_page_badges(crop)
+        self.assertEqual((255, 255, 255), erased.convert("RGB").getpixel((12, 488)))
