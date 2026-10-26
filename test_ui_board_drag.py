@@ -202,6 +202,20 @@ class TestUiBoardDrag(unittest.TestCase):
         assert.equal(sandbox.positionDragRef.current, null);
         """)
 
+    def test_drop_lands_without_replaying_the_hover_transition(self) -> None:
+        run_node(DRAG_SETUP + r"""
+        sandbox.begin(event(20, 20), { id: 'p1' }, placement);
+        sandbox.move(event(320, 30));
+        flush();
+        sandbox.end(event(320, 30));
+        assert.equal(tile.style.transform, '');
+        assert.equal(tile.style.transition, 'none', 'the transform reset must not animate from the dragged offset');
+        flush();
+        assert.equal(tile.style.transition, 'none', 'keep it off through the frame that applies the drop');
+        flush();
+        assert.equal(tile.style.transition, '', 'hover transition comes back afterwards');
+        """)
+
     def test_click_or_cancel_does_not_save_a_placement(self) -> None:
         run_node(DRAG_SETUP + r"""
         sandbox.begin(event(20, 20), { id: 'p1' }, placement);

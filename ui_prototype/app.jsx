@@ -9240,8 +9240,13 @@ function BoardStage({
         setPlacement?.(drag.id, drag.pendingPlacement);
       }
     }
-    drag.tile.style.transform = '';
-    drag.tile.style.zIndex = '';
+    // Clearing the transform while .positioning drops would re-arm the 120ms
+    // hover transition in the same frame and fling the tile past its new spot.
+    const droppedTile = drag.tile;
+    droppedTile.style.transition = 'none';
+    droppedTile.style.transform = '';
+    droppedTile.style.zIndex = '';
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => { droppedTile.style.transition = ''; }));
     removePositionDragWindowListeners(drag);
     const captureTarget = drag.captureTarget || evt.currentTarget;
     if (captureTarget?.hasPointerCapture?.(evt.pointerId)) captureTarget.releasePointerCapture(evt.pointerId);
