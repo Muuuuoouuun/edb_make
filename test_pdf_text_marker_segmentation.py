@@ -1770,6 +1770,33 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         # crop would run to the page bottom and swallow the card's right half.
         self.assertLess(second.bbox.bottom, 450.0)
 
+    def test_page_number_in_text_layer_caps_crop_even_close_below_a_figure(self):
+        # A figure ending ~100px above "- 12 -" is too close for the pixel
+        # footer check; the text layer still names the page number.
+        from segment import _trim_pdf_footer_text_bottom
+
+        def line(text, left, top, right, bottom):
+            return {"text": text, "bbox": {"left": left, "top": top, "right": right, "bottom": bottom}}
+
+        lines = [
+            line("다음 도형에서 찾을 수 있는 직각은 모두 몇 개입니까?", 140, 1600, 1500, 1640),
+            line("- 12 -", 800, 2270, 853, 2300),
+        ]
+        bottom = _trim_pdf_footer_text_bottom(
+            lines, left=0.0, right=1654.0, top=1580.0, bottom=2339.0, image_height=2339
+        )
+        self.assertLess(bottom, 2270.0)
+        self.assertGreater(bottom, 2250.0)
+
+        # A number in the problem body, high on the page, is not a footer.
+        body = [line("12", 800, 1700, 830, 1730)]
+        self.assertEqual(
+            2339.0,
+            _trim_pdf_footer_text_bottom(
+                body, left=0.0, right=1654.0, top=1580.0, bottom=2339.0, image_height=2339
+            ),
+        )
+
     def test_dashed_row_divider_close_below_content_is_trimmed(self):
         # The dashed divider between card rows sits right above the next
         # badge. Content ending ~150px above it is too close for the

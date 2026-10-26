@@ -1082,6 +1082,35 @@ def _trim_isolated_pdf_footer_bottom(
     return bottom
 
 
+def _trim_pdf_footer_text_bottom(
+    text_lines: list[dict[str, Any]],
+    *,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+    image_height: int,
+) -> float:
+    """Stop a crop above a page-number footer found in the PDF text layer.
+
+    The pixel check in ``_trim_isolated_pdf_footer_bottom`` needs a wide blank
+    gap above the footer, so a figure running close to the page number keeps
+    it. The text layer names the footer directly.
+    """
+    for line_box, line in _pdf_text_lines_in_region(
+        text_lines,
+        left=left,
+        right=right,
+        top=top,
+        bottom=bottom,
+    ):
+        if line_box.top <= top + 40.0:
+            continue
+        if _looks_like_pdf_footer_text_line(line.get("text"), line_box, image_height):
+            bottom = min(bottom, line_box.top - max(4.0, float(image_height) * 0.003))
+    return bottom
+
+
 def _text_contains_choice_marker(text: Any) -> bool:
     return any(marker in str(text or "") for marker in PDF_CHOICE_MARKERS)
 
@@ -2874,6 +2903,14 @@ def _segment_pdf_problem_markers(
                 right=right_bound,
                 top=top,
                 bottom=bottom,
+            )
+            bottom = _trim_pdf_footer_text_bottom(
+                usable_text_lines,
+                left=left_bound,
+                right=right_bound,
+                top=top,
+                bottom=bottom,
+                image_height=image.height,
             )
             choice_trimmed = False
             choice_visual_tail_attached = False
