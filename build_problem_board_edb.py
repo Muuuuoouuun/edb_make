@@ -251,7 +251,8 @@ MATH_SOURCE_HINT_MARKERS = (
     "geometry",
     "algebra",
 )
-MATH_SOURCE_HINT_RE = re.compile(r"(?<![a-z])math(?:ematics)?(?![a-z])", re.IGNORECASE)
+# KMA (Korea Mathematics Assessment) workbook files rarely name the subject.
+MATH_SOURCE_HINT_RE = re.compile(r"(?<![a-z])(?:math(?:ematics)?|kma)(?![a-z])", re.IGNORECASE)
 TEXT_DEHALO_ALPHA_CUTOFF = 12
 TEXT_PRIORITY_UNSHARP_RADIUS = 0.6
 TEXT_PRIORITY_UNSHARP_PERCENT = 70
