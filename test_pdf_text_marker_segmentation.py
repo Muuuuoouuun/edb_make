@@ -229,6 +229,54 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertTrue(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(pages))
         self.assertEqual([[1], [2], [3]], [[marker["number"] for marker in item.metadata["pdf_problem_markers"]] for item in pages])
 
+    def test_pdf_badge_numbers_accepted_for_handout_compiled_from_several_workbooks(self):
+        # A teacher's handout pulls pages from several workbooks: numbering
+        # restarts at page breaks and skips problems left out (14 -> 01,
+        # 18 -> 31), but every badge sits at a card corner in one of two columns.
+        slots = ((100, 214), (867, 214), (100, 1242), (867, 1242))
+
+        def page(numbers, positions=slots):
+            return preprocess_module.NormalizedPageImage(
+                page_id="page",
+                source_path="handout.pdf",
+                normalized_path="page.png",
+                page_index=0,
+                width_px=1654,
+                height_px=2339,
+                metadata={
+                    "pdf_badge_markers": [
+                        {
+                            "number": number,
+                            "marker_kind": "badge",
+                            "bbox": {"left": left, "top": top, "right": left + 30, "bottom": top + 25},
+                        }
+                        for number, (left, top) in zip(numbers, positions)
+                    ],
+                },
+            )
+
+        handout = [
+            page([1, 2, 3, 4]),
+            page([13, 14]),
+            page([1, 2, 3]),
+            page([17, 18]),
+            page([31, 32, 33]),
+        ]
+        self.assertTrue(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(handout))
+        self.assertEqual("badge", handout[2].metadata.get("pdf_problem_marker_source"))
+
+        # Two-digit values scattered through tables are not badges, even when
+        # they happen to count up on each page.
+        scattered = [
+            page([10, 20, 30], positions=((140, 600), (520, 610), (930, 900))),
+            page([12, 25], positions=((310, 700), (1180, 300))),
+        ]
+        self.assertFalse(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(scattered))
+
+        # Badges counting down within a page are not a numbering either.
+        reversed_page = [page([4, 3, 2, 1]), page([2, 1])]
+        self.assertFalse(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(reversed_page))
+
     def test_pdf_problem_markers_keep_leading_sequence_before_question_ten(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = Path(temp_dir) / "leading_sequence_exam.pdf"

@@ -3542,21 +3542,110 @@ PDF_BADGE_MARKER_MIN_COUNT = 3
 PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE = 0.8
 
 
+def _pdf_markers_form_one_sequence(marker_pages: list[list[dict[str, Any]]]) -> bool:
+    numbers = [int(marker["number"]) for markers in marker_pages for marker in markers]
+    if len(set(numbers)) != len(numbers):
+        return False
+    previous_page_max = 0
+    for markers in marker_pages:
+        if not markers:
+            continue
+        page_numbers = [int(marker["number"]) for marker in markers]
+        if min(page_numbers) <= previous_page_max:
+            return False
+        previous_page_max = max(page_numbers)
+    span = max(numbers) - min(numbers) + 1
+    return len(numbers) / span >= PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE
+
+
+def _pdf_badges_form_compiled_runs(
+    pages: list[NormalizedPageImage],
+    badge_pages: list[list[dict[str, Any]]],
+) -> bool:
+    """Accept a handout stitched together from several numbered workbooks.
+
+    Its numbering restarts at page breaks and skips the problems left out, so
+    the one-sequence check rejects it. Real badges still show what stray
+    two-digit lines (table values, fractions) do not: they sit at a few shared
+    column positions, never on top of each other, count up in reading order on
+    every page, and only restart where a new page begins.
+    """
+    tolerance = max(4.0, max((float(page.width_px) for page in pages), default=0.0) * 0.01)
+
+    def box(marker: dict[str, Any]) -> tuple[float, float]:
+        bbox = marker.get("bbox") or {}
+        return float(bbox.get("left") or 0.0), float(bbox.get("top") or 0.0)
+
+    lefts = sorted(box(marker)[0] for badges in badge_pages for marker in badges)
+    columns: list[list[float]] = []
+    for left in lefts:
+        if columns and left - columns[-1][0] <= tolerance:
+            columns[-1].append(left)
+        else:
+            columns.append([left])
+    if len(columns) > 3 or min(len(column) for column in columns) < 2:
+        return False
+    column_lefts = [column[0] for column in columns]
+
+    def column_of(left: float) -> int:
+        return min(range(len(column_lefts)), key=lambda index: abs(column_lefts[index] - left))
+
+    run_sizes: list[int] = []
+    previous_page_max: int | None = None
+    for badges in badge_pages:
+        if not badges:
+            continue
+        positions = [box(marker) for marker in badges]
+        for index, (left, top) in enumerate(positions):
+            for other_left, other_top in positions[index + 1:]:
+                if abs(left - other_left) <= tolerance and abs(top - other_top) <= tolerance:
+                    return False
+
+        by_top = sorted(zip(positions, badges), key=lambda item: item[0][1])
+        rows: list[tuple[int, float, dict[str, Any]]] = []
+        row_index, row_top = 0, by_top[0][0][1]
+        for (left, top), marker in by_top:
+            if top - row_top > tolerance:
+                row_index, row_top = row_index + 1, top
+            rows.append((row_index, left, marker))
+        row_major = [int(marker["number"]) for _row, _left, marker in sorted(rows, key=lambda item: item[:2])]
+        column_major = [
+            int(marker["number"])
+            for (left, top), marker in sorted(zip(positions, badges), key=lambda item: (column_of(item[0][0]), item[0][1]))
+        ]
+        if not any(
+            all(earlier < later for earlier, later in zip(order, order[1:]))
+            for order in (row_major, column_major)
+        ):
+            return False
+
+        page_numbers = [int(marker["number"]) for marker in badges]
+        if previous_page_max is None or min(page_numbers) <= previous_page_max:
+            run_sizes.append(0)
+        run_sizes[-1] += len(page_numbers)
+        previous_page_max = max(page_numbers)
+    return bool(run_sizes) and min(run_sizes) >= 2
+
+
 def _promote_pdf_badge_markers_when_numeric_missing(pages: list[NormalizedPageImage]) -> bool:
     """Fill badge-only pages without replacing trusted ``N.`` markers.
 
     Validate the effective numbering of the whole document: numeric markers
     take precedence on their page, and badges are candidates only on pages
-    without numeric markers. Repeated/backwards/sparse runs remain unpromoted.
+    without numeric markers. Repeated/backwards/sparse runs remain unpromoted
+    unless they read as a handout compiled from several numbered workbooks
+    (see ``_pdf_badges_form_compiled_runs``).
     """
     effective_pages: list[list[dict[str, Any]]] = []
     badge_pages: list[tuple[NormalizedPageImage, list[dict[str, Any]]]] = []
+    has_numeric_page = False
     for page in pages:
         numeric = page.metadata.get("pdf_problem_markers")
         badges = page.metadata.get("pdf_badge_markers")
         numeric = list(numeric) if isinstance(numeric, list) else []
         badges = list(badges) if isinstance(badges, list) else []
         if numeric:
+            has_numeric_page = True
             effective_pages.append(numeric)
         else:
             effective_pages.append(badges)
@@ -3566,18 +3655,12 @@ def _promote_pdf_badge_markers_when_numeric_missing(pages: list[NormalizedPageIm
     numbers = [int(marker["number"]) for markers in effective_pages for marker in markers]
     if not badge_pages or len(numbers) < PDF_BADGE_MARKER_MIN_COUNT:
         return False
-    if len(set(numbers)) != len(numbers):
-        return False
-    previous_page_max = 0
-    for markers in effective_pages:
-        if not markers:
-            continue
-        page_numbers = [int(marker["number"]) for marker in markers]
-        if min(page_numbers) <= previous_page_max:
-            return False
-        previous_page_max = max(page_numbers)
-    span = max(numbers) - min(numbers) + 1
-    if len(numbers) / span < PDF_BADGE_MARKER_MIN_SEQUENCE_COVERAGE:
+    if not (
+        _pdf_markers_form_one_sequence(effective_pages)
+        # Badge placement is the only evidence for a compiled handout, so a
+        # document with trusted "N." pages keeps the strict check above.
+        or (not has_numeric_page and _pdf_badges_form_compiled_runs(pages, effective_pages))
+    ):
         return False
 
     for page, badges in badge_pages:
