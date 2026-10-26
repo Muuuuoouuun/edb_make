@@ -865,9 +865,10 @@ def _trim_text_priority_bottom_page_badge(image: Image.Image) -> Image.Image:
 def _erase_text_priority_unpaired_outer_vertical_guide(image: Image.Image) -> Image.Image:
     """Erase one long outer column guide while preserving crop dimensions.
 
-    Paired left/right rules are treated as a real table or passage frame and
-    retained. This targets only a lone PDF column separator outside reading
-    content, avoiding the horizontal crop that previously clipped glyphs.
+    Left/right rules that start and end on the same rows are a real table or
+    passage frame and retained. This targets lone PDF column separators (and
+    a scan's own margin rule) outside reading content, avoiding the
+    horizontal crop that previously clipped glyphs.
     """
     width, height = image.size
     if width <= 120 or height <= 160:
@@ -913,30 +914,51 @@ def _erase_text_priority_unpaired_outer_vertical_guide(image: Image.Image) -> Im
             if cluster[1] - cluster[0] + 1 <= 8
         ]
 
+    def is_ink(x: int, y: int) -> bool:
+        return bool(foreground[y][x])
+
+    def vertical_extent(cluster: tuple[int, int]) -> tuple[int, int]:
+        rows = [y for y in range(height) if any(is_ink(x, y) for x in range(cluster[0], cluster[1] + 1))]
+        return rows[0], rows[-1]
+
     left_clusters = clusters(range(scan_width))
     right_clusters = clusters(range(width - scan_width, width))
-    # Strong rules on both sides are a legitimate boxed frame.
-    if left_clusters and right_clusters:
+    if len(left_clusters) > 1 or len(right_clusters) > 1:
         return image
-    target_clusters = left_clusters or right_clusters
-    if len(target_clusters) != 1:
+    if left_clusters and right_clusters:
+        # A boxed frame's two sides start and end on the same rows. A scan's
+        # own margin rule and the page's column divider do not, so both go.
+        slack = max(6, int(round(height * 0.03)))
+        left_top, left_bottom = vertical_extent(left_clusters[0])
+        right_top, right_bottom = vertical_extent(right_clusters[0])
+        if abs(left_top - right_top) <= slack and abs(left_bottom - right_bottom) <= slack:
+            return image
+    target_clusters = left_clusters + right_clusters
+    if not target_clusters:
         return image
 
-    start, end = target_clusters[0]
-    erase_left = max(0, start - 2)
-    erase_right = min(width, end + 3)
     mode = image.mode
     output = image.convert("RGBA")
     output_pixels = output.load()
     source_pixels = image.convert("RGBA").load()
     fill = (255, 255, 255, 0) if "A" in image.getbands() else (255, 255, 255, 255)
-    for y in range(height):
-        for x in range(erase_left, erase_right):
-            red, green, blue, alpha = source_pixels[x, y]
-            luminance = 0.299 * red + 0.587 * green + 0.114 * blue
-            saturation = max(red, green, blue) - min(red, green, blue)
-            if alpha > 24 and (luminance <= 246 or saturation >= 24):
-                output_pixels[x, y] = fill
+    for start, end in target_clusters:
+        erase_left = max(0, start - 2)
+        erase_right = min(width, end + 3)
+        for y in range(height):
+            # Where ink continues on both sides, the rule runs through
+            # something (a problem badge, a filled box); keep that row whole.
+            if (
+                any(is_ink(x, y) for x in range(max(0, erase_left - 3), erase_left))
+                and any(is_ink(x, y) for x in range(erase_right, min(width, erase_right + 3)))
+            ):
+                continue
+            for x in range(erase_left, erase_right):
+                red, green, blue, alpha = source_pixels[x, y]
+                luminance = 0.299 * red + 0.587 * green + 0.114 * blue
+                saturation = max(red, green, blue) - min(red, green, blue)
+                if alpha > 24 and (luminance <= 246 or saturation >= 24):
+                    output_pixels[x, y] = fill
     return output if "A" in image.getbands() else output.convert(mode)
 
 
