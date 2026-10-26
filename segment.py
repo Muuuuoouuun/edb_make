@@ -1187,6 +1187,32 @@ def _mask_without_tall_vertical_rules(mask: Image.Image) -> Image.Image:
     return cleaned if changed else mask
 
 
+def _is_dashed_horizontal_rule_run(
+    mask: Image.Image,
+    run: tuple[int, int],
+    *,
+    image_height: int,
+) -> bool:
+    run_top, run_bottom = run
+    if run_bottom - run_top + 1 > max(6, int(float(image_height) * 0.004)):
+        return False
+    band = mask.crop((0, run_top, mask.width, run_bottom + 1))
+    band_bbox = band.getbbox()
+    if band_bbox is None:
+        return False
+    span = band_bbox[2] - band_bbox[0]
+    if span < mask.width * 0.45:
+        return False
+    segments = _find_active_runs(_column_dark_projection(band), threshold=1)
+    if len(segments) < 15:
+        return False
+    widths = [segment_right - segment_left + 1 for segment_left, segment_right in segments]
+    if max(widths) > max(12, int(mask.width * 0.03)):
+        return False
+    ink_ratio = float(sum(widths)) / max(1.0, float(span))
+    return 0.25 <= ink_ratio <= 0.8
+
+
 def _pdf_problem_ink_bottom(
     image: Image.Image,
     *,
@@ -1213,6 +1239,11 @@ def _pdf_problem_ink_bottom(
         for run in _find_active_runs(row_projection, threshold=row_threshold)
         if run[1] - run[0] + 1 >= 2
     ]
+    # A dashed row divider sits right above the next row's badge, so it ends
+    # up as the last ink in the crop. When the problem's own content runs
+    # close to it, the detached-tail check below can't drop it.
+    while runs and _is_dashed_horizontal_rule_run(mask, runs[-1], image_height=image.height):
+        runs.pop()
     if not runs:
         return bottom, False
 

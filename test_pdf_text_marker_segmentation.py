@@ -1722,6 +1722,43 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         # crop would run to the page bottom and swallow the card's right half.
         self.assertLess(second.bbox.bottom, 450.0)
 
+    def test_dashed_row_divider_close_below_content_is_trimmed(self):
+        # The dashed divider between card rows sits right above the next
+        # badge. Content ending ~150px above it is too close for the
+        # detached-tail rule, so the divider itself must be recognized.
+        from segment import _trim_pdf_problem_bottom_to_ink
+
+        image = Image.new("RGB", (800, 2300), "white")
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((60, 200, 700, 900), outline="black", width=3)
+        draw.text((100, 300), "content block", fill="black")
+        for x in range(160, 640, 11):
+            draw.rectangle((x, 1050, x + 5, 1051), fill=(160, 160, 160))
+
+        bottom, trimmed = _trim_pdf_problem_bottom_to_ink(
+            image,
+            left=0.0,
+            right=800.0,
+            top=150.0,
+            bottom=1080.0,
+        )
+        self.assertTrue(trimmed)
+        self.assertLess(bottom, 1000.0)
+
+        # A solid rule in the same spot is kept: it may be part of the problem.
+        solid = Image.new("RGB", (800, 2300), "white")
+        draw = ImageDraw.Draw(solid)
+        draw.rectangle((60, 200, 700, 900), outline="black", width=3)
+        draw.rectangle((160, 1050, 640, 1051), fill=(160, 160, 160))
+        bottom, _ = _trim_pdf_problem_bottom_to_ink(
+            solid,
+            left=0.0,
+            right=800.0,
+            top=150.0,
+            bottom=1080.0,
+        )
+        self.assertGreater(bottom, 1050.0)
+
     def test_pdf_marker_terminal_problem_stops_after_last_choice_text_line(self):
         image = Image.new("RGB", (600, 800), "white")
         draw = ImageDraw.Draw(image)
