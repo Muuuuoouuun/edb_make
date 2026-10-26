@@ -1652,6 +1652,76 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertGreater(block.bbox.left, 285)
         self.assertLess(block.bbox.width, 315)
 
+    def test_pdf_full_width_card_between_two_column_rows_keeps_page_width(self):
+        # Workbook layout: row one is two columns (1 left, 2 right), then a
+        # full-width mock-exam card (3) whose badge sits in the left column
+        # and whose body image runs across the page. The card must not be
+        # cropped to the left column, and problem 2 must stop above it.
+        image = Image.new("RGB", (600, 800), "white")
+        draw = ImageDraw.Draw(image)
+        draw.line((300, 90, 300, 400), fill=(20, 20, 20), width=2)
+        draw.text((40, 100), "1", fill=(20, 20, 20))
+        draw.text((330, 100), "2", fill=(20, 20, 20))
+        draw.text((40, 450), "3", fill=(20, 20, 20))
+        draw.rectangle((40, 130, 280, 300), outline=(20, 20, 20), width=2)
+        draw.rectangle((330, 130, 560, 300), outline=(20, 20, 20), width=2)
+        draw.rectangle((40, 480, 560, 600), outline=(20, 20, 20), width=2)
+        # Centered page watermark that crosses the column boundary must not
+        # promote the two-column problems to full width.
+        draw.rectangle((200, 320, 400, 390), outline=(230, 230, 230), width=1)
+
+        def _box(left, top, right, bottom):
+            return {"left": left, "top": top, "right": right, "bottom": bottom}
+
+        class Source:
+            def __init__(self, source_image):
+                self.image = source_image
+                self.metadata = {
+                    "source_type": "pdf",
+                    "pdf_problem_markers": [
+                        {"number": 1, "marker_kind": "badge", "text": "1", "bbox": _box(40, 100, 52, 114)},
+                        {"number": 2, "marker_kind": "badge", "text": "2", "bbox": _box(330, 100, 342, 114)},
+                        {"number": 3, "marker_kind": "badge", "text": "3", "bbox": _box(40, 450, 52, 464)},
+                    ],
+                    "pdf_text_lines": [
+                        {"text": "1", "bbox": _box(40, 100, 52, 114)},
+                        {"text": "2", "bbox": _box(330, 100, 342, 114)},
+                        {"text": "3", "bbox": _box(40, 450, 52, 464)},
+                    ],
+                    "pdf_media_regions": [
+                        {"kind": "image", "bbox": _box(40, 130, 280, 300)},
+                        {"kind": "image", "bbox": _box(330, 130, 560, 300)},
+                        {"kind": "image", "bbox": _box(200, 320, 400, 390)},
+                        {"kind": "image", "bbox": _box(40, 480, 560, 600)},
+                    ],
+                }
+                self.source_path = "synthetic-full-width-card.pdf"
+
+        segmented = segment_page(Source(image), page_id="full-width-page", subject=Subject.MATH)
+
+        self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+        self.assertEqual(1, segmented.metadata.get("pdf_full_width_marker_count"))
+        by_number = {block.metadata.get("problem_number"): block for block in segmented.blocks}
+        self.assertEqual({1, 2, 3}, set(by_number))
+
+        card = by_number[3]
+        self.assertTrue(card.metadata.get("full_width_card"))
+        self.assertLessEqual(card.bbox.left, 1.0)
+        self.assertGreaterEqual(card.bbox.right, 599.0)
+        self.assertGreater(card.bbox.bottom, 600.0)
+
+        first = by_number[1]
+        self.assertFalse(first.metadata.get("full_width_card"))
+        self.assertLess(first.bbox.width, 315.0)
+        self.assertLess(first.bbox.bottom, 450.0)
+
+        second = by_number[2]
+        self.assertFalse(second.metadata.get("full_width_card"))
+        self.assertGreater(second.bbox.left, 285.0)
+        # Column two has no later marker, so without the full-width stop the
+        # crop would run to the page bottom and swallow the card's right half.
+        self.assertLess(second.bbox.bottom, 450.0)
+
     def test_pdf_marker_terminal_problem_stops_after_last_choice_text_line(self):
         image = Image.new("RGB", (600, 800), "white")
         draw = ImageDraw.Draw(image)
