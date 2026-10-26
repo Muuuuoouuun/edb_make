@@ -8,7 +8,7 @@
 <link rel="preload" href="vendor/fonts/PretendardVariable.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="preload" href="vendor/fonts/JetBrainsMonoVariable.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="vendor/fonts/fonts.css" />
-<link rel="stylesheet" href="board.css?v=board-css-e5ae1a9f2224da44ef9a67cf3da2ed755ee4217dbfb7d7879bed667c53b7179e" />
+<link rel="stylesheet" href="board.css?v=board-css-8f0bcb417ba39e1da31aea69fc2fb651c54d9391bf1693d4f17467da3ea8c516" />
 <!-- Surface styles are cache-busted by the frontend build. -->
 <link rel="stylesheet" href="editor-layout.css?v=909d7a43c73dca4a3e22afe7708c8437f18d366e90ee0519ef8e2ba7c8e18992" />
 <link rel="stylesheet" href="editor-focus.css?v=ff96c2a9e6856cae16e6de3d1fab682c8788bf909541adedc90c928f4bd9f415" />
@@ -84,6 +84,8 @@
     filename: event.filename,
     lineno: event.lineno,
     colno: event.colno,
+    // Browsers report this harmless layout warning as an error; record it only.
+    skipGlobalPanel: /ResizeObserver loop/.test(event.message),
   }));
   window.addEventListener('unhandledrejection', event => showRuntimeError({
     type: 'unhandledrejection',

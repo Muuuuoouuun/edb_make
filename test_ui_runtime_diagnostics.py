@@ -1088,6 +1088,28 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("class AppErrorBoundary", source)
         self.assertIn("requiredWindowHelper(PUBLISH_GUARD", source)
 
+    def test_resize_observer_loop_warning_is_recorded_without_crash_panel(self) -> None:
+        run_node(r"""
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const html = fs.readFileSync('ui_prototype/board.html', 'utf8');
+const listeners = {}, panels = [];
+const window = { addEventListener: (type, listener) => { listeners[type] = listener; } };
+const document = {
+  body: { appendChild: panel => panels.push(panel) },
+  querySelector: () => panels[0] || null,
+  createElement: () => ({ style: {}, setAttribute() {}, appendChild() {} }),
+};
+vm.runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], { window, document });
+listeners.error({ message: 'ResizeObserver loop completed with undelivered notifications.', error: null });
+assert.equal(window.EDB_RUNTIME_DIAGNOSTICS.length, 1, 'keep the warning for bug reports');
+assert.equal(panels.length, 0, 'a benign layout warning must not open the crash panel');
+listeners.error({ message: 'Uncaught TypeError: boom', error: new TypeError('boom') });
+assert.equal(window.EDB_RUNTIME_DIAGNOSTICS.length, 2);
+assert.equal(panels.length, 1, 'real errors still open the crash panel');
+""")
+
     def test_review_summary_surfaces_passage_review_queue(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
         review_stage = source.split("<span className=\"review-summary-title\">검수 요약</span>", 1)[1]
