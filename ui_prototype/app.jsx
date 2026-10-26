@@ -4226,6 +4226,16 @@ function ReviewStage({
     };
   };
 
+  // Re-read the canvas size on every move: zoom, layout swaps or lazy image
+  // loads can resize it mid-drag, and a scale captured at mousedown would then
+  // cut or stretch the box by hundreds of source pixels.
+  const liveDragScale = (drag, pageWidth, pageHeight) => {
+    const rect = drag.canvas?.getBoundingClientRect?.();
+    return rect?.width && rect?.height
+      ? [pageWidth / rect.width, pageHeight / rect.height]
+      : [drag.scaleX, drag.scaleY];
+  };
+
   const manualSplitBoxFromPoints = (startPoint, endPoint, page) => clampReviewBox({
     left: Math.min(startPoint.x, endPoint.x),
     top: Math.min(startPoint.y, endPoint.y),
@@ -4808,6 +4818,7 @@ function ReviewStage({
     manualSplitDragRef.current = {
       mode: 'move',
       page,
+      canvas,
       startX: evt.clientX,
       startY: evt.clientY,
       scaleX: (Number(page.width) || 1) / rect.width,
@@ -4831,6 +4842,7 @@ function ReviewStage({
       mode: 'resize',
       resizeMode: mode,
       page,
+      canvas,
       regionId,
       startX: evt.clientX,
       startY: evt.clientY,
@@ -5112,6 +5124,7 @@ function ReviewStage({
     boxEditDragRef.current = {
       mode,
       segmentId: segment?.id || null,
+      canvas,
       startX: evt.clientX,
       startY: evt.clientY,
       initialBox: { ...initialBox },
@@ -5357,8 +5370,9 @@ function ReviewStage({
         setBoxEditDraftBox({ pageId: drag.page.id, bbox });
         return;
       }
-      const dx = (evt.clientX - drag.startX) * drag.scaleX;
-      const dy = (evt.clientY - drag.startY) * drag.scaleY;
+      const [scaleX, scaleY] = liveDragScale(drag, drag.pageWidth, drag.pageHeight);
+      const dx = (evt.clientX - drag.startX) * scaleX;
+      const dy = (evt.clientY - drag.startY) * scaleY;
       const minWidth = Math.min(drag.pageWidth, Math.max(12, Math.min(36, drag.pageWidth * 0.02)));
       const minHeight = Math.min(drag.pageHeight, Math.max(12, Math.min(36, drag.pageHeight * 0.02)));
       const initial = drag.initialBox;
@@ -5496,9 +5510,11 @@ function ReviewStage({
         return;
       }
 
+      const [scaleX, scaleY] = liveDragScale(drag, Number(drag.page?.width) || 1, Number(drag.page?.height) || 1);
+      const dx = (evt.clientX - drag.startX) * scaleX;
+      const dy = (evt.clientY - drag.startY) * scaleY;
+
       if (drag.mode === 'move') {
-        const dx = (evt.clientX - drag.startX) * drag.scaleX;
-        const dy = (evt.clientY - drag.startY) * drag.scaleY;
         const translated = translateManualSplitBoxes(drag.initialBoxes, drag.page, dx, dy);
         setManualSplit(prev => {
           if (!prev) return prev;
@@ -5514,8 +5530,6 @@ function ReviewStage({
       }
 
       if (drag.mode === 'resize') {
-        const dx = (evt.clientX - drag.startX) * drag.scaleX;
-        const dy = (evt.clientY - drag.startY) * drag.scaleY;
         const initial = drag.initialBox;
         let left = initial.left;
         let top = initial.top;
