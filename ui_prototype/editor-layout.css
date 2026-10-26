@@ -317,7 +317,8 @@ body:not(.dark) .rail-drag-overlay.editor-basic-mode {
 }
 
 /* One shared toolbar in both editor modes. Wrap according to the actual
-   available board width, which also changes when the side panels are open. */
+   available board width, which also changes when the side panels are open.
+   Controls share one 32px height; inner radii nest inside the bar's 16px. */
 .main.editor-basic-mode .stage > .stage-unified-toolbar {
   position: relative;
   z-index: 20;
@@ -326,71 +327,295 @@ body:not(.dark) .rail-drag-overlay.editor-basic-mode {
   height: auto;
   min-width: 0;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 6px 10px;
+  justify-content: flex-end;
+  gap: 6px 8px;
+  padding: 4px 8px 4px 4px;
+  border-color: color-mix(in srgb, var(--line-strong) 45%, var(--line));
   border-radius: 16px;
+  background: linear-gradient(180deg, var(--surface), color-mix(in srgb, var(--surface) 80%, var(--surface-2)));
+  box-shadow:
+    inset 0 1px 0 var(--toolbar-sheen),
+    0 1px 2px var(--toolbar-shade),
+    0 8px 18px -12px var(--toolbar-lift);
 }
 
+.stage-unified-toolbar {
+  --toolbar-sheen: rgb(255 255 255 / 72%);
+  --toolbar-shade: rgb(46 43 37 / 9%);
+  --toolbar-lift: rgb(46 43 37 / 24%);
+}
+
+body.dark .stage-unified-toolbar {
+  --toolbar-sheen: rgb(255 255 255 / 4%);
+  --toolbar-shade: rgb(0 0 0 / 30%);
+  --toolbar-lift: rgb(0 0 0 / 60%);
+}
+
+/* Title block: the page count leads, the selection line follows. */
 .stage-unified-toolbar .stage-estimate-summary {
+  flex: 0 1 auto;
   align-self: stretch;
-  gap: 8px;
+  gap: 10px;
   min-height: 0;
-  padding: 2px 6px;
+  margin-right: auto;
+  padding: 4px 8px 4px 12px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 12px;
   background: transparent;
   text-align: left;
   cursor: pointer;
+  transition: background-color var(--motion-fast);
 }
 
 .stage-unified-toolbar .stage-estimate-copy {
   display: grid;
   min-width: 0;
-  gap: 1px;
+  gap: 2px;
   font-family: var(--font-sans);
   font-size: var(--text-xs);
-  line-height: 1.4;
+  line-height: 1.3;
 }
 
-.stage-unified-toolbar .stage-estimate-primary { font-size: var(--text-sm); }
-.stage-unified-toolbar .stage-estimate-summary > svg { flex: 0 0 14px; width: 14px; height: 14px; color: var(--muted); }
-.stage-unified-toolbar .stage-estimate-summary:hover { background: var(--surface-2); }
-.stage-unified-toolbar .stage-estimate-summary:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+.stage-unified-toolbar .stage-estimate-primary { font-size: var(--text-md); letter-spacing: -0.01em; }
+.stage-unified-toolbar .stage-estimate-brand { color: var(--muted); font-weight: 600; }
+.stage-unified-toolbar .stage-estimate-selection { font-weight: 500; }
 
+.stage-unified-toolbar .stage-estimate-summary > svg {
+  flex: 0 0 auto;
+  box-sizing: content-box;
+  width: 14px;
+  height: 14px;
+  padding: 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  transition: background-color var(--motion-fast), color var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+.stage-unified-toolbar .stage-estimate-summary:hover { background: color-mix(in srgb, var(--surface-2) 75%, transparent); }
+.stage-unified-toolbar .stage-estimate-summary[aria-expanded="true"] { background: color-mix(in srgb, var(--accent-soft) 65%, transparent); }
+
+.stage-unified-toolbar .stage-estimate-summary:hover > svg,
+.stage-unified-toolbar .stage-estimate-summary[aria-expanded="true"] > svg {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px var(--toolbar-shade), 0 0 0 1px var(--line);
+}
+
+.stage-unified-toolbar .stage-estimate-summary[aria-expanded="true"] > svg { color: var(--accent-ink); }
+
+.stage-unified-toolbar .stage-unified-actions {
+  display: contents;
+}
+
+.stage-unified-toolbar .btn {
+  min-height: 32px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: background-color var(--motion-fast), color var(--motion-fast), box-shadow var(--motion-fast), transform var(--motion-fast);
+}
+
+.stage-unified-toolbar .btn.icon { width: 32px; min-width: 32px; padding: 0; }
+.stage-unified-toolbar .btn.ghost { color: var(--ink-2); }
+.stage-unified-toolbar .btn.ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); }
+.stage-unified-toolbar .btn:active:not(:disabled) { transform: translateY(1px); }
+.stage-unified-toolbar .btn:disabled { border-color: transparent; background: transparent; color: var(--muted); opacity: .45; }
+
+.stage-unified-toolbar :is(.btn, .stage-estimate-summary):focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+/* Zoom: one recessed segmented control; a raised key marks hover and 맞춤. */
 .stage-unified-toolbar .stage-preview-controls {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   flex-wrap: nowrap;
   gap: 2px;
+  padding: 2px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--line), inset 0 1px 2px var(--toolbar-shade);
 }
 
-.stage-unified-toolbar .stage-unified-actions {
-  display: contents;
+.stage-unified-toolbar .stage-preview-controls .btn { min-height: 28px; padding: 2px 8px; }
+.stage-unified-toolbar .stage-preview-controls .btn.icon { width: 28px; min-width: 28px; padding: 0; }
+
+.stage-unified-toolbar .stage-preview-controls .btn:hover:not(:disabled),
+.stage-unified-toolbar .stage-fit-btn[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 2px var(--toolbar-shade), 0 0 0 1px var(--line);
 }
 
-.stage-unified-toolbar .stage-preview-controls {
-  padding-right: 8px;
-  margin-right: 6px;
-  border-right: 1px solid var(--line);
+.stage-unified-toolbar .stage-fit-btn[aria-pressed="true"] { color: var(--accent-ink); }
+
+.stage-unified-toolbar .stage-preview-zoom-value {
+  min-width: 52px;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
 }
 
-.stage-unified-toolbar .btn {
-  min-height: 32px;
-  padding: 4px 8px;
-  border-radius: 8px;
-  font-size: var(--text-xs);
-  white-space: nowrap;
+.stage-unified-toolbar .stage-fit-btn { position: relative; min-width: 44px; margin-left: 6px; }
+
+.stage-unified-toolbar .stage-fit-btn::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: -4px;
+  width: 1px;
+  background: var(--line-strong);
+  pointer-events: none;
+  transition: opacity var(--motion-fast);
 }
-.stage-unified-toolbar .btn.icon { width: 30px; min-width: 30px; padding: 4px; }
-.stage-unified-toolbar .stage-preview-zoom-value { min-width: 48px; }
-.stage-unified-toolbar .stage-fit-btn { min-width: 40px; }
-.stage-unified-toolbar .stage-smart-move { gap: 5px; margin-left: auto; }
-.stage-unified-toolbar .stage-smart-state { font-size: var(--text-xs); font-weight: 700; }
-.stage-unified-toolbar .stage-smart-move.on { color: var(--accent-ink); background: var(--accent-soft); }
-.stage-unified-toolbar .stage-review-shortcut { color: var(--accent-ink); }
+
+/* A raised key beside the divider replaces it. */
+.stage-unified-toolbar .stage-fit-btn:is(:hover:not(:disabled), [aria-pressed="true"])::before,
+.stage-unified-toolbar .btn:hover:not(:disabled) + .stage-fit-btn::before {
+  opacity: 0;
+}
+
+/* 스마트 이동: a pill with a real switch; the ON/OFF word rides in the track. */
+.stage-unified-toolbar .stage-smart-move {
+  gap: 8px;
+  padding: 3px 3px 3px 12px;
+  border-color: var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.stage-unified-toolbar .stage-smart-move:disabled { border-color: var(--line); }
+.stage-unified-toolbar .stage-smart-move > svg { width: 14px; height: 14px; color: var(--muted); }
+.stage-unified-toolbar .stage-smart-move:hover:not(:disabled) { border-color: var(--line-strong); box-shadow: 0 1px 2px var(--toolbar-shade); }
+
+.stage-unified-toolbar .stage-smart-move[aria-pressed="true"],
+.stage-unified-toolbar .btn.stage-smart-move[aria-pressed="true"]:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
+  color: var(--accent-ink);
+}
+
+.stage-unified-toolbar .stage-smart-move[aria-pressed="true"] > svg { color: var(--accent-ink); }
+
+.stage-unified-toolbar .stage-smart-state {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 56px;
+  height: 24px;
+  padding: 0 8px 0 0;
+  border-radius: 999px;
+  background: var(--line);
+  color: var(--ink-2);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  letter-spacing: .04em;
+  transition: background-color var(--motion-base), color var(--motion-base);
+}
+
+.stage-unified-toolbar .stage-smart-state::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgb(46 43 37 / 30%), 0 0 0 1px rgb(46 43 37 / 6%);
+  transition: transform var(--motion-base) cubic-bezier(.3, .7, .2, 1);
+}
+
+.stage-unified-toolbar .stage-smart-move[aria-pressed="true"] .stage-smart-state {
+  justify-content: flex-start;
+  padding: 0 0 0 10px;
+  background: var(--editor-action, var(--accent));
+  color: #ffffff;
+}
+
+.stage-unified-toolbar .stage-smart-move[aria-pressed="true"] .stage-smart-state::before { transform: translateX(32px); }
+
+.stage-unified-toolbar .btn.stage-review-shortcut,
+.stage-unified-toolbar .btn.stage-review-shortcut:hover:not(:disabled) {
+  padding-inline: 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.stage-unified-toolbar .btn.stage-review-shortcut:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.stage-unified-toolbar .topbar-action-menu-trigger.on {
+  background: var(--surface-2);
+  color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
 .stage-unified-toolbar .topbar-more-menu { top: calc(100% + 10px); width: 300px; }
 .stage-unified-toolbar .topbar-more-menu button { white-space: normal; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-unified-toolbar :is(.btn, .stage-estimate-summary, .stage-estimate-summary > svg, .stage-smart-state),
+  .stage-unified-toolbar .stage-smart-state::before {
+    transition: none;
+  }
+  .stage-unified-toolbar .btn:active:not(:disabled) { transform: none; }
+}
+
+/* The board scrolls in its own frame below the toolbar. As content slides out
+   of view the toolbar lifts and the frame's top edge shades, so depth follows
+   the scroll. Without scroll timelines the resting look simply stays. */
+@supports (animation-timeline: scroll()) and (timeline-scope: --board-scroll) {
+  .main.editor-basic-mode .stage {
+    timeline-scope: --board-scroll;
+  }
+
+  .main.editor-basic-mode .stage-scroll {
+    scroll-timeline: --board-scroll block;
+  }
+
+  .main.editor-basic-mode .stage > .stage-unified-toolbar {
+    animation: board-toolbar-lift linear both;
+    animation-timeline: --board-scroll;
+    animation-range: 0px 48px;
+  }
+
+  .main.editor-basic-mode .stage-board::after {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto;
+    z-index: 2;
+    height: 32px;
+    background: linear-gradient(rgb(0 0 0 / 26%), transparent);
+    opacity: 0;
+    pointer-events: none;
+    animation: board-edge-shade linear both;
+    animation-timeline: --board-scroll;
+    animation-range: 0px 48px;
+  }
+}
+
+@keyframes board-toolbar-lift {
+  to {
+    box-shadow:
+      inset 0 1px 0 var(--toolbar-sheen),
+      0 2px 4px var(--toolbar-shade),
+      0 16px 28px -14px var(--toolbar-lift);
+  }
+}
+
+@keyframes board-edge-shade {
+  to { opacity: 1; }
+}
 
 .stage-drag-feedback {
   position: absolute;
