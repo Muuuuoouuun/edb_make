@@ -93,7 +93,7 @@ class TestUiToolbarControls(unittest.TestCase):
         assert.equal(walk(reviewBusy).find(node => node.props.id === 'topbar-more').props.items.find(item => item.id === 'board').disabled, true);
         """)
 
-    def test_topbar_orders_reset_before_material_controls_and_update(self) -> None:
+    def test_topbar_orders_reset_before_material_controls_and_menu(self) -> None:
         run_node(r"""
         const order = tree => {
           const actions = walk(tree).find(node => node.props?.className === 'topbar-actions');
@@ -104,13 +104,29 @@ class TestUiToolbarControls(unittest.TestCase):
             || String(node.props.className).match(/topbar-(reset|update)(?=\s|$)|editor-mode-control/)[0]);
         };
         assert.deepEqual(order(sandbox.TopBar({ ...base, canChangeFocusMode: true })),
-          ['초기화', '편집기 보기 모드', '되돌리기', '업데이트', 'topbar-more']);
+          ['초기화', '편집기 보기 모드', '되돌리기', 'topbar-more']);
         // Empty home with history to clear: no material controls, reset still leads.
         assert.deepEqual(order(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false })),
-          ['초기화', '업데이트', 'topbar-more']);
-        // Fresh home: only update and the menu.
+          ['초기화', 'topbar-more']);
+        // Fresh home: only the menu.
         assert.deepEqual(order(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false, canReset: false })),
-          ['업데이트', 'topbar-more']);
+          ['topbar-more']);
+        """)
+
+    def test_update_entry_lives_in_the_more_menu(self) -> None:
+        run_node(r"""
+        const onOpenUpdateSettings = () => {};
+        const menu = tree => walk(tree).find(node => node.props?.id === 'topbar-more');
+        const idle = menu(sandbox.TopBar({ ...base, onOpenUpdateSettings }));
+        const update = idle.props.items.find(item => item.id === 'update');
+        assert.equal(update.onSelect, onOpenUpdateSettings);
+        assert.equal(update.label, '업데이트');
+        assert.equal(idle.props.label, '수업 작업 더보기');
+        const fresh = menu(sandbox.TopBar({ ...base, onOpenUpdateSettings, updateAvailable: true }));
+        assert.equal(fresh.props.items.find(item => item.id === 'update').label, '업데이트 · 새 버전');
+        assert.equal(fresh.props.label, '수업 작업 더보기 · 새 버전 있음', 'a new version is announced on the ··· trigger');
+        const busy = menu(sandbox.TopBar({ ...base, onOpenUpdateSettings, operationBusy: true }));
+        assert.equal(busy.props.items.find(item => item.id === 'update').disabled, true);
         """)
 
     def test_primary_output_and_recognition_state_follow_the_current_work(self) -> None:

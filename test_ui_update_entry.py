@@ -208,7 +208,7 @@ class TestUiUpdateEntry(unittest.TestCase):
           assert.equal(openedUrls, 0, 'opening update settings must never launch an external download');
           assert.equal(sandbox.updateCheckInFlightRef.current, false);
           const topbar = section('function TopBar({', 'function ReviewToolbarGroup(');
-          assert.match(topbar, /className="btn ghost topbar-update"[\s\S]*?onClick=\{onOpenUpdateSettings\}/);
+          assert.match(topbar, /id: 'update'[\s\S]*?onSelect: onOpenUpdateSettings/);
           assert.match(source, /onOpenUpdateSettings=\{openUpdateSettings\}/);
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)

@@ -3521,17 +3521,10 @@ function TopBar({
           onClick={onUndo}
           disabled={pageReviewActive || operationBusy || !canUndo}
         >{Icon.undo}</button>}
-        <button className="btn ghost topbar-update" type="button"
-          onClick={onOpenUpdateSettings}
-          disabled={pageReviewActive || operationBusy}
-          title="앱 업데이트 확인 및 설치 설정 열기"
-          aria-label={updateAvailable ? '업데이트 · 새 버전' : '업데이트'}>
-          <span className={updateBusy ? 'spin-ic' : ''}>{Icon.refresh}</span>
-          <span className="topbar-update-label">업데이트</span>{updateAvailable && <span className="topbar-update-badge">새 버전</span>}
-        </button>
         <ToolbarActionMenu
           id="topbar-more"
-          label="수업 작업 더보기"
+          label={updateAvailable ? '수업 작업 더보기 · 새 버전 있음' : '수업 작업 더보기'}
+          icon={<>{Icon.more}{updateAvailable && <span className="topbar-more-badge" aria-hidden="true" />}</>}
           items={[
             ...(view === 'review'
               ? [{ id: 'board', icon: Icon.board, label: '칠판으로 돌아가기',
@@ -3541,6 +3534,9 @@ function TopBar({
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
             { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
             { id: 'settings', icon: Icon.rows3, label: '설정', description: 'AI·API 키, 화면, 한글 변환, 업데이트', disabled: !onOpenSettings, onSelect: onOpenSettings },
+            { id: 'update', icon: Icon.download, label: updateAvailable ? '업데이트 · 새 버전' : '업데이트',
+              description: updateBusy ? '업데이트 확인 중…' : '앱 업데이트 확인 및 설치 설정',
+              disabled: pageReviewActive || operationBusy, onSelect: onOpenUpdateSettings },
             { id: 'support', icon: Icon.fileText, label: '문제 신고', description: '오류나 불편한 점을 알려 주세요', onSelect: onOpenBugReport },
             { id: 'shutdown', icon: Icon.power, label: '종료', onSelect: onShutdown },
           ]}

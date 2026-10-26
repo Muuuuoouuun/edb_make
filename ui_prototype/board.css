@@ -577,20 +577,20 @@
   .stage-smart-move[aria-pressed="true"]{
     color: var(--accent-ink); background: var(--surface-2); border-color: var(--accent);
   }
-  .topbar-update,
   .topbar-reset{ white-space: nowrap; }
   .topbar-reset:hover:not(:disabled){ color: var(--danger-ink); }
   @media (max-width: 1100px){
     /* Keep the header on one row beside both panels; the icons keep their
        names in the tooltip and for assistive tech. */
     .topbar-reset-label{ display: none; }
-    .topbar:has(.topbar-export-group) .topbar-update-label{ display: none; }
     .topbar{ column-gap: 12px; }
   }
-  @media (max-width: 420px){
-    .topbar-update-label{ display: none; }
+  /* New app version: the update entry lives in the ··· menu. */
+  .topbar-more-badge{
+    position: absolute; top: 4px; right: 4px;
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent); pointer-events: none;
   }
-  .topbar-update-badge{ font-size: var(--text-xs); color: var(--accent-ink); }
   .editor-mode-control{
     display: inline-flex; flex-shrink: 0; padding: 2px;
     border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2);
