@@ -124,6 +124,32 @@ def geometric_unit_order(units, box_key):
     return [u['id'] for band in bands for u in sorted(band['units'],key=lambda u:(u[box_key][0],u['id']))]
 
 
+def continuous_source_identity(source_strength,actual_strength,actual_visible):
+    """Original tone NCC identity and required source-pixel retention.
+
+    The optional silhouette test must not turn its reverse Otsu precision into
+    a mandatory veto on an independently identified, fully retained source line.
+    """
+    import numpy as np
+    import cv2
+    result={'passed':False,'ncc':None,'source_component_retention':[]}
+    if source_strength.shape!=actual_strength.shape or source_strength.shape!=actual_visible.shape or not source_strength.size:return result
+    source=np.rint(np.clip(source_strength,0,1)*255).astype(np.uint8)
+    actual=np.rint(np.clip(actual_strength,0,1)*255).astype(np.uint8)
+    if not source.std() or not actual.std():result['reason']='constant-tone';return result
+    a=cv2.GaussianBlur(source,(3,3),0);b=cv2.GaussianBlur(actual,(3,3),0)
+    if not a.std() or not b.std():result['reason']='constant-blurred-tone';return result
+    result['ncc']=float(cv2.matchTemplate(b,a,cv2.TM_CCOEFF_NORMED)[0,0])
+    source_ink=source>55 # exact existing originalRGB<200 after 8bit quantization
+    support=cv2.dilate(actual_visible.astype(np.uint8),np.ones((3,3),np.uint8)).astype(bool)
+    count,labels,stats,_=cv2.connectedComponentsWithStats(source_ink.astype(np.uint8),8)
+    for cc in range(1,count):
+        x,y,w,h,area=map(int,stats[cc]);ratio=float(support[y:y+h,x:x+w][labels[y:y+h,x:x+w]==cc].mean())
+        result['source_component_retention'].append({'area':area,'ratio':ratio})
+    result['passed']=bool(result['source_component_retention']) and result['ncc']>=.8 and all(c['ratio']>=.9 for c in result['source_component_retention'])
+    return result
+
+
 def observe_required_lines(fragment, page, original, visible, dx, dy, reference_visible=None, final_strength=None, reference_strength=None):
     """Find each source-line identity independently in actual final foreground.
 
@@ -197,7 +223,14 @@ def observe_required_lines(fragment, page, original, visible, dx, dy, reference_
                 if reference_strength is not None and final_strength is not None:
                     shape=glyph_shape_evidence(reference_strength[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]],final_strength[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]])
                     candidate['same_site_source_glyph_shape']=shape
-                    candidate['added_ink_occurrence']=not shape['passed']
+                    continuous=continuous_source_identity(reference_strength[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]],final_strength[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]],visible[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]])
+                    candidate['same_site_source_continuous_identity']=continuous
+                    # Tone preservation of blank/gradient material alone is not
+                    # proof that this glyph identity existed at the source site.
+                    sx,sy=max(0,ox-1),max(0,oy-1);sr,st=min(reference_target.shape[1],ox+pattern.shape[1]+1),min(reference_target.shape[0],oy+pattern.shape[0]+1)
+                    _,source_identity_ncc,_,_=cv2.minMaxLoc(cv2.matchTemplate(reference_target[sy:st,sx:sr],pattern,cv2.TM_CCOEFF_NORMED))
+                    candidate['source_identity_ncc']=source_identity_ncc
+                    candidate['added_ink_occurrence']=not (shape['passed'] or (continuous['passed'] and source_identity_ncc>=.8))
             occurrences.append(candidate)
         if local_shape and local_shape['passed'] and not any(abs(o['box'][0]-px)<=1 and abs(o['box'][1]-py)<=1 for o in occurrences):
             occurrences.append({'box':[px,py,px+source_ink.shape[1],py+source_ink.shape[0]],'ncc':local_shape['ncc'],'added_ink_occurrence':False,'identity_method':'source-projected-glyph-shape','same_site_source_glyph_shape':local_shape})
@@ -210,7 +243,9 @@ def observe_required_lines(fragment, page, original, visible, dx, dy, reference_
         choice=min(best_occurrences,key=lambda o:(abs(o['box'][1]-(y+dy))+abs(o['box'][0]-(x+dx)),o['box'][1],o['box'][0]))
         shape_pass=True
         if final_strength is not None:
-            bx,by,br,bt=choice['box'];chosen_shape=glyph_shape_evidence(identity_pattern,final_strength[by:bt,bx:br]);unit['chosen_glyph_shape']=chosen_shape;shape_pass=chosen_shape['passed']
+            bx,by,br,bt=choice['box'];chosen_shape=glyph_shape_evidence(identity_pattern,final_strength[by:bt,bx:br]);unit['chosen_glyph_shape']=chosen_shape
+            continuous=continuous_source_identity(identity_pattern,final_strength[by:bt,bx:br],visible[by:bt,bx:br]);unit['chosen_continuous_identity']=continuous
+            shape_pass=chosen_shape['passed'] or continuous['passed']
         unit.update(matched=shape_pass,final_box=choice['box'],occurrences=occurrences)
         if reference_visible is not None:
             reference=reference_target[:,left:right]
@@ -669,7 +704,7 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
     if not preservation_known:incomplete_reasons.append('Final source component/seam evidence incomplete')
     # Runtime success/termination requires separate actual UI event traces.
     incomplete_reasons.append('External actual UI trials must establish task-complete and no-crash-or-oom; this observer does not infer runtime success from files.')
-    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-ACTUAL-FINAL-native-grid anchors NCC>=0.8;translations agree<=1px; candidate pixels NEVER resampled to preview/raw grid; unsupported scale remains incomplete','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'internal_line_identity':'continuous8bit sourceinverseRGB versus actualalpha/opaqueRGB; constanttemplates rejected; localOtsu glyphshape NCC>=0.8 plus eachcomponent bidirectional>=90% within1px, source-onlyglyphbounds padded1px; periodic aliases require same-site independent sourceglyphshape','internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85,'opaque_rgb_material_evidence':'same alpha component contains actual RGBink<200 AND paperallRGB>=245; uniform chalkRGB preservesalpha semantics'},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
+    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-ACTUAL-FINAL-native-grid anchors NCC>=0.8;translations agree<=1px; candidate pixels NEVER resampled to preview/raw grid; unsupported scale remains incomplete','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'identity_gate':'original continuousNCC>=0.8 + every required sourceCCretention>=90% within1px OR strict silhouette alternative; reverse Otsu precision is not mandatory on continuous-identified source lines','internal_line_identity':'continuous8bit sourceinverseRGB versus actualalpha/opaqueRGB; constanttemplates rejected; localOtsu glyphshape NCC>=0.8 plus eachcomponent bidirectional>=90% within1px, source-onlyglyphbounds padded1px; periodic aliases require same-site independent sourceglyphshape','internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85,'opaque_rgb_material_evidence':'same alpha component contains actual RGBink<200 AND paperallRGB>=245; uniform chalkRGB preservesalpha semantics'},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
             'hard_checks':hard_checks,'hard_failures':[x['id'] for x in hard_checks if not x['passed']],
             'incomplete_reasons':incomplete_reasons,
             'raw_measures':{'source_line_membership':line_details['membership'],'source_line_geometric_recall':fraction(lines),'excluded_start_intrusion_count':len(details['excluded_intrusions'])},

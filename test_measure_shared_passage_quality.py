@@ -293,6 +293,18 @@ class GrayFigureGlyphIdentityTests(unittest.TestCase):
         _,_,order=self.observe(image,fragment,actual,reference)
         self.assertFalse(order['orders'][0]['passed'])
 
+    def test_added_B_copy_over_original_gray_gradient_is_still_new(self):
+        import numpy as np
+        image,fragment,reference=self.fixture()
+        ramp=np.linspace(180,240,29,dtype=np.uint8)[:,None]
+        image[85:114,18:45,:]=ramp[:,:,None]
+        reference=1-image.min(axis=2).astype(np.float32)/255;actual=reference.copy()
+        glyph=reference[30:59,18:45]>.6
+        actual[85:114,18:45][glyph]=1
+        lines,metrics,_=self.observe(image,fragment,actual,reference)
+        self.assertTrue(any(o['added_ink_occurrence'] for o in lines[0]['occurrences']))
+        self.assertLess(metrics['unit_uniqueness']['numerator'],2)
+
     def test_added_gray_B_copy_fails_source_identity_uniqueness(self):
         image,fragment,reference=self.fixture();actual=reference.copy();actual[85:114,18:45]=reference[30:59,18:45]
         lines,metrics,_=self.observe(image,fragment,actual,reference)
@@ -395,5 +407,24 @@ class ChalkAndOpaqueMaterialTests(unittest.TestCase):
         expected=1-source.astype(np.float32)/255
         self.assertTrue(glyph_shape_evidence(expected,expected)['passed'])
         self.assertFalse(glyph_shape_evidence(expected,np.ones_like(expected))['passed'])
+
+class OriginalContinuousIdentityRouteTests(unittest.TestCase):
+    def test_unchanged_AA_pixels_keep_tone_identity_without_reverse_Otsu_veto(self):
+        import numpy as np,hashlib
+        from scripts.measure_shared_passage_quality import observe_required_lines
+        source=np.zeros((24,220),np.float32)
+        for x in range(10,190,20):source[5:15,x:x+8]=1
+        source[5:15,192:202]=.20;source[8:12,195:199]=1
+        actual=source.copy();actual[5:15,192:202]=1
+        previous_actual=actual.copy()
+        self.assertEqual(hashlib.sha256(actual.tobytes()).hexdigest(),hashlib.sha256(previous_actual.tobytes()).hexdigest())
+        original=np.repeat((255-np.rint(source*255).astype(np.uint8))[:,:,None],3,axis=2)
+        fragment={'id':'f','source_lines':[{'text':'Native antialiased printed source','box':[0,0,220,24]}]}
+        units=observe_required_lines(fragment,{'metadata':{'dpi':72}},original,actual>16/255,0,0,source>55/255,actual,source)
+        unit=units[0]
+        self.assertFalse(unit['chosen_glyph_shape']['passed'])
+        self.assertGreater(unit['chosen_continuous_identity']['ncc'],.95)
+        self.assertTrue(all(c['ratio']==1 for c in unit['chosen_continuous_identity']['source_component_retention']))
+        self.assertTrue(unit['matched'])
 
 if __name__=='__main__': unittest.main()
