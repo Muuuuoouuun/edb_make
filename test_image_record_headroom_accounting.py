@@ -119,6 +119,8 @@ def test_cache_credit_does_not_include_active_file_or_kernel_reclaimable_bytes()
 def test_resolved_worker_observability_reports_the_unchanged_safety_budget(capsys):
     with patch.object(board,"_available_image_record_memory_bytes",return_value=8*GIB), patch.dict(board.os.environ,{"EDB_IMAGE_RECORD_WORKERS":""}), patch.object(board.os,"cpu_count",return_value=16):
         assert board._resolve_image_record_worker_count(16,source_pixels=8_000_000)==2
-    output=capsys.readouterr().out
+    captured=capsys.readouterr()
+    assert captured.out==""  # The CLI's stdout is a machine-readable JSON contract.
+    output=captured.err
     assert "workers=2 records=16 source_pixels_max=8000000" in output
     assert "budget_bytes=1610612736 per_worker_bytes=768000000" in output

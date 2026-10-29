@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -2314,6 +2315,7 @@ def _resolve_image_record_worker_count(item_count: int, *, source_pixels: int = 
             f"[image-record] workers={max_workers} records={item_count} source_pixels_max={source_pixels} "
             f"available_bytes={available if available is not None else 'unknown'} "
             f"budget_bytes={budget} per_worker_bytes={worker_bytes}",
+            file=sys.stderr,
             flush=True,
         )
     return max_workers
