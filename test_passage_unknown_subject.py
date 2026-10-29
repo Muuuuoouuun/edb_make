@@ -73,6 +73,20 @@ def test_shared_continuation_never_joins_different_original_documents(tmp_path):
     assert not any(problem.metadata.get("passage_group_id") for problem in models[1].problems)
 
 
+def test_conflicting_original_documents_do_not_collapse_under_shared_cache_pointer(tmp_path):
+    _source, prepared, models = _models(tmp_path)
+    shared_cache_pointer = models[0].metadata['source_pdf_path']
+    assert models[1].metadata['source_pdf_path'] == shared_cache_pointer
+    for index, page in enumerate(models):
+        page.metadata['original_source_path'] = str(tmp_path / f'original-{index}' / 'same-name.pdf')
+    assert board._passage_document_identity(models[0]) != board._passage_document_identity(models[1])
+    entries = board.build_problem_entries(prepared, models, tmp_path / 'out', LayoutTemplate(name='test'),
+        content_target='shared-passages')
+    assert len(entries) == 1
+    assert all(segment['source_page_id'] == models[0].page_id for segment in entries[0].source_segments)
+    assert all(not problem.metadata.get('passage_group_id') for problem in models[1].problems)
+
+
 def test_unknown_continuation_requires_proven_source_identity_and_real_text(tmp_path):
     _source, _prepared, models = _models(tmp_path)
     groups = _active_group(models)

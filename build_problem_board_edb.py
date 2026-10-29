@@ -4368,6 +4368,11 @@ def _seed_cross_page_passage_group(
 
 def _passage_document_identity(page: PageModel) -> str | None:
     """Identify an original document, including conservative legacy PNG pages."""
+    original = str(page.metadata.get("original_source_path") or "").strip()
+    if original and Path(original).suffix.lower() in {".pdf", ".hwp", ".hwpx"}:
+        # An explicit original document is stronger than a possibly stale
+        # conversion/cache pointer. Conflicting originals must stay separate.
+        return str(Path(original).expanduser().resolve())
     # HWP normalized caches may label each rendered PNG as original_source_path.
     # Prefer explicit document provenance before that generic image path.
     for key in ("source_hwp_path", "source_pdf_path", "original_source_path"):
