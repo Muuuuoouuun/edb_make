@@ -364,4 +364,36 @@ class ActualRecordSourceIdentityTests(unittest.TestCase):
         self.assertFalse(any(x['source_record_identity_passed'] for x in report['details']['export_correspondence']))
         self.assertIn('correct-order',report['hard_failures'])
 
+class ChalkAndOpaqueMaterialTests(unittest.TestCase):
+    def test_solid_chalk_button_with_alpha_letter_holes_retains_all_source_ink(self):
+        import cv2,numpy as np
+        from scripts.measure_shared_passage_quality import final_foreground
+        from scripts.foreground_material_quality import has_rgb_paper_and_ink
+        source=np.full((70,160),255,np.uint8);cv2.rectangle(source,(20,20),(130,48),0,-1);cv2.putText(source,'hi',(45,42),cv2.FONT_HERSHEY_SIMPLEX,.7,255,2,cv2.LINE_AA)
+        actual=np.full((70,160,4),[248,249,246,0],np.uint8);actual[...,3]=255-source
+        shared,surfaces=final_foreground(actual)
+        self.assertEqual(surfaces,[]);self.assertFalse(has_rgb_paper_and_ink(actual,actual[...,3]>16))
+        self.assertTrue(shared[source<200].all())
+        self.assertFalse(shared[source==255].any())
+
+    def test_real_opaque_rgb_paper_ink_erasure_and_intrusion_stay_visible(self):
+        import numpy as np
+        from scripts.measure_shared_passage_quality import final_foreground
+        from scripts.foreground_material_quality import has_rgb_paper_and_ink
+        actual=np.full((70,100,4),255,np.uint8);actual[20:40,20:30,:3]=0;actual[55:58,80:83,:3]=0
+        shared,surfaces=final_foreground(actual)
+        self.assertEqual(len(surfaces),1);self.assertTrue(has_rgb_paper_and_ink(actual,actual[...,3]>16));self.assertEqual(int(shared.sum()),209)
+        actual[20:40,20:30,:3]=255
+        erased,_=final_foreground(actual);self.assertFalse(erased[20:40,20:30].any());self.assertEqual(int(erased.sum()),9)
+        actual[30:32,50:52,:3]=0
+        extra,_=final_foreground(actual);self.assertTrue(extra[30:32,50:52].all());self.assertEqual(int(extra.sum()),13)
+
+    def test_filling_chalk_button_letter_holes_is_still_glyph_damage(self):
+        import cv2,numpy as np
+        from scripts.glyph_shape_quality import glyph_shape_evidence
+        source=np.zeros((30,80),np.uint8);cv2.putText(source,'B',(20,24),cv2.FONT_HERSHEY_SIMPLEX,.8,255,2,cv2.LINE_AA)
+        expected=1-source.astype(np.float32)/255
+        self.assertTrue(glyph_shape_evidence(expected,expected)['passed'])
+        self.assertFalse(glyph_shape_evidence(expected,np.ones_like(expected))['passed'])
+
 if __name__=='__main__': unittest.main()

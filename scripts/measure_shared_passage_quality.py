@@ -18,6 +18,7 @@ from inspect_edb import parse_edb, extract_images
 from PIL import Image, ImageDraw, ImageChops, ImageStat
 import fitz
 from scripts.glyph_shape_quality import glyph_shape_evidence
+from scripts.foreground_material_quality import has_rgb_paper_and_ink
 
 
 def fraction(results):
@@ -86,7 +87,7 @@ def final_foreground(rgba):
         x,y,w,h,area=map(int,stats[component])
         component_mask=labels[y:y+h,x:x+w]==component
         opaque_fraction=float((rgba[y:y+h,x:x+w,3][component_mask]>=245).mean())
-        if w>=20 and h>=20 and area>=1000 and area/(w*h)>=.85 and opaque_fraction>=.85:
+        if w>=20 and h>=20 and area>=1000 and area/(w*h)>=.85 and opaque_fraction>=.85 and has_rgb_paper_and_ink(rgba[y:y+h,x:x+w],component_mask):
             local=visible[y:y+h,x:x+w]
             local[component_mask]=np.any(rgba[y:y+h,x:x+w,:3]<200,axis=2)[component_mask]
             surfaces.append([x,y,w,h,area])
@@ -668,7 +669,7 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
     if not preservation_known:incomplete_reasons.append('Final source component/seam evidence incomplete')
     # Runtime success/termination requires separate actual UI event traces.
     incomplete_reasons.append('External actual UI trials must establish task-complete and no-crash-or-oom; this observer does not infer runtime success from files.')
-    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-ACTUAL-FINAL-native-grid anchors NCC>=0.8;translations agree<=1px; candidate pixels NEVER resampled to preview/raw grid; unsupported scale remains incomplete','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'internal_line_identity':'continuous8bit sourceinverseRGB versus actualalpha/opaqueRGB; constanttemplates rejected; localOtsu glyphshape NCC>=0.8 plus eachcomponent bidirectional>=90% within1px, source-onlyglyphbounds padded1px; periodic aliases require same-site independent sourceglyphshape','internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
+    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-ACTUAL-FINAL-native-grid anchors NCC>=0.8;translations agree<=1px; candidate pixels NEVER resampled to preview/raw grid; unsupported scale remains incomplete','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'internal_line_identity':'continuous8bit sourceinverseRGB versus actualalpha/opaqueRGB; constanttemplates rejected; localOtsu glyphshape NCC>=0.8 plus eachcomponent bidirectional>=90% within1px, source-onlyglyphbounds padded1px; periodic aliases require same-site independent sourceglyphshape','internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85,'opaque_rgb_material_evidence':'same alpha component contains actual RGBink<200 AND paperallRGB>=245; uniform chalkRGB preservesalpha semantics'},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
             'hard_checks':hard_checks,'hard_failures':[x['id'] for x in hard_checks if not x['passed']],
             'incomplete_reasons':incomplete_reasons,
             'raw_measures':{'source_line_membership':line_details['membership'],'source_line_geometric_recall':fraction(lines),'excluded_start_intrusion_count':len(details['excluded_intrusions'])},
