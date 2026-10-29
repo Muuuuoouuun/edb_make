@@ -5557,6 +5557,14 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
         if not board_render_path.exists():
             board_render_path = crop_path
         bbox = problem.get("bbox") or {}
+        metadata = problem.get("metadata") if isinstance(problem.get("metadata"), dict) else {}
+        shared_passage_range = _lazy_call(
+            "build_problem_board_edb", "_validated_shared_passage_range",
+            problem.get("passageRole") or problem.get("passage_role")
+            or metadata.get("passageRole") or metadata.get("passage_role"),
+            problem.get("passageRange") or problem.get("passage_range")
+            or metadata.get("passageRange") or metadata.get("passage_range"),
+        )
         entries.append(
             ProblemEntry(
                 problem_id=str(problem.get("id") or ""),
@@ -5618,6 +5626,8 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                 ],
                 preserve_media_mode=_media_mode(problem),
                 source_segments=_clone_jsonish(problem.get("sourceSegments") or problem.get("source_segments") or []),
+                passage_role="passage_fragment" if shared_passage_range else None,
+                passage_range=shared_passage_range,
             )
         )
     return entries
@@ -11142,6 +11152,23 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 page_copy["problemIds"] = [pid for pid in page.get("problemIds", []) if pid in problem_ids_remaining]
                 preserved_pages.append(page_copy)
             new_session["pages"] = preserved_pages
+            # This rebuild has no PreparedPages: its generated zero is not
+            # the original document page count. Keep proven provenance even
+            # when one original page produced several page tiles.
+            prior_page_count = session.get("source_page_count")
+            if (isinstance(prior_page_count, int) and not isinstance(prior_page_count, bool)
+                    and prior_page_count > 0):
+                new_session["source_page_count"] = prior_page_count
+            elif (isinstance(prior_page_count, str) and prior_page_count.strip().isdigit()
+                    and int(prior_page_count.strip()) > 0):
+                new_session["source_page_count"] = int(prior_page_count.strip())
+            else:
+                source_page_ids = {
+                    str(page.get("pageTileParentPageId") or page.get("page_tile_parent_page_id")
+                        or page.get("id") or "").strip()
+                    for page in preserved_pages
+                } - {""}
+                new_session["source_page_count"] = len(source_page_ids)
         # propagate per-problem bbox/riskFlags from the prior session — they
         # are derived from segmentation, which publish does not re-run.
         prior_problems_by_id = {
@@ -11185,6 +11212,29 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if scale_ratio is not None:
                     problem["placementScaleRatio"] = scale_ratio
         _annotate_session_with_edb_part_metadata(new_session, edb_parts)
+        # build_ui_session runs without PageModels during publish. Rebuild
+        # aggregates only after the retained units have their passage metadata;
+        # copying the old groups would retain groups removed by this publish.
+        publish_problems = [problem for problem in new_session.get("problems", []) if isinstance(problem, dict)]
+        passage_groups = _lazy_call("build_problem_board_edb", "_session_passage_groups", publish_problems)
+        if str(new_session.get("contentTarget") or new_session.get("content_target") or "all") == "shared-passages":
+            passage_groups = [{**group, "missingChildProblemNumbers": [], "missingChildProblemCount": 0}
+                              for group in passage_groups]
+        passage_review_items = _lazy_call("build_problem_board_edb", "_session_passage_review_items",
+                                          publish_problems, passage_groups)
+        for snake, camel, value in (
+            ("passage_groups", "passageGroups", passage_groups),
+            ("passage_group_count", "passageGroupCount", len(passage_groups)),
+            ("passage_problem_count", "passageProblemCount", sum(int(group.get("problemCount") or 0) for group in passage_groups)),
+            ("cross_page_passage_group_count", "crossPagePassageGroupCount",
+             sum(bool(group.get("continuesAcrossPages")) for group in passage_groups)),
+            ("passage_review_items", "passageReviewItems", passage_review_items),
+            ("passage_review_item_count", "passageReviewItemCount", len(passage_review_items)),
+            ("cross_page_passage_review_item_count", "crossPagePassageReviewItemCount",
+             sum(bool(item.get("continuesAcrossPages")) for item in passage_review_items)),
+        ):
+            new_session[snake] = value
+            new_session[camel] = value
         _refresh_session_problem_counts(new_session)
 
         source_paths_for_handoff = [

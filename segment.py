@@ -2040,6 +2040,28 @@ def _segment_pdf_example_markers(
     }
 
 
+def _passage_fragment_has_visible_body(image: Image.Image, box: Box, *, body_top: float) -> bool:
+    """Reject an instruction strip while retaining text, raster and vector bodies."""
+    left = max(0, int(box.left) + 3)
+    right = min(image.width, int(box.right) - 3)
+    top = max(int(box.top), int(body_top) + 2)
+    bottom = min(image.height, int(box.bottom))
+    if right <= left or bottom - top < 4:
+        return False
+    with image.crop((left, top, right, bottom)) as region:
+        gray = ImageOps.grayscale(region)
+        if np is not None:
+            ink = np.asarray(gray) < 245
+            # A page/empty-box border alone does not constitute shared material.
+            ink[:, np.count_nonzero(ink, axis=0) >= ink.shape[0] * 0.95] = False
+            ink[np.count_nonzero(ink, axis=1) >= ink.shape[1] * 0.95, :] = False
+            ys, _xs = np.where(ink)
+            return ys.size >= 24 and int(ys.max() - ys.min()) >= 3 if ys.size else False
+        mask = gray.point(lambda value: 255 if value < 245 else 0)
+        bounds = mask.getbbox()
+        return bounds is not None and bounds[3] - bounds[1] >= 4 and sum(mask.histogram()[1:]) >= 24
+
+
 def _build_pdf_passage_range_blocks(
     image: Image.Image,
     page_id: str,
@@ -2065,6 +2087,7 @@ def _build_pdf_passage_range_blocks(
         text = str(line.get("text") or "").strip()
         range_header = parse_shared_passage_range_header(text)
         header_box = _marker_bbox(line)
+        header_bottom = header_box.bottom if header_box is not None else 0.0
         raw_candidate = parse_passage_range_candidate(text)
         if range_header is None and raw_candidate is not None and header_box is not None:
             header_center_x = (header_box.left + header_box.right) / 2.0
@@ -2100,6 +2123,7 @@ def _build_pdf_passage_range_blocks(
                 range_header = parse_shared_passage_range_header(joined_text)
                 if range_header is not None:
                     text = joined_text
+                    header_bottom = max(header_bottom, following_box.bottom)
                     break
                 previous_box = following_box
                 if same_column_line_count >= 2:
@@ -2189,6 +2213,7 @@ def _build_pdf_passage_range_blocks(
             0,
         )
         range_blocks_start = len(blocks)
+        range_has_visible_body = False
         stopped_at_problem = False
         for fragment_index, (
             fragment_column_index,
@@ -2350,6 +2375,9 @@ def _build_pdf_passage_range_blocks(
                 for candidate_box in fragment_text_boxes
             ]
             text_bounds_score = min(text_bounds_scores, default=1.0)
+            fragment_has_visible_body = _passage_fragment_has_visible_body(
+                image, box, body_top=header_bottom if fragment_index == 1 else box.top,
+            )
             metadata = _enrich_block_segmentation_metadata(
                 {
                     "segmenter": "pdf-passage-range",
@@ -2372,6 +2400,7 @@ def _build_pdf_passage_range_blocks(
                         for fragment_text in fragment_texts
                     ),
                     "passage_text_bounds_score": text_bounds_score,
+                    "passage_has_visible_body": fragment_has_visible_body,
                     "passage_center_divider_x": passage_divider_x,
                     "passage_center_divider_exclusion_px": (
                         PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX
@@ -2389,6 +2418,7 @@ def _build_pdf_passage_range_blocks(
                 page_width=image.width,
                 page_height=image.height,
             )
+            range_has_visible_body = range_has_visible_body or fragment_has_visible_body
             blocks.append(
                 ContentBlock(
                     block_id=f"{page_id}-block-{start_index + len(blocks):03d}",
@@ -2403,6 +2433,10 @@ def _build_pdf_passage_range_blocks(
             if stopped_at_problem:
                 break
 
+        if stopped_at_problem and not range_has_visible_body:
+            # A range directive immediately followed by its child questions,
+            # with no visible common body, is not an extractable passage.
+            del blocks[range_blocks_start:]
         range_fragment_count = len(blocks) - range_blocks_start
         range_blocks = blocks[range_blocks_start:]
         total_text_line_count = sum(

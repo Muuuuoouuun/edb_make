@@ -174,8 +174,9 @@ class TestEdbPublishFlow(unittest.TestCase):
             lock = threading.Lock()
             calls = 0
 
-            def fake_cutout(crop, *, chalk_color=None, text_priority=False):
+            def fake_cutout(crop, *, chalk_color=None, text_priority=False, preserve_page_content=False):
                 nonlocal calls
+                self.assertIs(preserve_page_content, False)
                 with lock:
                     calls += 1
                     call_index = calls
