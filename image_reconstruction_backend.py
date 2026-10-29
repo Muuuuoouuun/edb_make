@@ -844,6 +844,7 @@ def clean_problem_image_transparency(
     *,
     transparent_background: bool = True,
     remove_corner_page_artifacts: bool = True,
+    paper_reference_image: Any | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Return an RGBA image with uniform page/board backgrounds converted to alpha.
 
@@ -851,6 +852,9 @@ def clean_problem_image_transparency(
     output even when prompted for transparency. Border sampling lets us remove
     whichever flat background the model produced while preserving chalk/text
     strokes and graph lines.
+
+    An aligned original ``paper_reference_image`` distinguishes real white
+    gaps from halos introduced by sharpening. Other sizes use the fallback.
     """
     try:
         from PIL import Image
@@ -877,6 +881,7 @@ def clean_problem_image_transparency(
                 background_color=background_color,
                 background_luminance=background_luminance,
                 background_kind=background_kind,
+                paper_reference_image=paper_reference_image,
             )
             alpha_backend = "numpy"
         else:
@@ -927,6 +932,7 @@ def _remove_background_with_numpy(
     background_color: tuple[int, int, int],
     background_luminance: float,
     background_kind: str,
+    paper_reference_image: Any | None = None,
 ) -> tuple[Any, int, int]:
     if np is None:
         raise RuntimeError("numpy is required for _remove_background_with_numpy")
@@ -985,7 +991,10 @@ def _remove_background_with_numpy(
         faded = np.clip(((255.0 - luminance) / 37.0) * 255.0, 0.0, 255.0)
         alpha[fade_bright] = np.minimum(original_alpha[fade_bright], np.rint(faded[fade_bright]))
 
-        alpha = _fade_flat_midtone_fills(alpha, luminance, visible & ~remove & ~remove_bright)
+        alpha = _fade_flat_midtone_fills(
+            alpha, luminance, visible & ~remove & ~remove_bright,
+            paper_reference_image=paper_reference_image,
+        )
 
     next_alpha = np.clip(alpha, 0.0, 255.0).astype(np.uint8)
     out = arr.copy()
@@ -1055,7 +1064,7 @@ def _label_mask_components(mask: Any) -> tuple[Any, int]:
             run_id = len(parent)
             parent.append(run_id)
             for prev_start, prev_end, prev_id in previous_runs:
-                if prev_end >= start - 1 and prev_start <= end:  # 8-connected overlap
+                if prev_end >= start and prev_start <= end:  # half-open, 8-connected overlap
                     root_a = find(run_id)
                     root_b = find(prev_id)
                     if root_a != root_b:
@@ -1095,10 +1104,12 @@ def _component_encloses_ink(component: Any, luminance_patch: Any, fill_luminance
     return int(np.count_nonzero(ink & left & right & up & down))
 
 
-def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any:
+def _fade_flat_midtone_fills(
+    alpha: Any, luminance: Any, candidates: Any, *, paper_reference_image: Any | None = None,
+) -> Any:
     """Fade shaded cells and tinted boxes instead of turning them solid white.
 
-    Any pixel darker than ~210 keeps full alpha on a light page, so a gray
+    Initial light-page cleanup keeps darker tones opaque, so a gray
     table header or a shaded card becomes a solid chalk block and the dark
     text printed on it turns the same white and disappears. Flat mid-gray
     areas are gathered (a uniform seed neighbourhood grown over the same
@@ -1141,6 +1152,20 @@ def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any
     if count == 0:
         return alpha
     keep = np.zeros(region.shape, dtype=bool)
+    faded = alpha.copy()
+
+    def apply_tone(mask: Any, *, top: int, bottom: int, left: int, right: int, fill_value: float) -> None:
+        # Preserve the established faint fill level, with one continuous
+        # contrast ramp from that fill to opaque dark ink. A plain inversion
+        # makes pale material backgrounds newly visible as extra chalk.
+        fill_alpha = float(255.0 * np.clip(
+            (FLAT_FILL_MAX_LUMINANCE - fill_value)
+            / (FLAT_FILL_MAX_LUMINANCE - FLAT_FILL_MIN_LUMINANCE), 0.0, 1.0,
+        ) ** FLAT_FILL_FADE_EXPONENT)
+        values = np.clip(255.0 - (255.0 - fill_alpha) * luminance[top:bottom, left:right]
+                         / max(fill_value, 1.0), 0.0, 255.0)
+        patch = faded[top:bottom, left:right]
+        patch[mask] = np.minimum(alpha[top:bottom, left:right][mask], values[mask])
     ys, xs = np.nonzero(region)
     order = np.argsort(labels[ys, xs], kind="stable")
     ys, xs = ys[order], xs[order]
@@ -1168,64 +1193,64 @@ def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any
             if enclosed < FLAT_FILL_MIN_ENCLOSED_INK_PIXELS:
                 continue
         keep_patch = keep[top:bottom, left:right]
-        keep_patch |= component
-        # A glyph's counters have the same shade as its surrounding fill but
-        # are separated from that fill by the dark strokes (the two holes of
-        # B, for example). Small counter islands cannot seed a flat component
-        # themselves. Leaving them opaque turns them into the same chalk tone
-        # as the strokes and closes the glyph. Include only matching fill
-        # tones enclosed by an already accepted component on all four sides.
+        if (paper_reference_image is not None
+                and paper_reference_image.size == (luminance.shape[1], luminance.shape[0])):
+            # Original paper separates a bubble's gray lettering from its
+            # surrounding shaded surface, even with a one-pixel white gap.
+            # A true counter and the enclosing dark glyph remain connected
+            # to the original non-paper surface. Use that source topology,
+            # never a white halo introduced by sharpening, to select pixels.
+            reference = np.asarray(paper_reference_image.crop((left, top, right, bottom)).convert("RGB"))
+            reference_labels, reference_count = _label_mask_components(reference.min(axis=2) < 248)
+            attached = np.zeros(reference_count + 1, dtype=bool)
+            attached[reference_labels[component]] = True
+            attached[0] = False
+            material = attached[reference_labels]
+            keep_patch |= material
+            apply_tone(material, top=top, bottom=bottom, left=left, right=right, fill_value=fill_value)
+            del reference, reference_labels, attached
+            continue
+        # The bounded seed growth can miss a narrow strip of the same fill
+        # between a text baseline and a table rule. Complete only connected
+        # matching-tone background, without crossing dark ink or white gaps.
+        # Isolated gray letters inside white bubbles do not connect to it.
+        tone_labels, tone_count = _label_mask_components(
+            candidates[top:bottom, left:right]
+            & (np.abs(patch_luminance - fill_value) <= FLAT_FILL_GROW_LUMINANCE_SLACK)
+        )
+        linked_tones = np.zeros(tone_count + 1, dtype=bool)
+        linked_tones[tone_labels[component]] = True
+        linked_tones[0] = False
+        component |= linked_tones[tone_labels]
+        del tone_labels, linked_tones
+        # Treat the background, antialiased glyph edges and counters as one
+        # tonal surface. Fading only flat pixels leaves the darker edge ramp
+        # opaque, which fattens lettering and creates inverted rings.
         left_fill = np.maximum.accumulate(component, axis=1)
         right_fill = np.maximum.accumulate(component[:, ::-1], axis=1)[:, ::-1]
         upper_fill = np.maximum.accumulate(component, axis=0)
         lower_fill = np.maximum.accumulate(component[::-1, :], axis=0)[::-1, :]
-        lower_tone = fill_value - FLAT_FILL_GROW_LUMINANCE_SLACK
-        islands = (
-            left_fill & right_fill & upper_fill & lower_fill
-            & ~component & (patch_luminance >= lower_tone)
-        )
-        island_labels, island_count = _label_mask_components(islands)
-        if island_count:
-            # A gray glyph inside a white bubble is not a counter: its bright
-            # surroundings connect it to the parent fill. Only islands whose
-            # entire immediate boundary is darker qualify. Include sharpened
-            # bright pixels when finding an island, so an unsharp-mask halo
-            # cannot split a legitimate counter into several unrelated parts.
-            invalid = np.zeros(island_count + 1, dtype=bool)
-            island_sizes = np.bincount(island_labels.ravel(), minlength=island_count + 1)
-            island_sums = np.bincount(island_labels.ravel(), weights=patch_luminance.ravel(), minlength=island_count + 1)
-            island_means = island_sums / np.maximum(island_sizes, 1)
-            invalid |= np.abs(island_means - fill_value) > FLAT_FILL_GROW_LUMINANCE_SLACK
-            # A white-filled bubble can itself have a dark outline. Its gray
-            # lettering must not be mistaken for a counter of that outline:
-            # reject islands containing paper already made transparent by the
-            # background remover. Sharpened gray counter edges remain visible.
-            invalid[island_labels[alpha[top:bottom, left:right] <= 0.0]] = True
-            for edge in (island_labels[0], island_labels[-1], island_labels[:, 0], island_labels[:, -1]):
-                invalid[edge] = True
-            for current, neighbor, neighbor_luma in (
-                (island_labels[1:, :], island_labels[:-1, :], patch_luminance[:-1, :]),
-                (island_labels[:-1, :], island_labels[1:, :], patch_luminance[1:, :]),
-                (island_labels[:, 1:], island_labels[:, :-1], patch_luminance[:, :-1]),
-                (island_labels[:, :-1], island_labels[:, 1:], patch_luminance[:, 1:]),
-            ):
-                bright_boundary = (current > 0) & (neighbor == 0) & (neighbor_luma >= lower_tone)
-                invalid[current[bright_boundary]] = True
-            invalid[0] = True
-            keep_patch |= (
-                ~invalid[island_labels]
-                & candidates[top:bottom, left:right]
-                & (patch_luminance < FLAT_FILL_MAX_LUMINANCE)
-            )
+        interior = left_fill & right_fill & upper_fill & lower_fill
+        holes, hole_count = _label_mask_components(interior & ~component)
+        protected = np.zeros(hole_count + 1, dtype=bool)
+        if hole_count:
+            # Without an aligned original, a single bright halo pixel is
+            # ambiguous. Retain the conservative paper-area fallback.
+            paper = alpha[top:bottom, left:right] <= 0.0
+            paper_core = np.zeros(paper.shape, dtype=bool)
+            if min(paper.shape) >= 3:
+                core = paper[1:-1, 1:-1].copy()
+                for dy in range(3):
+                    for dx in range(3):
+                        core &= paper[dy:dy + core.shape[0], dx:dx + core.shape[1]]
+                paper_core[1:-1, 1:-1] = core
+            protected[holes[paper_core]] = True
+            protected[0] = False
+        material = (component | interior) & ~protected[holes]
+        keep_patch |= material
+        apply_tone(material, top=top, bottom=bottom, left=left, right=right, fill_value=fill_value)
     if not keep.any():
         return alpha
-    factor = np.clip(
-        (FLAT_FILL_MAX_LUMINANCE - luminance) / (FLAT_FILL_MAX_LUMINANCE - FLAT_FILL_MIN_LUMINANCE),
-        0.0,
-        1.0,
-    ) ** FLAT_FILL_FADE_EXPONENT
-    faded = alpha.copy()
-    faded[keep] = alpha[keep] * factor[keep]
     return faded
 
 

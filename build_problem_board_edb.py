@@ -1620,6 +1620,7 @@ def _extract_problem_cutout(
     chalk_color: tuple[int, int, int] | None = None,
     text_priority: bool = False,
     preserve_page_content: bool = False,
+    paper_reference_image: Image.Image | None = None,
 ) -> Image.Image:
     """Recolor problem ink as chalk on a transparent canvas.
 
@@ -1642,6 +1643,7 @@ def _extract_problem_cutout(
         image,
         transparent_background=not has_existing_transparency,
         remove_corner_page_artifacts=not preserve_page_content,
+        paper_reference_image=paper_reference_image,
     )
     if "A" in cleaned.getbands():
         alpha_mask = cleaned.getchannel("A")
@@ -1873,6 +1875,7 @@ def _load_board_export_image(
             chalk_color=chalk_color,
             text_priority=True,
             preserve_page_content=preserve_page_content,
+            paper_reference_image=crop_image,
         )
         if target_size is not None and cutout.size != target_size:
             cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
@@ -11548,11 +11551,14 @@ def _cached_chalk_cutout(
     module's code. Any cache failure falls back to building the cutout.
     """
     def build() -> Image.Image:
+        # This original paper reference is the same crop whose bytes are
+        # hashed below; no external reference can bypass the cache identity.
         return _extract_problem_cutout(
             _enhance_problem_crop(crop_image, text_priority=text_priority),
             chalk_color=chalk_color,
             text_priority=text_priority,
             preserve_page_content=preserve_page_content,
+            paper_reference_image=crop_image,
         )
 
     try:
