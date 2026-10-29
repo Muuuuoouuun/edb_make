@@ -2233,6 +2233,13 @@ def _build_pdf_passage_range_blocks(
                 marker_box = _marker_bbox(marker)
                 if marker_box is None:
                     continue
+                marker_number = marker.get("number")
+                if isinstance(marker_number, int) and marker_number < start:
+                    # Numbered sections inside the printed passage (reports,
+                    # statutes, outlines) cannot be this range's child questions.
+                    # Keep >=start boundaries, including a following question
+                    # beyond the range, so missing markers never swallow it.
+                    continue
                 if fragment_column_index == column_index and marker_box.top <= header_box.top:
                     continue
                 marker_boundaries.append(marker_box)
