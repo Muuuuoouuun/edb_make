@@ -122,7 +122,7 @@ def geometric_unit_order(units, box_key):
     return [u['id'] for band in bands for u in sorted(band['units'],key=lambda u:(u[box_key][0],u['id']))]
 
 
-def observe_required_lines(fragment, page, original, visible, dx, dy, reference_visible=None):
+def observe_required_lines(fragment, page, original, visible, dx, dy, reference_visible=None, final_strength=None, reference_strength=None):
     """Find each source-line identity independently in actual final foreground.
 
     Search final Y across the whole exported group, not at declared source Y.
@@ -132,8 +132,8 @@ def observe_required_lines(fragment, page, original, visible, dx, dy, reference_
     """
     import numpy as np
     import cv2
-    target=cv2.GaussianBlur(visible.astype(np.float32),(3,3),0)
-    reference_target=cv2.GaussianBlur(reference_visible.astype(np.float32),(3,3),0) if reference_visible is not None else None
+    target=cv2.GaussianBlur(np.rint(255*(final_strength if final_strength is not None else visible.astype(np.float32))).astype(np.uint8),(3,3),0)
+    reference_target=cv2.GaussianBlur(np.rint(255*(reference_strength if reference_strength is not None else reference_visible.astype(np.float32))).astype(np.uint8),(3,3),0) if reference_visible is not None else None
     final_supported=cv2.dilate(visible.astype(np.uint8),np.ones((3,3),np.uint8)).astype(bool)
     reference_supported=cv2.dilate(reference_visible.astype(np.uint8),np.ones((3,3),np.uint8)).astype(bool) if reference_visible is not None else None
     units=[];aliases={}
@@ -159,7 +159,14 @@ def observe_required_lines(fragment, page, original, visible, dx, dy, reference_
             cx,cy,cw,ch,_=map(int,stats[ci]);m=lab[cy:cy+ch,cx:cx+cw]==ci
             if predicted_retained[cy:cy+ch,cx:cx+cw][m].mean()<.90:local_identity=False;break
         unit['predicted_component_identity_passed']=local_identity
-        pattern=cv2.GaussianBlur(pattern,(3,3),0)
+        # Identity retains source gray tone: a gray PDF glyph cell must not
+        # collapse to an all-one binary template (NCC undefined/false-perfect).
+        identity_pattern=1-original[y:t,x:r].min(axis=2).astype(np.float32)/255
+        if float(identity_pattern.std())==0:
+            unit['identity_incomplete']='constant-source-grayscale-template';continue
+        pattern=cv2.GaussianBlur(np.rint(255*identity_pattern).astype(np.uint8),(3,3),0)
+        if float(pattern.std())==0:
+            unit['identity_incomplete']='constant-blurred-source-template';continue
         left=0;right=visible.shape[1]
         search=target[:,left:right]
         if search.shape[1]<pattern.shape[1]:continue
@@ -181,6 +188,16 @@ def observe_required_lines(fragment, page, original, visible, dx, dy, reference_
                 independent_support=reference_supported[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]]
                 candidate['source_ink_support']=float(independent_support[actual_ink].mean()) if actual_ink.any() else 0.
                 candidate['added_ink_occurrence']=candidate['source_ink_support']<.90
+                if reference_strength is not None:
+                    # A gray figure background cannot certify an added glyph.
+                    # Require this actual glyph identity in the independent
+                    # source tones at the same physical site (1px tolerance).
+                    sx,sy=max(0,ox-1),max(0,oy-1)
+                    sr,st=min(reference_target.shape[1],ox+pattern.shape[1]+1),min(reference_target.shape[0],oy+pattern.shape[0]+1)
+                    local_reference=reference_target[sy:st,sx:sr]
+                    _,identity_score,_,_=cv2.minMaxLoc(cv2.matchTemplate(local_reference,pattern,cv2.TM_CCOEFF_NORMED))
+                    candidate['source_identity_ncc']=identity_score
+                    candidate['added_ink_occurrence']=candidate['added_ink_occurrence'] or identity_score<.80
             occurrences.append(candidate)
         # Match the strongest identity. Only raster-identical NCC ties (1e-4)
         # use source proximity; similar different text cannot win on proximity.
@@ -314,14 +331,20 @@ def measure_final_pixels(gt, problems, pages, source, final_paths, output_dir, s
         if not raw_path.is_file() or not final_path:
             incomplete.append(pid+':missing-raw-or-final');continue
         raw=np.asarray(Image.open(raw_path).convert('RGB')); raw_gray=cv2.cvtColor(raw,cv2.COLOR_RGB2GRAY)
-        reference_path=Path(unquote(urlparse(problem.get('boardRenderPath',str(raw_path))).path))
-        if not reference_path.is_file():reference_path=raw_path
+        # The actual published primary may use the raw grid while its preview
+        # trims transparent borders. Never resample candidate pixels to a preview.
+        reference_path=Path(final_path)
         reference_cutout=Image.open(reference_path).convert('RGBA')
         reference_foreground,_=final_foreground(np.asarray(reference_cutout))
         reference_target=cv2.GaussianBlur(reference_foreground.astype(np.float32),(3,3),0)
-        actual=Image.open(final_path).convert('RGBA').resize(reference_cutout.size,Image.Resampling.NEAREST)
-        visible,opaque_surfaces=final_foreground(np.asarray(actual)); dilated=cv2.dilate(visible.astype(np.uint8),kernel).astype(bool)
-        allowed=np.zeros(visible.shape,np.uint8); final_ignore=np.zeros(visible.shape,bool); mapped_fragments=[]; projected_order=[]
+        actual=Image.open(final_path).convert('RGBA')
+        actual_array=np.asarray(actual)
+        visible,opaque_surfaces=final_foreground(actual_array)
+        final_strength=actual_array[...,3].astype(np.float32)/255
+        for sx,sy,sw,sh,_ in opaque_surfaces:
+            final_strength[sy:sy+sh,sx:sx+sw]=1-actual_array[sy:sy+sh,sx:sx+sw,:3].min(axis=2).astype(np.float32)/255
+        dilated=cv2.dilate(visible.astype(np.uint8),kernel).astype(bool)
+        allowed=np.zeros(visible.shape,np.uint8); allowed_strength=np.zeros(visible.shape,np.float32); final_ignore=np.zeros(visible.shape,bool); mapped_fragments=[]; projected_order=[]
         for fragment in sorted(group['fragments'],key=lambda f:f['reading_order']):
             pageid=next(key for key in pages if int(key.rsplit('-',1)[1])==fragment['page']); page=pages[pageid]
             if pageid not in source_pages:
@@ -344,7 +367,16 @@ def measure_final_pixels(gt, problems, pages, source, final_paths, output_dir, s
                 anchors.append({'score':score,'dx':location[0]-x,'dy':location[1]-y,'source_box':[x,y,r,t]})
                 cutout_pattern=cv2.GaussianBlur((patch<200).astype(np.float32),(3,3),0)
                 if cutout_pattern.shape[0]<=reference_target.shape[0] and cutout_pattern.shape[1]<=reference_target.shape[1]:
-                    cutout_scores=cv2.matchTemplate(reference_target,cutout_pattern,cv2.TM_CCOEFF_NORMED);_,cutout_score,_,cutout_location=cv2.minMaxLoc(cutout_scores)
+                    cutout_scores=cv2.matchTemplate(reference_target,cutout_pattern,cv2.TM_CCOEFF_NORMED)
+                    _,cutout_score,_,cutout_location=cv2.minMaxLoc(cutout_scores)
+                    # Repeated source text may have an exact added copy. Select
+                    # the nearest fixed-threshold local peak to the independently
+                    # established raw location; all three final translations must
+                    # still agree and every required source component is checked.
+                    py,px=np.where((cutout_scores>=.80)&(cutout_scores>=cv2.dilate(cutout_scores,np.ones((3,3),np.uint8))))
+                    if len(px):
+                        nearest=int(np.argmin((px-location[0])**2+(py-location[1])**2))
+                        cutout_location=(int(px[nearest]),int(py[nearest]));cutout_score=float(cutout_scores[cutout_location[1],cutout_location[0]])
                     cutout_anchors.append({'score':cutout_score,'dx':cutout_location[0]-x,'dy':cutout_location[1]-y,'source_box':[x,y,r,t]})
             valid=len(anchors)>=min(3,len(usable)) and bool(anchors) and all(a['score']>=.95 for a in anchors)
             if valid:
@@ -368,6 +400,7 @@ def measure_final_pixels(gt, problems, pages, source, final_paths, output_dir, s
             if rx>lx and by>ty:
                 retained[ty:by,lx:rx]=dilated[final_y+ty:final_y+by,final_x+lx:final_x+rx]
                 allowed[final_y+ty:final_y+by,final_x+lx:final_x+rx] |= source_mask[ty:by,lx:rx].astype(np.uint8)
+                allowed_strength[final_y+ty:final_y+by,final_x+lx:final_x+rx]=1-original[y0+ty:y0+by,x0+lx:x0+rx].min(axis=2).astype(np.float32)/255
                 final_ignore[final_y+ty:final_y+by,final_x+lx:final_x+rx] |= optional_masks[pageid][y0+ty:y0+by,x0+lx:x0+rx]
             # A verified translation is valid over this source segment, including
             # optional guide endpoints just outside conservative GT content boxes.
@@ -410,7 +443,7 @@ def measure_final_pixels(gt, problems, pages, source, final_paths, output_dir, s
             if registration:
                 pageid=next(key for key in pages if int(key.rsplit('-',1)[1])==fragment['page']);page=pages[pageid]
                 line_original=source_pages[pageid].copy();line_original[optional_masks[pageid]]=255
-                registration['line_units']=observe_required_lines(fragment,page,line_original,visible & ~final_ignore,registration['dx'],registration['dy'],allowed.astype(bool))
+                registration['line_units']=observe_required_lines(fragment,page,line_original,visible & ~final_ignore,registration['dx'],registration['dy'],allowed.astype(bool),np.where(final_ignore,0,final_strength),np.where(final_ignore,0,allowed_strength))
         if projected_order:
             rows.append({'id':pid+':actual-fragment-order','registration_valid':True,'order_passed':reading_order_valid(projected_order),'positions':projected_order})
         # Precision is evaluated only if every fragment was registered, otherwise null.
@@ -613,7 +646,7 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
                  {'id':'no-duplicate-instance','passed':all(ok for _,ok in uniqueness) and not uniqueness_failed},
                  {'id':'input-unchanged','passed':source_hash==gt['source']['sha256'] and input_unchanged}]
     if preservation_known:
-        hard_checks.append({'id':'no-meaningful-content-loss','passed':not pixel_metrics['recall']['failed_ids'] and not seam_metrics['failed_ids']})
+        hard_checks.append({'id':'no-meaningful-content-loss','passed':not pixel_metrics['recall']['failed_ids'] and not seam_metrics['failed_ids'] and not membership_failed})
     incomplete_reasons=list(pixel_details.get('incomplete',[]))
     for axis,components in metrics.items():
         for name,value in components.items():
@@ -621,7 +654,7 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
     if not preservation_known:incomplete_reasons.append('Final source component/seam evidence incomplete')
     # Runtime success/termination requires separate actual UI event traces.
     incomplete_reasons.append('External actual UI trials must establish task-complete and no-crash-or-oom; this observer does not infer runtime success from files.')
-    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-cutout-native-grid anchors NCC>=0.8;translations agree<=1px; final maps only by known encoding scale to cutout grid, never raw dimension ratio','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
+    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-ACTUAL-FINAL-native-grid anchors NCC>=0.8;translations agree<=1px; candidate pixels NEVER resampled to preview/raw grid; unsupported scale remains incomplete','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'internal_line_identity':'continuous sourceinverseRGB versus actualalpha/opaqueRGB; constanttemplates rejected; explicit grayglyph shape remains required','internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
             'hard_checks':hard_checks,'hard_failures':[x['id'] for x in hard_checks if not x['passed']],
             'incomplete_reasons':incomplete_reasons,
             'raw_measures':{'source_line_membership':line_details['membership'],'source_line_geometric_recall':fraction(lines),'excluded_start_intrusion_count':len(details['excluded_intrusions'])},

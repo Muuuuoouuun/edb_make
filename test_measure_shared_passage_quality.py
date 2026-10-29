@@ -146,13 +146,11 @@ class InternalLineOrderTests(unittest.TestCase):
             gt={'groups':[{'id':'g1','range':[1,2],'fragments':[fragment]}]}
             metrics,_,details=measure_final_pixels(gt,[{'id':'p1','passageRange':{'start':1,'end':2},'imagePath':str(root/'raw.png')}],{'source-page-001':{'metadata':{'dpi':72}}},source,{'p1':root/'final.png'},root,{'p1'})
             joining,order=content_joining_metrics(gt,details['registrations'])
-            self.assertEqual(details['incomplete'],[])
-            self.assertEqual(order['membership']['numerator'],3) # all identities remain, at wrong positions
-            self.assertEqual(joining['edge_recall']['denominator'],2) # single fragment has internal edges
-            self.assertLess(joining['edge_recall']['numerator'],2)
-            self.assertFalse(order['orders'][0]['passed'])
-            self.assertEqual(order['orders'][0]['actual'],['f1:line-2','f1:line-1','f1:line-3'])
-            self.assertLess(metrics['recall']['numerator'],metrics['recall']['denominator'])
+            # Three actual-final anchors disagree after a swap. This is an
+            # explicit unproven mapping, never a perfect preservation claim.
+            self.assertEqual(details['incomplete'],['f1:registration-unproven'])
+            self.assertIsNone(metrics['recall'])
+            self.assertFalse(details['registrations'][0]['registration_valid'])
             # A copied line at a new physical location must fail uniqueness even
             # though every original line and its relative order remain intact.
             duplicate=raw.convert('RGBA');duplicate.paste(upper,(0,125));duplicate.save(root/'duplicate.png')
@@ -233,11 +231,72 @@ class NativeCutoutRegistrationTests(unittest.TestCase):
             self.assertEqual(row['reference_cutout_size'],[290,194])
             self.assertEqual(metrics['recall']['numerator'],metrics['recall']['denominator'])
             self.assertEqual(metrics['precision']['numerator'],metrics['precision']['denominator'])
+            # V1 publishes the native raw grid even when the preview is trimmed.
+            # Register the actual native primary, preserving every source pixel.
+            raw.convert('RGBA').save(root/'native.png')
+            native,_,native_details=measure_final_pixels(gt,problems,{'source-page-001':{'metadata':{'dpi':72}}},source,{'p1':root/'native.png'},root,{'p1'})
+            self.assertEqual(native_details['incomplete'],[])
+            self.assertEqual((native_details['registrations'][0]['dx'],native_details['registrations'][0]['dy']),(0,0))
+            self.assertEqual(native_details['registrations'][0]['reference_cutout_size'],[300,200])
+            self.assertEqual(native['recall']['numerator'],native['recall']['denominator'])
             # The same explicitly optional source decoration may be absent too.
             removed=cutout.copy();ImageDraw.Draw(removed).rectangle((274,10,276,173),fill='white');removed.save(root/'removed.png')
             absent,_,absent_details=measure_final_pixels(gt,problems,{'source-page-001':{'metadata':{'dpi':72}}},source,{'p1':root/'removed.png'},root,{'p1'})
             self.assertEqual(absent_details['incomplete'],[])
             self.assertEqual(absent['recall']['numerator'],absent['recall']['denominator'])
             self.assertEqual(absent['precision']['numerator'],absent['precision']['denominator'])
+
+class GrayFigureGlyphIdentityTests(unittest.TestCase):
+    def fixture(self):
+        import cv2,numpy as np
+        image=np.full((140,220,3),255,np.uint8);image[10:130,10:210]=180
+        cv2.putText(image,'B',(20,55),cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,0),2,cv2.LINE_AA)
+        cv2.putText(image,'A',(110,55),cv2.FONT_HERSHEY_SIMPLEX,1,(0,0,0),2,cv2.LINE_AA)
+        fragment={'id':'f','reading_order':1,'source_lines':[{'text':'B','box':[18,30,45,59]},{'text':'A','box':[108,30,135,59]}]}
+        reference=1-image.min(axis=2).astype(np.float32)/255
+        return image,fragment,reference
+
+    def observe(self,image,fragment,actual,reference):
+        from scripts.measure_shared_passage_quality import observe_required_lines,content_joining_metrics
+        lines=observe_required_lines(fragment,{'metadata':{'dpi':72}},image,actual>16/255,0,0,reference>16/255,actual,reference)
+        metrics,order=content_joining_metrics({'groups':[{'id':'g','fragments':[fragment]}]},[{'id':'f','line_units':lines}])
+        return lines,metrics,order
+
+    def test_gray_B_identity_has_real_glyph_pattern_not_constant_binary(self):
+        image,fragment,reference=self.fixture()
+        lines,metrics,_=self.observe(image,fragment,reference,reference)
+        self.assertTrue(all(l['matched'] for l in lines))
+        self.assertEqual(metrics['unit_uniqueness']['numerator'],2)
+        self.assertEqual(lines[0]['final_box'],[18,30,45,59])
+
+    def test_erased_gray_B_fails_despite_retained_gray_background(self):
+        image,fragment,reference=self.fixture();actual=reference.copy();actual[30:59,18:45]=75/255
+        lines,metrics,_=self.observe(image,fragment,actual,reference)
+        self.assertFalse(lines[0]['matched'])
+        self.assertLess(metrics['unit_uniqueness']['numerator'],2)
+
+    def test_filled_B_holes_fail_real_glyph_shape(self):
+        import cv2,numpy as np
+        image,fragment,reference=self.fixture();actual=reference.copy();roi=reference[30:59,18:45];glyph=roi>.6
+        n,labels,stats,_=cv2.connectedComponentsWithStats((~glyph).astype(np.uint8),8)
+        filled=0
+        for cc in range(1,n):
+            x,y,w,h,_=map(int,stats[cc])
+            if x>0 and y>0 and x+w<glyph.shape[1] and y+h<glyph.shape[0]:actual[30:59,18:45][labels==cc]=1;filled+=1
+        self.assertEqual(filled,2)
+        lines,metrics,_=self.observe(image,fragment,actual,reference)
+        self.assertTrue(not lines[0]['matched'] or lines[0]['final_box']!=[18,30,45,59])
+        self.assertLess(metrics['unit_uniqueness']['numerator'],2)
+
+    def test_swapped_gray_A_B_fails_order(self):
+        image,fragment,reference=self.fixture();actual=reference.copy();actual[30:59,18:45]=reference[30:59,108:135];actual[30:59,108:135]=reference[30:59,18:45]
+        _,_,order=self.observe(image,fragment,actual,reference)
+        self.assertFalse(order['orders'][0]['passed'])
+
+    def test_added_gray_B_copy_fails_source_identity_uniqueness(self):
+        image,fragment,reference=self.fixture();actual=reference.copy();actual[85:114,18:45]=reference[30:59,18:45]
+        lines,metrics,_=self.observe(image,fragment,actual,reference)
+        self.assertLess(metrics['unit_uniqueness']['numerator'],2)
+        self.assertTrue(any(o['added_ink_occurrence'] for o in lines[0]['occurrences']))
 
 if __name__=='__main__': unittest.main()
