@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from inspect_edb import parse_edb, extract_images
 from PIL import Image, ImageDraw, ImageChops, ImageStat
 import fitz
+from scripts.glyph_shape_quality import glyph_shape_evidence
 
 
 def fraction(results):
@@ -172,7 +173,11 @@ def observe_required_lines(fragment, page, original, visible, dx, dy, reference_
         if search.shape[1]<pattern.shape[1]:continue
         scores=cv2.matchTemplate(search,pattern,cv2.TM_CCOEFF_NORMED)
         _,best,_,_=cv2.minMaxLoc(scores);unit['best_ncc']=best
-        if best<.80:continue
+        local_shape=None
+        if final_strength is not None and px>=0 and py>=0 and px+source_ink.shape[1]<=visible.shape[1] and py+source_ink.shape[0]<=visible.shape[0]:
+            local_shape=glyph_shape_evidence(identity_pattern,final_strength[py:py+source_ink.shape[0],px:px+source_ink.shape[1]])
+            unit['source_projected_glyph_shape']=local_shape
+        if best<.80 and not (local_shape and local_shape['passed']):continue
         # Count every peak above the fixed threshold in both source and final.
         # A new exact copy must not suppress a slightly degraded original.
         # Peak islands eliminate multiple 1px shifts of one physical instance.
@@ -188,24 +193,24 @@ def observe_required_lines(fragment, page, original, visible, dx, dy, reference_
                 independent_support=reference_supported[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]]
                 candidate['source_ink_support']=float(independent_support[actual_ink].mean()) if actual_ink.any() else 0.
                 candidate['added_ink_occurrence']=candidate['source_ink_support']<.90
-                if reference_strength is not None:
-                    # A gray figure background cannot certify an added glyph.
-                    # Require this actual glyph identity in the independent
-                    # source tones at the same physical site (1px tolerance).
-                    sx,sy=max(0,ox-1),max(0,oy-1)
-                    sr,st=min(reference_target.shape[1],ox+pattern.shape[1]+1),min(reference_target.shape[0],oy+pattern.shape[0]+1)
-                    local_reference=reference_target[sy:st,sx:sr]
-                    _,identity_score,_,_=cv2.minMaxLoc(cv2.matchTemplate(local_reference,pattern,cv2.TM_CCOEFF_NORMED))
-                    candidate['source_identity_ncc']=identity_score
-                    candidate['added_ink_occurrence']=candidate['added_ink_occurrence'] or identity_score<.80
+                if reference_strength is not None and final_strength is not None:
+                    shape=glyph_shape_evidence(reference_strength[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]],final_strength[oy:oy+pattern.shape[0],ox:ox+pattern.shape[1]])
+                    candidate['same_site_source_glyph_shape']=shape
+                    candidate['added_ink_occurrence']=not shape['passed']
             occurrences.append(candidate)
+        if local_shape and local_shape['passed'] and not any(abs(o['box'][0]-px)<=1 and abs(o['box'][1]-py)<=1 for o in occurrences):
+            occurrences.append({'box':[px,py,px+source_ink.shape[1],py+source_ink.shape[0]],'ncc':local_shape['ncc'],'added_ink_occurrence':False,'identity_method':'source-projected-glyph-shape','same_site_source_glyph_shape':local_shape})
         # Match the strongest identity. Only raster-identical NCC ties (1e-4)
         # use source proximity; similar different text cannot win on proximity.
         best_occurrences=[o for o in occurrences if o['ncc']>=best-1e-4]
+        if not best_occurrences:best_occurrences=occurrences
         local_occurrences=[o for o in occurrences if abs(o['box'][0]-(x+dx))<=2 and abs(o['box'][1]-(y+dy))<=2]
         if local_identity and local_occurrences:best_occurrences=local_occurrences
         choice=min(best_occurrences,key=lambda o:(abs(o['box'][1]-(y+dy))+abs(o['box'][0]-(x+dx)),o['box'][1],o['box'][0]))
-        unit.update(matched=True,final_box=choice['box'],occurrences=occurrences)
+        shape_pass=True
+        if final_strength is not None:
+            bx,by,br,bt=choice['box'];chosen_shape=glyph_shape_evidence(identity_pattern,final_strength[by:bt,bx:br]);unit['chosen_glyph_shape']=chosen_shape;shape_pass=chosen_shape['passed']
+        unit.update(matched=shape_pass,final_box=choice['box'],occurrences=occurrences)
         if reference_visible is not None:
             reference=reference_target[:,left:right]
             reference_scores=cv2.matchTemplate(reference,pattern,cv2.TM_CCOEFF_NORMED)
@@ -578,9 +583,8 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
                             def flatten(im):
                                 canvas=Image.new('RGBA',im.size,'white'); canvas.alpha_composite(im); return canvas.convert('RGB')
                             error=max(ImageStat.Stat(ImageChops.difference(flatten(a),flatten(b))).mean)/255
-                            check(rid+':final-export-order',error<=.004)
                             details.setdefault('export_correspondence',[]).append({'record_id':rid,'problem_id':problem['id'],'max_channel_mean_abs_error':error,'tolerance':.004})
-                    else: check(rid+':final-export-order',False)
+                    else: details.setdefault('export_correspondence',[]).append({'record_id':rid,'problem_id':problem['id'] if problem else None,'preview_comparison_incomplete':True})
                 if not record.embedded_images:
                     check(rid+':image-only',False); continue
                 values = [record.pos_x,record.pos_y,record.width_hint,record.height_hint]
@@ -617,6 +621,16 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
     details['required_line_order']=line_details
     for order in line_details['orders']:check(order['id'],order['passed'])
     membership_failed=set((line_details['membership'] or {}).get('failed_ids',[]))
+    # Export order is proved by independent original-source identities in each
+    # actual decoded record. Preview tone equality is diagnostic, never order.
+    registrations={r['id']:r for r in pixel_details.get('registrations',[]) if r.get('registration_valid')}
+    for correspondence in details.get('export_correspondence',[]):
+        pid=correspondence.get('problem_id');problem=next((p for p in problems if p['id']==pid),None)
+        pr=problem.get('passageRange',{}) if problem else {};group=next((g for g in groups if g['range']==[pr.get('start'),pr.get('end')]),None)
+        source_identity=bool(group) and all(f['id'] in registrations and all(u.get('matched') or u.get('alias_of') for u in registrations[f['id']].get('line_units',[])) and bool(registrations[f['id']].get('line_units')) for f in group['fragments'])
+        check(correspondence['record_id']+':final-source-record-identity',source_identity)
+        correspondence['source_record_identity_passed']=source_identity
+        correspondence['preview_tone_error_is_diagnostic_only']=True
     uniqueness_failed=set((line_joining['unit_uniqueness'] or {}).get('failed_ids',[]))
     for unit in line_details['units']:
         if unit.get('alias_of'):continue
@@ -633,7 +647,7 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
              'joining': {**line_joining, 'seam_retention':seam_metrics},
              'layout': {'assertions':fraction((a['id'],a['passed']) for a in assertions)}}
     assertion_map={a['id']:a['passed'] for a in assertions}
-    order_ok=all(a['passed'] for a in assertions if a['id'].endswith(':nonoverlap-order') or a['id'].endswith(':actual-fragment-order') or a['id'].endswith(':final-export-order') or a['id']=='source-unit-reading-order' or a['id'].endswith(':required-line-order'))
+    order_ok=all(a['passed'] for a in assertions if a['id'].endswith(':nonoverlap-order') or a['id'].endswith(':actual-fragment-order') or a['id'].endswith(':final-source-record-identity') or a['id']=='source-unit-reading-order' or a['id'].endswith(':required-line-order'))
     valid_edb=bool(edb_paths) and all(a['passed'] for a in assertions if a['id'].endswith(':parse') or a['id'].endswith(':readback') or a['id'].endswith(':unit-record-correspondence'))
     no_cut=bool(edb_paths) and all(a['passed'] for a in assertions if a['id'].endswith(':geometry') or a['id'].endswith(':nonoverlap-order') or a['id'].endswith(':max-50-pages'))
     preservation_known=pixel_metrics['recall'] is not None and seam_metrics is not None
@@ -654,7 +668,7 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
     if not preservation_known:incomplete_reasons.append('Final source component/seam evidence incomplete')
     # Runtime success/termination requires separate actual UI event traces.
     incomplete_reasons.append('External actual UI trials must establish task-complete and no-crash-or-oom; this observer does not infer runtime success from files.')
-    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-ACTUAL-FINAL-native-grid anchors NCC>=0.8;translations agree<=1px; candidate pixels NEVER resampled to preview/raw grid; unsupported scale remains incomplete','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'internal_line_identity':'continuous sourceinverseRGB versus actualalpha/opaqueRGB; constanttemplates rejected; explicit grayglyph shape remains required','internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
+    report={'source_adjudication_sha256':gt.get('source_adjudication_sha256'),'measurement_policy':{'detection':'one-to-one range + source-region union IoU>=0.8','registration':'3 source-to-raw anchors NCC>=0.95 AND independently3 source-to-ACTUAL-FINAL-native-grid anchors NCC>=0.8;translations agree<=1px; candidate pixels NEVER resampled to preview/raw grid; unsupported scale remains incomplete','source_ink':'anyRGB<200','final_ink':'alpha>16;opaque 2D surfaces use anyRGB<200','spatial_tolerance_px':1,'internal_line_identity':'continuous8bit sourceinverseRGB versus actualalpha/opaqueRGB; constanttemplates rejected; localOtsu glyphshape NCC>=0.8 plus eachcomponent bidirectional>=90% within1px, source-onlyglyphbounds padded1px; periodic aliases require same-site independent sourceglyphshape','internal_line_ncc_min':.80,'internal_line_occurrences':'all fixed NCC>=0.8 peaks; added instances require actual ink support<0.9 from independently projected source (1px tolerance)','internal_line_x_search':'whole final shared unit','internal_line_y_search':'whole final shared unit','component_min_area_px':1,'component_retention_threshold':.90,'opaque_surface_min_extent_px':20,'opaque_surface_min_area_px':1000,'opaque_surface_min_fill':.85,'opaque_surface_min_opaque_alpha':245,'opaque_surface_min_opaque_fraction':.85},'schema_version':1,'source_id':source_id,'status':'incomplete' if incomplete_reasons else 'completed','metrics':metrics,'assertions':assertions,
             'hard_checks':hard_checks,'hard_failures':[x['id'] for x in hard_checks if not x['passed']],
             'incomplete_reasons':incomplete_reasons,
             'raw_measures':{'source_line_membership':line_details['membership'],'source_line_geometric_recall':fraction(lines),'excluded_start_intrusion_count':len(details['excluded_intrusions'])},

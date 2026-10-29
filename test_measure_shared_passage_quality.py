@@ -299,4 +299,69 @@ class GrayFigureGlyphIdentityTests(unittest.TestCase):
         self.assertLess(metrics['unit_uniqueness']['numerator'],2)
         self.assertTrue(any(o['added_ink_occurrence'] for o in lines[0]['occurrences']))
 
+class PeriodicGraySourceIdentityTests(unittest.TestCase):
+    def fixture(self):
+        import cv2,numpy as np
+        image=np.full((140,220,3),255,np.uint8);image[10:130,10:210]=220
+        for x in range(20,140,15):cv2.line(image,(x,40),(x+9,40),(0,0,0),2)
+        reference=1-image.min(axis=2).astype(np.float32)/255
+        actual=reference.copy();actual[(reference>0)&(reference<.5)]=60/255
+        fragment={'id':'f','reading_order':1,'source_lines':[{'text':'--------','box':[15,25,145,50]}]}
+        return image,fragment,reference,actual
+
+    def observe(self,image,fragment,reference,actual):
+        from scripts.measure_shared_passage_quality import observe_required_lines,content_joining_metrics
+        lines=observe_required_lines(fragment,{'metadata':{'dpi':72}},image,actual>16/255,0,0,reference>200/255,actual,reference)
+        return lines,content_joining_metrics({'groups':[{'id':'g','fragments':[fragment]}]},[{'id':'f','line_units':lines}])[0]
+
+    def test_periodic_aliases_over_original_gray_dashes_are_not_added_copies(self):
+        image,fragment,reference,actual=self.fixture();lines,metrics=self.observe(image,fragment,reference,actual)
+        self.assertTrue(lines[0]['matched'])
+        self.assertGreater(len(lines[0]['occurrences']),1)
+        self.assertFalse(any(o['added_ink_occurrence'] for o in lines[0]['occurrences']))
+        self.assertEqual(metrics['unit_uniqueness']['numerator'],1)
+
+    def test_new_periodic_copy_inside_original_gray_material_is_added(self):
+        image,fragment,reference,actual=self.fixture();actual[85:110,15:145]=actual[25:50,15:145]
+        lines,metrics=self.observe(image,fragment,reference,actual)
+        self.assertTrue(any(o['added_ink_occurrence'] for o in lines[0]['occurrences']))
+        self.assertEqual(metrics['unit_uniqueness']['numerator'],0)
+
+class ActualRecordSourceIdentityTests(unittest.TestCase):
+    def run_case(self,swapped=False):
+        import tempfile,json,hashlib,fitz,numpy as np
+        from pathlib import Path
+        from io import BytesIO
+        from PIL import Image
+        from edb_builder import ImageRecordSpec,build_image_record,build_edb
+        from scripts.measure_shared_passage_quality import measure_shared
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);doc=fitz.open();groups=[];pages=[];problems=[];assets=[]
+            for n,words in enumerate([['AAAAA BBBBB CCCCC','DDDDD EEEEE FFFFF','GGGGG HHHHH IIIII'],['WWWWW XXXXX YYYYY','ZZZZZ MMMMM NNNNN','OOOOO PPPPP QQQQQ']],1):
+                page=doc.new_page(width=200,height=240)
+                for i,text in enumerate(words):page.insert_text((15,40+i*40),text,fontsize=10)
+                lines=[{'text':''.join(sp['text'] for sp in line['spans']),'box':list(line['bbox'])} for block in page.get_text('dict')['blocks'] for line in block.get('lines',[])]
+                pix=page.get_pixmap(alpha=False);raw=Image.frombytes('RGB',(pix.width,pix.height),pix.samples);raw.save(root/f'raw{n}.png')
+                arr=np.asarray(raw);rgba=np.full((240,200,4),248,np.uint8);rgba[...,3]=255-arr.min(axis=2);asset=Image.fromarray(rgba);assets.append(asset)
+                Image.new('RGBA',(200,240),'black').save(root/f'preview{n}.png')
+                pid=f'p{n}';pageid=f'source-page-{n:03d}';fragment={'id':f'f{n}','page':n,'reading_order':1,'box':[0,0,200,240],'source_lines':lines,'first_content_line_box':lines[0]['box']}
+                groups.append({'id':f'g{n}','range':[n*2-1,n*2],'fragments':[fragment]});pages.append({'page_id':pageid,'metadata':{'dpi':72}})
+                problems.append({'id':pid,'passageRange':{'start':n*2-1,'end':n*2},'sourcePageId':pageid,'sourceSegments':[{'sourcePageId':pageid,'bbox':[0,0,200,240]}],'imagePath':str(root/f'raw{n}.png'),'boardRenderPath':str(root/f'preview{n}.png')})
+            source=root/'source.pdf';doc.save(source);doc.close();sha=hashlib.sha256(source.read_bytes()).hexdigest();records=[]
+            for i,image in enumerate(reversed(assets) if swapped else assets):
+                b=BytesIO();image.save(b,format='PNG');data=b.getvalue();records.append(build_image_record(ImageRecordSpec(i,data,data,.01,.01+i*.04,.4,.03)))
+            edb=root/'output.edb';edb.write_bytes(build_edb(records,0));(root/'gt.json').write_text(json.dumps({'documents':[{'id':'source','source':{'path':str(source),'sha256':sha},'groups':groups}]}));(root/'pages.json').write_text(json.dumps(pages));(root/'session.json').write_text(json.dumps({'input_files':[str(source)],'problems':problems,'edb_parts':[{'edbPath':str(edb),'problemIds':['p1','p2']}]}))
+            return measure_shared(root/'gt.json','source',root/'session.json',root/'pages.json',root/'out')
+
+    def test_preview_tone_difference_is_diagnostic_actual_source_order_passes(self):
+        report=self.run_case()
+        self.assertTrue(all(x['max_channel_mean_abs_error']>.004 for x in report['details']['export_correspondence']))
+        self.assertTrue(all(x['source_record_identity_passed'] for x in report['details']['export_correspondence']))
+        self.assertNotIn('correct-order',report['hard_failures'])
+
+    def test_actual_swapped_record_pixels_fail_source_identity_and_order(self):
+        report=self.run_case(swapped=True)
+        self.assertFalse(any(x['source_record_identity_passed'] for x in report['details']['export_correspondence']))
+        self.assertIn('correct-order',report['hard_failures'])
+
 if __name__=='__main__': unittest.main()
