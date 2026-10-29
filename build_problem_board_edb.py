@@ -9756,7 +9756,7 @@ def _entry_is_whole_page(entry: "ProblemEntry") -> bool:
         input_intent=entry.input_intent,
         force_full_page_bounds=entry.force_full_page_bounds,
         fit_width_converted=entry.fit_width_converted,
-        passage_role=entry.passage_role,
+        passage_role=getattr(entry, "passage_role", None),
     )
 
 
