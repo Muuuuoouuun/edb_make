@@ -1161,13 +1161,62 @@ def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any
         left, right = int(comp_xs.min()), int(comp_xs.max()) + 1
         label = int(sorted_labels[start])
         component = labels[top:bottom, left:right] == label
-        if area >= FLAT_FILL_LARGE_AREA_PIXELS:
-            keep[top:bottom, left:right] |= component
-            continue
         fill_value = float(np.median(luminance[comp_ys, comp_xs]))
-        enclosed = _component_encloses_ink(component, luminance[top:bottom, left:right], fill_value)
-        if enclosed >= FLAT_FILL_MIN_ENCLOSED_INK_PIXELS:
-            keep[top:bottom, left:right] |= component
+        patch_luminance = luminance[top:bottom, left:right]
+        if area < FLAT_FILL_LARGE_AREA_PIXELS:
+            enclosed = _component_encloses_ink(component, patch_luminance, fill_value)
+            if enclosed < FLAT_FILL_MIN_ENCLOSED_INK_PIXELS:
+                continue
+        keep_patch = keep[top:bottom, left:right]
+        keep_patch |= component
+        # A glyph's counters have the same shade as its surrounding fill but
+        # are separated from that fill by the dark strokes (the two holes of
+        # B, for example). Small counter islands cannot seed a flat component
+        # themselves. Leaving them opaque turns them into the same chalk tone
+        # as the strokes and closes the glyph. Include only matching fill
+        # tones enclosed by an already accepted component on all four sides.
+        left_fill = np.maximum.accumulate(component, axis=1)
+        right_fill = np.maximum.accumulate(component[:, ::-1], axis=1)[:, ::-1]
+        upper_fill = np.maximum.accumulate(component, axis=0)
+        lower_fill = np.maximum.accumulate(component[::-1, :], axis=0)[::-1, :]
+        lower_tone = fill_value - FLAT_FILL_GROW_LUMINANCE_SLACK
+        islands = (
+            left_fill & right_fill & upper_fill & lower_fill
+            & ~component & (patch_luminance >= lower_tone)
+        )
+        island_labels, island_count = _label_mask_components(islands)
+        if island_count:
+            # A gray glyph inside a white bubble is not a counter: its bright
+            # surroundings connect it to the parent fill. Only islands whose
+            # entire immediate boundary is darker qualify. Include sharpened
+            # bright pixels when finding an island, so an unsharp-mask halo
+            # cannot split a legitimate counter into several unrelated parts.
+            invalid = np.zeros(island_count + 1, dtype=bool)
+            island_sizes = np.bincount(island_labels.ravel(), minlength=island_count + 1)
+            island_sums = np.bincount(island_labels.ravel(), weights=patch_luminance.ravel(), minlength=island_count + 1)
+            island_means = island_sums / np.maximum(island_sizes, 1)
+            invalid |= np.abs(island_means - fill_value) > FLAT_FILL_GROW_LUMINANCE_SLACK
+            # A white-filled bubble can itself have a dark outline. Its gray
+            # lettering must not be mistaken for a counter of that outline:
+            # reject islands containing paper already made transparent by the
+            # background remover. Sharpened gray counter edges remain visible.
+            invalid[island_labels[alpha[top:bottom, left:right] <= 0.0]] = True
+            for edge in (island_labels[0], island_labels[-1], island_labels[:, 0], island_labels[:, -1]):
+                invalid[edge] = True
+            for current, neighbor, neighbor_luma in (
+                (island_labels[1:, :], island_labels[:-1, :], patch_luminance[:-1, :]),
+                (island_labels[:-1, :], island_labels[1:, :], patch_luminance[1:, :]),
+                (island_labels[:, 1:], island_labels[:, :-1], patch_luminance[:, :-1]),
+                (island_labels[:, :-1], island_labels[:, 1:], patch_luminance[:, 1:]),
+            ):
+                bright_boundary = (current > 0) & (neighbor == 0) & (neighbor_luma >= lower_tone)
+                invalid[current[bright_boundary]] = True
+            invalid[0] = True
+            keep_patch |= (
+                ~invalid[island_labels]
+                & candidates[top:bottom, left:right]
+                & (patch_luminance < FLAT_FILL_MAX_LUMINANCE)
+            )
     if not keep.any():
         return alpha
     factor = np.clip(

@@ -11382,7 +11382,7 @@ def _v1_default_display_width_px(template: LayoutTemplate) -> float:
 
 CHALK_CUTOUT_CACHE_DIRNAME = ".chalk_cutout_cache"
 # Bump when the cutout pipeline changes in a way the code hash below misses.
-CHALK_CUTOUT_CACHE_VERSION = "1"
+CHALK_CUTOUT_CACHE_VERSION = "2"
 CHALK_CUTOUT_CACHE_MAX_FILES = 1500
 _CHALK_CUTOUT_CACHE_SALT: str | None = None
 
@@ -11392,11 +11392,13 @@ def _chalk_cutout_cache_salt() -> str:
     global _CHALK_CUTOUT_CACHE_SALT
     if _CHALK_CUTOUT_CACHE_SALT is None:
         import sys
+        import image_reconstruction_backend as transparency_backend
 
         parts = [CHALK_CUTOUT_CACHE_VERSION, str(getattr(Image, "__version__", "")), str(getattr(np, "__version__", ""))]
         try:
-            parts.append(hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
-        except OSError:
+            for module_path in (__file__, transparency_backend.__file__):
+                parts.append(hashlib.sha256(Path(module_path).read_bytes()).hexdigest())
+        except (OSError, TypeError):
             # Frozen builds may not ship readable sources: every new build
             # still changes the executable itself.
             try:
