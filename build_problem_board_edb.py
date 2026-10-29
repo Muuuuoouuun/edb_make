@@ -5411,6 +5411,64 @@ def _has_substantial_content_below_footer_rule(
     )
 
 
+def _passage_band_has_substantive_ink(image: Image.Image, *, top: int, bottom: int) -> bool:
+    """Protect glyphs around a rule; only long thin outer guides are exempt.
+
+    Pixels alone cannot prove that text above a rule is a page header rather
+    than an underlined passage. Uncertain labels therefore remain intact.
+    """
+    top = max(0, min(image.height, int(top)))
+    bottom = max(top, min(image.height, int(bottom)))
+    if top >= bottom or image.width <= 0:
+        return False
+    band = image.crop((0, top, image.width, bottom)).convert("RGBA")
+    width, height = band.size
+    if np is not None:
+        pixels = np.asarray(band, dtype=np.uint8)
+        alpha = pixels[..., 3]
+        rgb = pixels[..., :3].astype(np.float32)
+        luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+        foreground = (alpha > 0 if int(alpha.min()) < 245
+                      else (luminance <= 246.0) | ((rgb.max(axis=2) - rgb.min(axis=2)) >= 24.0))
+        column_counts = foreground.sum(axis=0).tolist()
+    else:
+        pixels = band.load()
+        transparent = band.getchannel("A").getextrema()[0] < 245
+        foreground = []
+        column_counts = [0] * width
+        for y in range(height):
+            row = []
+            for x in range(width):
+                red, green, blue, alpha = pixels[x, y]
+                visible = (alpha > 0 if transparent else
+                           0.299 * red + 0.587 * green + 0.114 * blue <= 246
+                           or max(red, green, blue) - min(red, green, blue) >= 24)
+                row.append(visible)
+                column_counts[x] += int(visible)
+            foreground.append(row)
+    guide_columns: set[int] = set()
+    if height >= 48:
+        edge_width = max(3, int(round(width * 0.15)))
+        candidates = [x for x, count in enumerate(column_counts)
+                      if (x < edge_width or x >= width - edge_width) and count >= height * 0.9]
+        runs: list[list[int]] = []
+        for x in candidates:
+            if not runs or x != runs[-1][-1] + 1:
+                runs.append([])
+            runs[-1].append(x)
+        for run in runs:
+            if len(run) <= max(3, int(round(width * 0.015))):
+                guide_columns.update(run)
+    if np is not None:
+        if guide_columns:
+            foreground[:, sorted(guide_columns)] = False
+        return bool(foreground.any())
+    for row in foreground:
+        if any(value for x, value in enumerate(row) if x not in guide_columns):
+            return True
+    return False
+
+
 def _trim_passage_segment_for_join(
     image: Image.Image,
     *,
@@ -5467,17 +5525,22 @@ def _trim_passage_segment_for_join(
                 and rule_width >= int(round(image.width * 0.93))
             )
             if (
-                header_span >= int(round(image.width * 0.55))
-                or cropped_page_header_rule
+                (header_span >= int(round(image.width * 0.55)) or cropped_page_header_rule)
+                and not _passage_band_has_substantive_ink(image, top=0, bottom=first_rule)
             ):
-                top = min(
+                candidate_top = min(
                     image.height - 1,
                     rule_end + PASSAGE_JOIN_EDGE_PADDING_PX,
                 )
+                top = (rule_end if _passage_band_has_substantive_ink(
+                    image, top=rule_end, bottom=candidate_top,
+                ) else candidate_top)
         if top == 0:
             first_ink = next((index for index, value in enumerate(row_counts) if value > 3), 0)
             if 0 < first_ink <= int(round(image.height * 0.18)):
-                top = max(0, first_ink - PASSAGE_JOIN_EDGE_PADDING_PX)
+                candidate_top = max(0, first_ink - PASSAGE_JOIN_EDGE_PADDING_PX)
+                if not _passage_band_has_substantive_ink(image, top=0, bottom=candidate_top):
+                    top = candidate_top
 
     if trim_bottom:
         lower_start = int(round(image.height * 0.65))
@@ -5511,11 +5574,15 @@ def _trim_passage_segment_for_join(
             footer_rule_start = -1
             footer_rule_end = -1
         if footer_rule_start >= 0:
-            if not _has_substantial_content_below_footer_rule(
+            if (not _has_substantial_content_below_footer_rule(
                 row_counts,
                 rule_end=footer_rule_end,
                 image_width=image.width,
-            ):
+            ) and not _passage_band_has_substantive_ink(
+                image, top=blank_start + PASSAGE_JOIN_EDGE_PADDING_PX, bottom=footer_rule_start,
+            ) and not _passage_band_has_substantive_ink(
+                image, top=footer_rule_end, bottom=image.height,
+            )):
                 candidate_bottom = min(
                     image.height,
                     blank_start + PASSAGE_JOIN_EDGE_PADDING_PX,
@@ -5537,12 +5604,16 @@ def _trim_passage_segment_for_join(
             content_top = meaningful_rows[0]
             excess_top = content_top - top
             if excess_top >= PASSAGE_JOIN_EXCESS_BLANK_MIN_PX:
-                top = max(top, content_top - PASSAGE_JOIN_CONTENT_PADDING_PX)
+                candidate_top = max(top, content_top - PASSAGE_JOIN_CONTENT_PADDING_PX)
+                if not _passage_band_has_substantive_ink(image, top=top, bottom=candidate_top):
+                    top = candidate_top
         if trim_bottom:
             content_bottom = meaningful_rows[-1] + 1
             excess_bottom = bottom - content_bottom
             if excess_bottom >= PASSAGE_JOIN_EXCESS_BLANK_MIN_PX:
-                bottom = min(bottom, content_bottom + PASSAGE_JOIN_CONTENT_PADDING_PX)
+                candidate_bottom = min(bottom, content_bottom + PASSAGE_JOIN_CONTENT_PADDING_PX)
+                if not _passage_band_has_substantive_ink(image, top=candidate_bottom, bottom=bottom):
+                    bottom = candidate_bottom
 
     if top <= 0 and bottom >= image.height:
         if crop_box_output is not None:
