@@ -2147,6 +2147,93 @@ IMAGE_RECORD_WORKER_MEMORY_BUDGET_BYTES = 1536 * 1024 * 1024
 IMAGE_RECORD_WORKING_BYTES_PER_PIXEL = 96
 
 
+def _clean_inactive_cgroup_file_bytes(stats_text: str, usage: int, *, version: int) -> int:
+    """Credit only clean, unmapped, non-shmem inactive file cache.
+
+    Missing/invalid telemetry gets no credit. Never mix v1 hierarchical cache
+    with local dirty counters: that could count a child's dirty pages as free.
+    Active file cache and reclaimable kernel/slab memory remain uncredited.
+    """
+    try:
+        stats: dict[str, int] = {}
+        for line in stats_text.splitlines():
+            key, raw = line.split()
+            value = int(raw)
+            if key in stats or value < 0:
+                return 0
+            stats[key] = value
+        prefix = "total_" if version == 1 and any(key.startswith("total_") for key in stats) else ""
+        required = ("inactive_file", "dirty", "writeback") if version == 1 else ("inactive_file", "file_dirty", "file_writeback")
+        inactive, dirty, writeback = (stats[prefix + key] for key in required)
+        if inactive > usage:
+            return 0
+        mapped_key = "mapped_file" if version == 1 else "file_mapped"
+        mapped, shmem = stats[prefix + mapped_key], stats[prefix + "shmem"]
+        return max(0, inactive - dirty - writeback - mapped - shmem)
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
+def _image_record_cgroup_memory_paths() -> list[tuple[int, Path]]:
+    """Find this process's visible v1/v2 hierarchy, including ancestor limits."""
+    paths = {(2, Path("/sys/fs/cgroup")), (1, Path("/sys/fs/cgroup/memory"))}
+    try:
+        groups: dict[int, str] = {}
+        for line in Path("/proc/self/cgroup").read_text().splitlines():
+            _identifier, controllers, group = line.split(":", 2)
+            if not controllers:
+                groups[2] = group
+            elif "memory" in controllers.split(","):
+                groups[1] = group
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            fields, filesystem = line.split(" - ", 1)
+            left, right = fields.split(), filesystem.split()
+            version = 2 if right[0] == "cgroup2" else 1 if right[0] == "cgroup" and "memory" in right[2].split(",") else None
+            if version not in groups:
+                continue
+            decode = lambda value: re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
+            root, mount = Path(decode(left[3])), Path(decode(left[4]))
+            group = Path(groups[version])
+            if not mount.is_absolute() or not group.is_absolute() or ".." in group.parts:
+                continue
+            # A cgroup namespace can expose '/' while mountinfo shows the
+            # ancestor mount root (including '/..'). In that case the mount
+            # itself is the only visible, valid hierarchy root.
+            if group == Path("/"):
+                current = mount
+            elif ".." not in root.parts and group.is_relative_to(root):
+                current = mount / group.relative_to(root)
+            else:
+                current = mount / group.relative_to("/")
+            while current.is_relative_to(mount):
+                paths.add((version, current))
+                if current == mount:
+                    break
+                current = current.parent
+    except (IndexError, OSError, TypeError, ValueError):
+        pass
+    return sorted(paths, key=lambda item: (item[0], str(item[1])))
+
+
+def _linux_available_image_record_memory_bytes() -> int | None:
+    """Use the kernel's available-memory estimate, excluding pending writes."""
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, raw = line.split(":", 1)
+            if key in {"MemAvailable", "MemTotal", "Dirty", "Writeback"}:
+                value, unit = raw.split()
+                if key in values or unit != "kB" or int(value) < 0:
+                    return None
+                values[key] = int(value) * 1024
+        available = values["MemAvailable"]
+        if available > values.get("MemTotal", available):
+            return None
+        return max(0, available - values["Dirty"] - values["Writeback"])
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+
+
 def _available_image_record_memory_bytes() -> int | None:
     """Observe host/container headroom without assuming the host's full RAM."""
     available: list[int] = []
@@ -2169,21 +2256,30 @@ def _available_image_record_memory_bytes() -> int | None:
         except (AttributeError, OSError, ValueError):
             pass
     else:
+        host_available = _linux_available_image_record_memory_bytes()
+        if host_available is not None:
+            available.append(host_available)
+        else:
+            try:
+                pages, page_size = os.sysconf("SC_AVPHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
+                if pages >= 0 and page_size > 0:
+                    available.append(int(pages * page_size))
+            except (AttributeError, OSError, ValueError):
+                pass
+    for version, directory in _image_record_cgroup_memory_paths():
+        limit_name, usage_name = (("memory.max", "memory.current") if version == 2 else ("memory.limit_in_bytes", "memory.usage_in_bytes"))
         try:
-            pages, page_size = os.sysconf("SC_AVPHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
-            if pages >= 0 and page_size > 0:
-                available.append(int(pages * page_size))
-        except (AttributeError, OSError, ValueError):
-            pass
-    for limit_name, usage_name in (
-        ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
-        ("/sys/fs/cgroup/memory/memory.limit_in_bytes", "/sys/fs/cgroup/memory/memory.usage_in_bytes"),
-    ):
-        try:
-            limit = int(Path(limit_name).read_text().strip())
-            usage = int(Path(usage_name).read_text().strip())
-            if 0 < limit < 2**60 and usage >= 0:
-                available.append(max(0, limit - usage))
+            limit = int((directory / limit_name).read_text().strip())
+            usage = int((directory / usage_name).read_text().strip())
+            if 0 <= limit < 2**60 and usage >= 0:
+                reclaimable = 0
+                try:
+                    reclaimable = _clean_inactive_cgroup_file_bytes((directory / "memory.stat").read_text(), usage, version=version)
+                except OSError:
+                    pass
+                # Credit cache only against usage inside this same limit.
+                # Host availability and every visible ancestor remain caps.
+                available.append(max(0, limit - usage + reclaimable))
         except (OSError, ValueError):
             pass
     return min(available) if available else None
@@ -2193,9 +2289,11 @@ def _resolve_image_record_worker_count(item_count: int, *, source_pixels: int = 
     if item_count <= 1:
         return 1
     max_workers = max(1, min(4, item_count, os.cpu_count() or 2))
+    available: int | None = None
+    budget = IMAGE_RECORD_WORKER_MEMORY_BUDGET_BYTES
+    worker_bytes = 0
     if source_pixels > 0:
         available = _available_image_record_memory_bytes()
-        budget = IMAGE_RECORD_WORKER_MEMORY_BUDGET_BYTES
         if available is not None:
             # Leave room for the UI, encoded records, source rasters and other
             # applications; parallel float masks are only one allocation stage.
@@ -2209,8 +2307,15 @@ def _resolve_image_record_worker_count(item_count: int, *, source_pixels: int = 
         except ValueError:
             requested_workers = max_workers
         if requested_workers <= 0:
-            return 1
-        return max(1, min(max_workers, requested_workers))
+            requested_workers = 1
+        max_workers = max(1, min(max_workers, requested_workers))
+    if source_pixels > 0:
+        print(
+            f"[image-record] workers={max_workers} records={item_count} source_pixels_max={source_pixels} "
+            f"available_bytes={available if available is not None else 'unknown'} "
+            f"budget_bytes={budget} per_worker_bytes={worker_bytes}",
+            flush=True,
+        )
     return max_workers
 
 
