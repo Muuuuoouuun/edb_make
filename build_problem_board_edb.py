@@ -2149,6 +2149,7 @@ def _resolve_problem_asset_worker_count(task_count: int) -> int:
 
 IMAGE_RECORD_WORKER_MEMORY_BUDGET_BYTES = 1536 * 1024 * 1024
 IMAGE_RECORD_WORKING_BYTES_PER_PIXEL = 96
+IMAGE_RECORD_NON_WORKER_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
 
 
 def _clean_inactive_cgroup_file_bytes(stats_text: str, usage: int, *, version: int) -> int:
@@ -2299,9 +2300,13 @@ def _resolve_image_record_worker_count(item_count: int, *, source_pixels: int = 
     if source_pixels > 0:
         available = _available_image_record_memory_bytes()
         if available is not None:
-            # Leave room for the UI, encoded records, source rasters and other
-            # applications; parallel float masks are only one allocation stage.
-            budget = min(budget, available // 3)
+            # Resident main/UI memory is already deducted from availability.
+            # Spend at most half the remaining headroom and leave a separate
+            # 2GiB reserve for future UI, encoding and other application growth.
+            budget = min(
+                budget, available // 2,
+                max(0, available - IMAGE_RECORD_NON_WORKER_RESERVE_BYTES),
+            )
         worker_bytes = max(1, source_pixels * IMAGE_RECORD_WORKING_BYTES_PER_PIXEL)
         max_workers = min(max_workers, max(1, budget // worker_bytes))
     raw_worker_count = os.environ.get("EDB_IMAGE_RECORD_WORKERS", "").strip()

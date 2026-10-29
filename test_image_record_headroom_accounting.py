@@ -1,4 +1,4 @@
-"""Memory telemetry fixtures: no image allocation, benchmark, or raised budget."""
+"""Memory telemetry and reserve fixtures; no image allocation or benchmark."""
 from pathlib import Path
 from unittest.mock import patch
 
@@ -124,3 +124,51 @@ def test_resolved_worker_observability_reports_the_unchanged_safety_budget(capsy
     output=captured.err
     assert "workers=2 records=16 source_pixels_max=8000000" in output
     assert "budget_bytes=1610612736 per_worker_bytes=768000000" in output
+
+
+def resolve_at(available, *, pixels=7_726_122, items=16, cpus=16, override=""):
+    with patch.object(board, "_available_image_record_memory_bytes", return_value=available), \
+            patch.object(board.os, "cpu_count", return_value=cpus), \
+            patch.dict(board.os.environ, {"EDB_IMAGE_RECORD_WORKERS": override}):
+        return board._resolve_image_record_worker_count(items, source_pixels=pixels)
+
+
+def test_parallel_full_page_workers_require_the_complete_explicit_reserve():
+    per_worker = 7_726_122 * 96
+    boundary = 2 * GIB + 2 * per_worker
+    assert resolve_at(boundary - 1) == 1
+    assert resolve_at(boundary) == 2
+    assert resolve_at(boundary + 1) == 2
+
+
+@pytest.mark.parametrize("available", [0, 256*MIB, GIB, 2*GIB])
+def test_low_headroom_keeps_the_existing_single_worker_progress_path(available):
+    assert resolve_at(available) == 1
+
+
+@pytest.mark.parametrize("available", [4_395_364_352, 4_239_179_776, 3_885_105_152, 4_420_968_448])
+def test_actual_low_headroom_snapshots_fit_two_pages_without_raising_the_absolute_cap(available):
+    # Recorded cold-3 snapshots, distinct real PDFs and unchanged source size.
+    assert resolve_at(available) == 2
+    assert 2 * 7_726_122 * 96 <= 1536 * MIB
+    assert available - 2 * 7_726_122 * 96 >= 2 * GIB
+
+
+def test_parallel_budget_preserves_half_headroom_and_reserve_across_image_sizes():
+    for available in (2*GIB + 64*MIB, 3*GIB, 7*GIB//2, 4*GIB, 8*GIB, 16*GIB):
+        for pixels in (100_000, 1_000_000, 4_000_000, 7_726_122, 16_000_000, 32_000_000):
+            workers = resolve_at(available, pixels=pixels)
+            if workers > 1:
+                working_bytes = workers * pixels * 96
+                assert working_bytes <= 1536 * MIB
+                assert working_bytes <= available // 2
+                assert available - working_bytes >= 2 * GIB
+
+
+def test_cpu_item_and_environment_caps_still_apply_inside_the_reserve():
+    assert resolve_at(4*GIB, cpus=1) == 1
+    assert resolve_at(4*GIB, items=1) == 1
+    assert resolve_at(4*GIB, override="1") == 1
+    assert resolve_at(4*GIB, override="99") == 2
+    assert resolve_at(2*GIB, override="99") == 1
+    assert resolve_at(None) == 2
