@@ -123,3 +123,63 @@ def test_real_june_korean_underlined_continuation_first_two_lines(tmp_path, monk
         patch = page.image.crop((int(b['left']), int(b['top']), int(b['right']) + 1, int(b['bottom']) + 1)).convert('RGB')
         pattern = cv2.cvtColor(np.asarray(patch), cv2.COLOR_RGB2GRAY)
         assert cv2.matchTemplate(target, pattern, cv2.TM_CCOEFF_NORMED).max() > .99, line['text']
+
+
+@pytest.mark.parametrize('use_numpy', [True, False])
+@pytest.mark.parametrize('end', ['top', 'bottom'])
+@pytest.mark.parametrize('shape', ['vertical-stroke', 'bracket'])
+def test_short_vertical_glyphs_inside_margin_are_not_full_segment_guides(monkeypatch, use_numpy, end, shape):
+    if not use_numpy:
+        monkeypatch.setattr(board, 'np', None)
+    image = Image.new('RGB', (400, 600), 'white')
+    draw = ImageDraw.Draw(image)
+    blue = (30, 50, 150)
+    first, last = (5, 115) if end == 'top' else (485, 595)
+    draw.line((40, first, 40, last), fill=blue, width=2)
+    if shape == 'bracket':
+        draw.line((40, first, 55, first), fill=blue, width=2)
+        draw.line((40, last, 55, last), fill=blue, width=2)
+    rule = 120 if end == 'top' else 470
+    draw.line((10, rule, 390, rule), fill='black', width=2)
+    draw.text((30, 170 if end == 'top' else 50), 'Reading body.', fill='black', font_size=20)
+    before = _colored_count(image, blue)
+    assert before >= 222
+    trimmed = board._trim_passage_segment_for_join(image, trim_top=end == 'top', trim_bottom=end == 'bottom')
+    assert _colored_count(trimmed, blue) == before
+
+
+@pytest.mark.parametrize('use_numpy', [True, False])
+@pytest.mark.parametrize('end', ['top', 'bottom'])
+@pytest.mark.parametrize('position', ['adjacent-column', 'same-column-color', 'same-column-gap'])
+def test_dot_on_or_beside_edge_guide_keeps_its_independent_ink(monkeypatch, use_numpy, end, position):
+    if not use_numpy:
+        monkeypatch.setattr(board, 'np', None)
+    image = Image.new('RGB', (400, 600), 'white')
+    draw = ImageDraw.Draw(image)
+    start = 5 if position == 'same-column-gap' and end == 'top' else 0
+    finish = 594 if position == 'same-column-gap' and end == 'bottom' else 599
+    draw.line((2, start, 2, finish), fill='black')
+    rule = 120 if end == 'top' else 470
+    draw.line((10, rule, 390, rule), fill='black', width=2)
+    draw.text((30, 170 if end == 'top' else 50), 'Reading body.', fill='black', font_size=20)
+    dot_x = 3 if position == 'adjacent-column' else 2
+    dot_y = (1 if end == 'top' else 599) if position == 'same-column-gap' else (20 if end == 'top' else 570)
+    dot = (30, 80, 170)
+    image.putpixel((dot_x, dot_y), dot)
+    trimmed = board._trim_passage_segment_for_join(image, trim_top=end == 'top', trim_bottom=end == 'bottom')
+    assert _colored_count(trimmed, dot) == 1
+
+
+def test_numpy_free_large_blank_scan_has_no_python_matrix_allocation(monkeypatch):
+    import tracemalloc
+    monkeypatch.setattr(board, 'np', None)
+    # The former list-of-list reference matrix alone used >8MiB here.
+    # Native PIL raster storage is independent of this Python allocation bound.
+    image = Image.new('RGB', (800, 1200), 'white')
+    tracemalloc.start()
+    try:
+        assert not board._passage_band_has_substantive_ink(image, top=0, bottom=image.height)
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 2 * 1024 * 1024

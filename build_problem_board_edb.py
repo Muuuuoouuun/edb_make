@@ -5412,7 +5412,7 @@ def _has_substantial_content_below_footer_rule(
 
 
 def _passage_band_has_substantive_ink(image: Image.Image, *, top: int, bottom: int) -> bool:
-    """Protect glyphs around a rule; only long thin outer guides are exempt.
+    """Protect glyphs around a rule; only proven full-height edge guides are exempt.
 
     Pixels alone cannot prove that text above a rule is a page header rather
     than an underlined passage. Uncertain labels therefore remain intact.
@@ -5421,51 +5421,49 @@ def _passage_band_has_substantive_ink(image: Image.Image, *, top: int, bottom: i
     bottom = max(top, min(image.height, int(bottom)))
     if top >= bottom or image.width <= 0:
         return False
-    band = image.crop((0, top, image.width, bottom)).convert("RGBA")
+    band = (image.convert("RGBA") if top == 0 and bottom == image.height
+            else image.crop((0, top, image.width, bottom)).convert("RGBA"))
     width, height = band.size
+    transparent = band.getchannel("A").getextrema()[0] < 245
+    guide_columns: set[int] = set()
+    if image.height >= 48:
+        # A short stroke/bracket in the inspected band is not a page guide.
+        # Exempt only the literal outer three columns when their visible pixel
+        # is identical on EVERY row of the complete original segment. A gap,
+        # an adjacent dot, or a changed color keeps uncertain ink protected.
+        guide_source = image if image.mode in {"RGB", "RGBA"} else image.convert("RGBA")
+        source_pixels = guide_source.load()
+        for x in set(range(min(3, width))) | set(range(max(0, width - 3), width)):
+            first = source_pixels[x, 0]
+            red, green, blue = first[:3]
+            alpha = first[3] if len(first) == 4 else 255
+            visible = (alpha > 0 if transparent else
+                       0.299 * red + 0.587 * green + 0.114 * blue <= 246
+                       or max(red, green, blue) - min(red, green, blue) >= 24)
+            if visible and all(source_pixels[x, y] == first for y in range(1, image.height)):
+                guide_columns.add(x)
     if np is not None:
         pixels = np.asarray(band, dtype=np.uint8)
         alpha = pixels[..., 3]
         rgb = pixels[..., :3].astype(np.float32)
         luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
-        foreground = (alpha > 0 if int(alpha.min()) < 245
+        foreground = (alpha > 0 if transparent
                       else (luminance <= 246.0) | ((rgb.max(axis=2) - rgb.min(axis=2)) >= 24.0))
-        column_counts = foreground.sum(axis=0).tolist()
-    else:
-        pixels = band.load()
-        transparent = band.getchannel("A").getextrema()[0] < 245
-        foreground = []
-        column_counts = [0] * width
-        for y in range(height):
-            row = []
-            for x in range(width):
-                red, green, blue, alpha = pixels[x, y]
-                visible = (alpha > 0 if transparent else
-                           0.299 * red + 0.587 * green + 0.114 * blue <= 246
-                           or max(red, green, blue) - min(red, green, blue) >= 24)
-                row.append(visible)
-                column_counts[x] += int(visible)
-            foreground.append(row)
-    guide_columns: set[int] = set()
-    if height >= 48:
-        edge_width = max(3, int(round(width * 0.15)))
-        candidates = [x for x, count in enumerate(column_counts)
-                      if (x < edge_width or x >= width - edge_width) and count >= height * 0.9]
-        runs: list[list[int]] = []
-        for x in candidates:
-            if not runs or x != runs[-1][-1] + 1:
-                runs.append([])
-            runs[-1].append(x)
-        for run in runs:
-            if len(run) <= max(3, int(round(width * 0.015))):
-                guide_columns.update(run)
-    if np is not None:
         if guide_columns:
             foreground[:, sorted(guide_columns)] = False
         return bool(foreground.any())
-    for row in foreground:
-        if any(value for x, value in enumerate(row) if x not in guide_columns):
-            return True
+    # Stream the fallback scan. A W×H Python bool/reference matrix would add
+    # roughly eight bytes per pixel on top of the PIL raster.
+    pixels = band.load()
+    for y in range(height):
+        for x in range(width):
+            if x in guide_columns:
+                continue
+            red, green, blue, alpha = pixels[x, y]
+            if (alpha > 0 if transparent else
+                    0.299 * red + 0.587 * green + 0.114 * blue <= 246
+                    or max(red, green, blue) - min(red, green, blue) >= 24):
+                return True
     return False
 
 
@@ -5476,11 +5474,11 @@ def _trim_passage_segment_for_join(
     trim_bottom: bool,
     crop_box_output: list[tuple[int, int, int, int]] | None = None,
 ) -> Image.Image:
-    """Remove page footer chrome and excess whitespace at a passage join.
+    """Remove bare separator chrome and excess whitespace at a passage join.
 
     A page footer is recognized conservatively: a near-full-width rule in the
-    lower quarter plus a long blank run before it. This removes page labels
-    such as ``고2`` without treating normal paragraph spacing as chrome.
+    lower quarter plus a long blank run before it. Uncertain labels and glyphs
+    near either end remain intact; an underline must never delete its text.
     """
     if image.width <= 0 or image.height <= 0:
         if crop_box_output is not None:
