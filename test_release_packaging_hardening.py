@@ -221,6 +221,33 @@ class TestReleaseLicensePolicy(unittest.TestCase):
 
 
 class TestPackagingSourceHardening(unittest.TestCase):
+    def test_installer_artifacts_keep_hidden_metadata_with_scoped_paths(self) -> None:
+        source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
+        expected_paths = {
+            "macos-installer": {
+                "dist/ClassInEDBMVP-macOS.dmg", "dist/macos-release-evidence.json",
+                "dist/package-size.json", "dist/release-metadata", "dist/update-smoke.json",
+            },
+            "windows-installer": {
+                "dist/ClassInEDBMVP-Setup.exe", "dist/windows-release-evidence.json",
+                "dist/package-size.json", "dist/release-metadata", "dist/update-smoke.json",
+                "dist/update-config-*.json",
+            },
+        }
+        upload_steps = [block for block in source.split("\n      - ") if "uses: actions/upload-artifact@" in block]
+        for artifact_name, allowed_paths in expected_paths.items():
+            with self.subTest(artifact=artifact_name):
+                matches = [block for block in upload_steps if f"          name: {artifact_name}\n" in block]
+                self.assertEqual(1, len(matches))
+                step = matches[0]
+                self.assertRegex(step, r"(?m)^          include-hidden-files: true$")
+                paths = re.search(r"(?m)^          path: \|\n((?:            [^\n]+\n?)+)", step)
+                self.assertIsNotNone(paths)
+                # Enabling hidden files must not broaden upload to dist/,
+                # where temporary build files can contain update PIN material.
+                self.assertEqual(allowed_paths, {line.strip() for line in paths.group(1).splitlines()})
+        self.assertEqual(2, len(re.findall(r"(?m)^          include-hidden-files: true$", source)))
+
     def test_production_installers_require_protected_update_pin(self) -> None:
         source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
 

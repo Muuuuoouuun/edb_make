@@ -53,7 +53,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", 
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
 PDF_NORMALIZED_CACHE_VERSION = 6
-IMAGE_NORMALIZED_CACHE_VERSION = 2
+IMAGE_NORMALIZED_CACHE_VERSION = 3
 HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
@@ -164,8 +164,7 @@ class PreparedPage:
     @property
     def image(self) -> Image.Image:
         if self._image is None:
-            with Image.open(self.source_path) as source:
-                self._image = source.convert("RGB")
+            self._image = load_image(self.source_path)
         return self._image
 
     @image.setter
@@ -201,7 +200,7 @@ class NormalizedPageImage:
 
     @property
     def image(self) -> Image.Image:
-        return Image.open(self.normalized_path).convert("RGB")
+        return load_image(self.normalized_path)
 
 
 def _require_cv2_numpy() -> None:
@@ -3886,12 +3885,23 @@ def _extract_pdf_media_regions(
 
 def load_image(source: str | Path) -> Image.Image:
     with Image.open(source) as image:
-        return ImageOps.exif_transpose(image).convert("RGB")
+        oriented = ImageOps.exif_transpose(image)
+        if "A" in oriented.getbands() or "transparency" in oriented.info:
+            rgba = oriented.convert("RGBA")
+            matte = Image.new("RGB", rgba.size, "white")
+            matte.paste(rgba, mask=rgba.getchannel("A"))
+            return matte
+        return oriented.convert("RGB")
 
 
 def _read_image_dimensions(source: str | Path) -> tuple[int, int] | None:
     try:
         with Image.open(source) as image:
+            # Transparent source pixels need a white paper matte before a
+            # full-page export can safely reuse RGB image bytes. Keep the
+            # original file untouched and normalize into the managed cache.
+            if "A" in image.getbands() or "transparency" in image.info:
+                return None
             # A camera image needs normalization even when every optional
             # transform is off; its stored raster can be rotated or mirrored.
             if image.getexif().get(274, 1) in {2, 3, 4, 5, 6, 7, 8}:
@@ -4663,7 +4673,7 @@ def prepare_source_pages(
     # the accumulated source_results list.
     disk_backed = Path(path).suffix.lower() == ".pdf" or len(normalized_pages) > PDF_PROCESSING_BATCH_PAGES
     for page in normalized_pages:
-        image = None if disk_backed else Image.open(page.normalized_path).convert("RGB")
+        image = None if disk_backed else load_image(page.normalized_path)
         original_source_path = page.source_path
         if page.metadata.get("source_type") == "pdf" and page.metadata.get("source_pdf_path"):
             original_source_path = str(page.metadata["source_pdf_path"])
@@ -4727,7 +4737,7 @@ def prepare_source_pages_batch(
 
         for local_page_index, page in enumerate(normalized_pages, start=1):
             page_counter += 1
-            image = Image.open(page.normalized_path).convert("RGB")
+            image = load_image(page.normalized_path)
             if max_dimension:
                 width, height = image.size
                 scale = min(max_dimension / max(width, height), 1.0)

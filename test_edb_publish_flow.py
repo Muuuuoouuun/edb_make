@@ -174,8 +174,11 @@ class TestEdbPublishFlow(unittest.TestCase):
             lock = threading.Lock()
             calls = 0
 
-            def fake_cutout(crop, *, chalk_color=None, text_priority=False):
+            def fake_cutout(crop, *, chalk_color=None, text_priority=False, preserve_page_content=False, paper_reference_image=None):
                 nonlocal calls
+                self.assertIs(preserve_page_content, False)
+                self.assertIsNotNone(paper_reference_image)
+                self.assertEqual(paper_reference_image.size, crop.size)
                 with lock:
                     calls += 1
                     call_index = calls
@@ -768,7 +771,7 @@ class TestEdbPublishFlow(unittest.TestCase):
 
             self.assertEqual(rendered.tobytes(), exported.tobytes())
 
-    def test_passage_stitch_removes_footer_badge_and_collapses_join(self):
+    def test_passage_stitch_preserves_ambiguous_footer_badge_as_possible_content(self):
         first = Image.new("RGB", (240, 300), "white")
         first_draw = ImageDraw.Draw(first)
         first_draw.rectangle((24, 20, 215, 160), outline="black", width=2)
@@ -787,11 +790,13 @@ class TestEdbPublishFlow(unittest.TestCase):
         prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
 
         self.assertEqual(2, len(prepared))
-        self.assertLess(prepared[0].height, 210)
+        # Pixels alone cannot prove this badge is a footer rather than part
+        # of the passage. Preserve its glyphs instead of deleting content.
+        self.assertEqual(first.tobytes(), prepared[0].tobytes())
         self.assertEqual(second.size, prepared[1].size)
         self.assertEqual((0, 0, 0), prepared[0].getpixel((24, 160)))
 
-    def test_passage_stitch_removes_following_column_page_header(self):
+    def test_passage_stitch_preserves_ambiguous_following_column_header_text(self):
         first = Image.new("RGB", (240, 120), "white")
         ImageDraw.Draw(first).text((24, 72), "left column ending", fill="black")
         second = Image.new("RGB", (240, 180), "white")
@@ -805,8 +810,9 @@ class TestEdbPublishFlow(unittest.TestCase):
 
         prepared = problem_board._prepare_passage_segments_for_stitch([first, second])
 
-        self.assertLess(prepared[1].height, 140)
-        self.assertGreater(prepared[1].height, 110)
+        # These labels could be real underlined passage text. Header removal
+        # needs semantic evidence; the image-only join keeps uncertain ink.
+        self.assertEqual(second.tobytes(), prepared[1].tobytes())
         self.assertLess(prepared[1].convert("L").crop((0, 0, 240, 24)).getextrema()[0], 200)
 
     def test_passage_stitch_removes_cropped_page_header_rule_without_header_text(self):

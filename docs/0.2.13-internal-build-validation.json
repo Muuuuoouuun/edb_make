@@ -1,0 +1,336 @@
+{
+  "schema_version": 1,
+  "report_date": "2026-10-30",
+  "version": "0.2.13",
+  "source_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+  "status": "native_builds_and_local_update_tests_passed",
+  "release_mode": "internal-test",
+  "published": false,
+  "update_feed_published": false,
+  "runs": [
+    {
+      "run_id": 40978774290,
+      "url": "https://github.com/Muuuuoouuun/edb_make/actions/runs/40978774290",
+      "head_sha": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "status": "completed",
+      "conclusion": "success",
+      "production_private_quality_gate": "skipped",
+      "update_feed_job": "skipped"
+    },
+    {
+      "run_id": 40978807469,
+      "url": "https://github.com/Muuuuoouuun/edb_make/actions/runs/40978807469",
+      "head_sha": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "status": "completed",
+      "conclusion": "success",
+      "production_private_quality_gate": "skipped",
+      "update_feed_job": "skipped"
+    }
+  ],
+  "platforms": [
+    {
+      "platform": "windows",
+      "architecture": "x64",
+      "provenance_environment": "win32-amd64-cp311",
+      "run_id": 40978807469,
+      "job_id": 123815937181,
+      "artifact_id": 12945255016,
+      "artifact_url": "https://github.com/Muuuuoouuun/edb_make/actions/runs/40978807469/artifacts/12945255016",
+      "artifact_zip_sha256": "333cf781c9b89a4d7d95184a297af0fb2a135f17100ed7a038d9667c922ce75b",
+      "expires_at": "2026-11-13T00:37:16Z",
+      "installer_sha256": "cd161d77d6e5646d5ec583a75b6166dbd52cc6d19e3f953ec92cbf6097247e37",
+      "installer_bytes": 49138463,
+      "release_evidence_verified": true,
+      "metadata_manifest_transport_complete": false,
+      "normalized_metadata_manifest_verified": true,
+      "native_update_baseline": {
+        "kind": "fixed-updater-test-bootstrap",
+        "version": "0.2.9",
+        "source_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+        "packaged_configuration": {
+          "version": "0.2.9",
+          "pinConfigured": false,
+          "feedConfigured": false,
+          "downloadConfigured": false,
+          "gitCommit": "139d0a756cfc19986280182a955c47e8a69538f0"
+        }
+      },
+      "target_packaged_configuration": {
+        "version": "0.2.13",
+        "pinConfigured": false,
+        "feedConfigured": false,
+        "downloadConfigured": false,
+        "gitCommit": "139d0a756cfc19986280182a955c47e8a69538f0"
+      },
+      "update_verification": {
+        "wrong_pin_rejected_without_download_or_shutdown": true,
+        "confirmed_pin_installed_and_restarted": true,
+        "saved_files_preserved": 9,
+        "settings_preserved": true,
+        "session_preserved": true,
+        "before_and_after_pdf_edb_export": true,
+        "changed_confirmation_rejected_without_download_or_shutdown": true,
+        "private_loopback_test_feed": true,
+        "ephemeral_test_pin": true,
+        "browser_button_click_test": false
+      },
+      "signing": "unsigned",
+      "notarized": null,
+      "label": "Windows x64",
+      "installer_filename": "ClassInEDBMVP-Setup.exe",
+      "restored_cleanup_marker": {
+        "file": ".edb-release-metadata-output",
+        "sha256": "a8ef6c0fd20c6a72fb7ed404aaed05495cf9f44d08c174e2e07d24233f3be5b6"
+      },
+      "installer_authenticode_certificate_table": {
+        "offset": 0,
+        "size": 0,
+        "present": false
+      },
+      "real_reinstall_and_uninstall_preserved_user_files": true
+    },
+    {
+      "platform": "macos",
+      "architecture": "arm64",
+      "provenance_environment": "darwin-arm64-cp311",
+      "run_id": 40978774290,
+      "job_id": 123815265124,
+      "artifact_id": 12944680970,
+      "artifact_url": "https://github.com/Muuuuoouuun/edb_make/actions/runs/40978774290/artifacts/12944680970",
+      "artifact_zip_sha256": "0b33090dd4dc2eb6f2169cc5be00de18211dd68d999854bd180615b3a25e7d89",
+      "expires_at": "2026-11-13T00:28:55Z",
+      "installer_sha256": "c852351e9aca139eac67eca2bf06768964becc851f51515725d4c4a1db099499",
+      "installer_bytes": 52164224,
+      "release_evidence_verified": true,
+      "metadata_manifest_transport_complete": false,
+      "normalized_metadata_manifest_verified": true,
+      "native_update_baseline": {
+        "kind": "original-0.2.8",
+        "version": "0.2.8",
+        "source_commit": "d5a3f37d984047875ae32bff22967ff625a4bfe2",
+        "packaged_configuration": {
+          "version": "0.2.8",
+          "pinConfigured": false,
+          "feedConfigured": false,
+          "downloadConfigured": false,
+          "gitCommit": "d5a3f37d984047875ae32bff22967ff625a4bfe2"
+        }
+      },
+      "target_packaged_configuration": {
+        "version": "0.2.13",
+        "pinConfigured": false,
+        "feedConfigured": false,
+        "downloadConfigured": false,
+        "gitCommit": "139d0a756cfc19986280182a955c47e8a69538f0"
+      },
+      "update_verification": {
+        "wrong_pin_rejected_without_download_or_shutdown": true,
+        "confirmed_pin_installed_and_restarted": true,
+        "saved_files_preserved": 9,
+        "settings_preserved": true,
+        "session_preserved": true,
+        "before_and_after_pdf_edb_export": true,
+        "changed_confirmation_rejected_without_download_or_shutdown": true,
+        "private_loopback_test_feed": true,
+        "ephemeral_test_pin": true,
+        "browser_button_click_test": false
+      },
+      "signing": "ad-hoc",
+      "notarized": false,
+      "label": "Mac Apple Silicon",
+      "installer_filename": "ClassInEDBMVP-macOS.dmg",
+      "restored_cleanup_marker": {
+        "file": ".edb-release-metadata-output",
+        "sha256": "fc69c8ff18bb8ab785a8f18fc87c8dca59e68949648f84602cdc3fdc36caa319"
+      }
+    },
+    {
+      "platform": "macos",
+      "architecture": "x64",
+      "provenance_environment": "darwin-x86_64-cp311",
+      "run_id": 40978807469,
+      "job_id": 123815937094,
+      "artifact_id": 12944174800,
+      "artifact_url": "https://github.com/Muuuuoouuun/edb_make/actions/runs/40978807469/artifacts/12944174800",
+      "artifact_zip_sha256": "afe3872a9c4bbae92c057d7bd0310332b073bf0d2c4b06d8f6d4b709892a08b7",
+      "expires_at": "2026-11-13T00:40:06Z",
+      "installer_sha256": "c7523be9808d28d31d48f7e85d8b685fed576084554456db5e06f2b96cc212d5",
+      "installer_bytes": 72106048,
+      "release_evidence_verified": true,
+      "metadata_manifest_transport_complete": false,
+      "normalized_metadata_manifest_verified": true,
+      "native_update_baseline": {
+        "kind": "original-0.2.8",
+        "version": "0.2.8",
+        "source_commit": "d5a3f37d984047875ae32bff22967ff625a4bfe2",
+        "packaged_configuration": {
+          "version": "0.2.8",
+          "pinConfigured": false,
+          "feedConfigured": false,
+          "downloadConfigured": false,
+          "gitCommit": "d5a3f37d984047875ae32bff22967ff625a4bfe2"
+        }
+      },
+      "target_packaged_configuration": {
+        "version": "0.2.13",
+        "pinConfigured": false,
+        "feedConfigured": false,
+        "downloadConfigured": false,
+        "gitCommit": "139d0a756cfc19986280182a955c47e8a69538f0"
+      },
+      "update_verification": {
+        "wrong_pin_rejected_without_download_or_shutdown": true,
+        "confirmed_pin_installed_and_restarted": true,
+        "saved_files_preserved": 9,
+        "settings_preserved": true,
+        "session_preserved": true,
+        "before_and_after_pdf_edb_export": true,
+        "changed_confirmation_rejected_without_download_or_shutdown": true,
+        "private_loopback_test_feed": true,
+        "ephemeral_test_pin": true,
+        "browser_button_click_test": false
+      },
+      "signing": "ad-hoc",
+      "notarized": false,
+      "label": "Mac Intel",
+      "installer_filename": "ClassInEDBMVP-macOS.dmg",
+      "restored_cleanup_marker": {
+        "file": ".edb-release-metadata-output",
+        "sha256": "fc69c8ff18bb8ab785a8f18fc87c8dca59e68949648f84602cdc3fdc36caa319"
+      }
+    }
+  ],
+  "configuration_audit": {
+    "original_windows_0_2_4": {
+      "version": "0.2.4",
+      "update_feed_configured": true,
+      "update_feed_url": "https://github.com/Muuuuoouuun/edb_make/releases/latest/download/update.json",
+      "download_configured": true,
+      "download_url": "https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.4/ClassInEDBMVP-Setup.exe",
+      "pin_configured": false,
+      "default_pin_exists": false,
+      "current_build_pin_secret_configured": false
+    },
+    "internal_0_2_13": {
+      "pin_configured": false,
+      "update_feed_configured": false,
+      "download_url_configured": false,
+      "customer_automatic_updates_enabled": false
+    },
+    "ui_code_inspection": {
+      "update_button": "Opens update settings and checks available version. Installation requires a separate confirmation and configured PIN.",
+      "source_url": "https://github.com/Muuuuoouuun/edb_make/blob/139d0a756cfc19986280182a955c47e8a69538f0/ui_prototype/app.jsx#L17850"
+    }
+  },
+  "verification_scope": {
+    "native_installer_and_updater_api": true,
+    "browser_update_button_click_test": false,
+    "browser_update_button_behavior_source_inspected": true,
+    "native_classin_gui": false,
+    "physical_customer_pc": false,
+    "linux_corpus_quality_score_claimed": false
+  },
+  "metadata_transport": {
+    "original_uploads_complete": false,
+    "missing_file": ".edb-release-metadata-output",
+    "original_downloads_modified": false,
+    "normalized_copies_fully_verified": true,
+    "only_reconstructed_bytes": "Exact generated cleanup marker from source; LF on macOS, CRLF on Windows. Size and SHA256 match unchanged original manifest.",
+    "reconstructed_marker_is_runtime_evidence": false,
+    "all_other_copy_bytes_identical": true,
+    "procedure_source_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+    "procedure_source_sha256": {
+      "scripts/build_release_metadata.py": "dfbeebe8962ad1d16b143476ef3215dfb845a731eaf9e9381c1914488c18c58c",
+      "scripts/stage_edb_031_test_installers.py": "fd08af247d7b298f159bb692c448a7cc8a95c0eae05d858d28f269d12e14c9b8"
+    },
+    "workflow_fix_commit": "5d7201fd62829cb3a5be62a01ef50099e905f1eb",
+    "workflow_fix_scope": "Two installer upload steps include hidden files while retaining explicit artifact path allowlists; no application or installer byte change.",
+    "focused_validation": {
+      "tests_passed": 22,
+      "subtests_passed": 33
+    }
+  },
+  "evidence_files": [
+    {
+      "file": "internal-build-013/native-build-summary.json",
+      "sha256": "6ff1af8bb56933cac44684a34969693ea4e7f1ab53faf40ac5b54a50cea004d5",
+      "size_bytes": 12730
+    },
+    {
+      "file": "internal-build-013/remote-verification-from-logs.json",
+      "sha256": "85e77aa536320108c3f4a2780e5fc6d278d6f97762e79275599eab6f58d3711a",
+      "size_bytes": 54227
+    },
+    {
+      "file": "internal-build-013/metadata-transport-reconstruction.json",
+      "sha256": "a3f99454445fb6942e2bf07103007c114bde2960e20ec5a65282e6109b0ccb49",
+      "size_bytes": 51977
+    },
+    {
+      "file": "internal-build-013-arm64-dispatch.json",
+      "sha256": "6c4affb700f3327ac92a5b984079573a66b7a61ba6b9e91bbbbe027475e213d9",
+      "size_bytes": 759
+    },
+    {
+      "file": "internal-build-013-x64-dispatch.json",
+      "sha256": "a84c450698fcd7f5871172b38e46ed1a9e906d6d8f57ddd6c9c3e20218c2ecaf",
+      "size_bytes": 757
+    },
+    {
+      "file": "internal-build-013/original-024/update-config-0.2.4.json",
+      "sha256": "8972a3363fd252c65a30544544580c92a32b86b6ae8eeec3e2b3ba3aafaff435",
+      "size_bytes": 560
+    },
+    {
+      "file": "internal-build-013/windows/update-config-target.json",
+      "sha256": "1735a0708742f34ca797d252a5424826297a2a5f0594f57ff5c486272ca81181",
+      "size_bytes": 399
+    },
+    {
+      "file": "internal-build-013/arm64/macos-release-evidence.json",
+      "sha256": "330a51504d4e0ffc1bb6fd5c669322d030ca6ce09ff26743fc99616881598c07",
+      "size_bytes": 324
+    },
+    {
+      "file": "internal-build-013/arm64/update-smoke.json",
+      "sha256": "3e2304ae094939d5b32833d667fd606ba81a905834fe21dd5183a1cc3bee7860",
+      "size_bytes": 2388
+    },
+    {
+      "file": "internal-build-013/arm64/release-metadata/metadata-manifest.json",
+      "sha256": "39c83fb8a979b1a2ad636fe76194d5c3f2cc79f444f53a6819d34ac8bce06ad1",
+      "size_bytes": 20911
+    },
+    {
+      "file": "internal-build-013/x64/macos-release-evidence.json",
+      "sha256": "107041cd48c7aef6474c09a275389306da16831e1c5df91dbb72cb222c8c9be8",
+      "size_bytes": 324
+    },
+    {
+      "file": "internal-build-013/x64/update-smoke.json",
+      "sha256": "db6ce0fdf5dc79a6b0181f1e1fff5cbda065211e911d3da937450b07c9310b67",
+      "size_bytes": 2388
+    },
+    {
+      "file": "internal-build-013/x64/release-metadata/metadata-manifest.json",
+      "sha256": "272322a9a1f462475bc5f4298bc5d1471c2a0b40e90a5e02eaa7ff574d151eba",
+      "size_bytes": 20911
+    },
+    {
+      "file": "internal-build-013/windows/windows-release-evidence.json",
+      "sha256": "1fd2132ce26525663ded4b7bd2f2fe7fbc27280657bd4c16b5440fff15733daf",
+      "size_bytes": 339
+    },
+    {
+      "file": "internal-build-013/windows/update-smoke.json",
+      "sha256": "09d2f16d9faf05fd41ea6f32ef35b5944260e6eed0ea674f7d5d5f942970a192",
+      "size_bytes": 2480
+    },
+    {
+      "file": "internal-build-013/windows/release-metadata/metadata-manifest.json",
+      "sha256": "1fc1c1ca88158601516d05a1071b25307c3fdf60fc6d51d7ec7596c20a39e8e2",
+      "size_bytes": 21091
+    }
+  ],
+  "applied_workflow_fix_commit": "ce4ac79ef9f2313cec56e4ae6c26223dae18214f"
+}

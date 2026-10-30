@@ -100,7 +100,7 @@ class TestWindowsExamCorpus(unittest.TestCase):
 
         self.assertEqual([[1, 3], [18, 21]], ranges)
 
-    def test_printed_ranges_exclude_independent_group_instructions(self) -> None:
+    def test_printed_ranges_exclude_listening_and_independent_group_instructions(self) -> None:
         text = """
         [16 ~ 17] \ub2e4\uc74c\uc744 \ub4e3\uace0, \ubb3c\uc74c\uc5d0 \ub2f5\ud558\uc2dc\uc624.
         [31 ~ 34] \ub2e4\uc74c \ube48\uce78\uc5d0 \ub4e4\uc5b4\uac08 \ub9d0\ub85c \uac00\uc7a5 \uc801\uc808\ud55c \uac83\uc744 \uace0\ub974\uc2dc\uc624.
@@ -108,9 +108,12 @@ class TestWindowsExamCorpus(unittest.TestCase):
         """
 
         self.assertEqual(
-            [[16, 17], [41, 42]],
+            [[41, 42]],
             extract_printed_ranges(text, question_max=45),
         )
+        # Shared reading exports require a body printed on the paper;
+        # listening directives have no shared reading body to extract.
+        self.assertEqual([], extract_printed_ranges(text.splitlines()[1], question_max=45))
 
     def test_kice_expected_questions_include_forms_and_electives(self) -> None:
         def asset(subject: str, question_max: int) -> ExamAsset:

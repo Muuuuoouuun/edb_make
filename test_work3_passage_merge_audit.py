@@ -14,8 +14,14 @@ from build_problem_board_edb import (
 from preprocess import PreparedPage
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject
 from scripts.work3_passage_merge_audit import (
+    FOOTER_LABEL,
+    HEADER_LABEL,
+    _strict_matrix_images,
+    _stitch_images,
     analyze_benchmark_layouts,
     analyze_multi_dpi_benchmarks,
+    audit_stitched_image,
+    build_synthetic_fragments,
     compare_layouts,
     render_actual_s2_preview,
     run_synthetic_audit,
@@ -222,7 +228,7 @@ class TestWork3PassageMergeAudit(unittest.TestCase):
             asset_task=None,
         )
 
-    def test_synthetic_cross_page_merge_is_complete_and_chrome_free(self):
+    def test_synthetic_merge_preserves_original_glyphs_and_separately_cleans_bare_guides(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_dir = Path(temp_dir) / "audit"
 
@@ -233,18 +239,101 @@ class TestWork3PassageMergeAudit(unittest.TestCase):
             self.assertEqual(100.0, audit["completeness_score"])
             self.assertEqual([1, 2, 3], audit["expected_source_pages"])
             self.assertEqual(PASSAGE_FRAGMENT_STITCH_GAP_PX, audit["join_gap_px"])
-            self.assertEqual({"header": 0, "footer": 0}, audit["remaining_page_chrome_pixels"])
+            self.assertTrue(audit["checks"]["original_required_ink_identity"])
+            self.assertTrue(audit["checks"]["ambiguous_glyphs_preserved"])
+            self.assertEqual(audit["ambiguous_label_expected_pixels"], audit["ambiguous_label_actual_pixels"])
+            self.assertTrue(all(value > 0 for value in audit["ambiguous_label_actual_pixels"].values()))
+            self.assertFalse(audit["bare_guide_cleanup_required"])
             self.assertTrue(result["strict_matrix"]["pass"])
             self.assertEqual(9, result["strict_matrix"]["case_count"])
             self.assertEqual(9, result["strict_matrix"]["passed_case_count"])
             self.assertTrue(all(result["strict_matrix"]["negative_guardrails"].values()))
+            self.assertTrue(all(case["checks"]["bare_guides_removed"]
+                                for case in result["strict_matrix"]["cases"]))
             self.assertTrue(result["pass"])
             self.assertTrue((output_dir / "merged-current.png").is_file())
             self.assertTrue((output_dir / "layout-comparison.png").is_file())
             self.assertTrue((output_dir / "audit.json").is_file())
             written = json.loads((output_dir / "audit.json").read_text(encoding="utf-8"))
             self.assertTrue(written["pass"])
-            self.assertEqual(2, written["schema_version"])
+            self.assertEqual(3, written["schema_version"])
+
+    def _audit_fixture(self, root):
+        fragments = build_synthetic_fragments(root / "sources")
+        sources = []
+        for fragment in fragments:
+            with Image.open(fragment.path) as image:
+                sources.append(image.convert("RGB"))
+        _stitched, prepared = _stitch_images(sources)
+        return fragments, sources, [image.copy() for image in prepared]
+
+    def _assemble_prepared(self, prepared):
+        canvas = Image.new("RGB", (max(image.width for image in prepared),
+                                  sum(image.height for image in prepared)
+                                  + PASSAGE_FRAGMENT_STITCH_GAP_PX * (len(prepared) - 1)), "white")
+        cursor = 0
+        for image in prepared:
+            canvas.paste(image, (0, cursor))
+            cursor += image.height + PASSAGE_FRAGMENT_STITCH_GAP_PX
+        return canvas
+
+    def test_audit_detects_body_loss_that_already_happened_during_preparation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fragments, sources, prepared = self._audit_fixture(Path(temp_dir))
+            prepared[0] = prepared[0].crop((0, 150, prepared[0].width, prepared[0].height))
+            result = audit_stitched_image(fragments, self._assemble_prepared(prepared), prepared,
+                                          source_images=sources)
+            self.assertTrue(result["checks"]["segment_pixel_identity"])
+            self.assertFalse(result["checks"]["no_body_loss_or_duplication"])
+            self.assertFalse(result["checks"]["original_required_ink_identity"])
+            self.assertFalse(result["pass"])
+
+    def test_audit_detects_printed_text_loss_even_when_body_markers_survive(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fragments, sources, prepared = self._audit_fixture(Path(temp_dir))
+            pixels = prepared[0].load()
+            for y in range(prepared[0].height):
+                for x in range(prepared[0].width):
+                    if pixels[x, y] in {(24, 24, 24), (70, 70, 70)}:
+                        pixels[x, y] = (255, 255, 255)
+            result = audit_stitched_image(fragments, self._assemble_prepared(prepared), prepared,
+                                          source_images=sources)
+            self.assertTrue(result["checks"]["segment_pixel_identity"])
+            self.assertTrue(result["checks"]["no_body_loss_or_duplication"])
+            self.assertFalse(result["checks"]["original_required_ink_identity"])
+            self.assertFalse(result["pass"])
+
+    def test_audit_requires_ambiguous_header_and_footer_glyphs_to_survive(self):
+        for label in (HEADER_LABEL, FOOTER_LABEL):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temp_dir:
+                fragments, sources, prepared = self._audit_fixture(Path(temp_dir))
+                for image in prepared:
+                    pixels = image.load()
+                    for y in range(image.height):
+                        for x in range(image.width):
+                            if pixels[x, y] == label:
+                                pixels[x, y] = (255, 255, 255)
+                result = audit_stitched_image(fragments, self._assemble_prepared(prepared), prepared,
+                                              source_images=sources)
+                self.assertTrue(result["checks"]["no_body_loss_or_duplication"])
+                self.assertFalse(result["checks"]["ambiguous_glyphs_preserved"])
+                self.assertFalse(result["checks"]["original_required_ink_identity"])
+                self.assertFalse(result["pass"])
+
+    def test_audit_still_rejects_uncleaned_bare_guides_and_reordered_fragments(self):
+        sources, fragments = _strict_matrix_images(3, 360)
+        result = audit_stitched_image(fragments, self._assemble_prepared(sources), sources,
+                                      source_images=sources, require_bare_guide_cleanup=True)
+        self.assertTrue(result["checks"]["original_required_ink_identity"])
+        self.assertFalse(result["checks"]["bare_guides_removed"])
+        self.assertFalse(result["pass"])
+        _stitched, prepared = _stitch_images(sources)
+        prepared.reverse()
+        result = audit_stitched_image(fragments, self._assemble_prepared(prepared), prepared,
+                                      source_images=sources, require_bare_guide_cleanup=True)
+        self.assertFalse(result["checks"]["source_order"])
+        self.assertFalse(result["checks"]["original_required_ink_identity"])
+        self.assertFalse(result["pass"])
 
     def test_adaptive_layout_splits_only_when_record_height_exceeds_limit(self):
         fragments = [
