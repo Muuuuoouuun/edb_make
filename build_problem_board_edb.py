@@ -11555,6 +11555,9 @@ def _cached_chalk_cutout(
     chalk tone, the text-priority path, the library versions and this
     module's code. Any cache failure falls back to building the cutout.
     """
+    # Whole-page chalk preservation applies regardless of detected subject.
+    # Normalize before hashing so initial assets and later publishes agree.
+    text_priority = text_priority or preserve_page_content
     def build() -> Image.Image:
         # This original paper reference is the same crop whose bytes are
         # hashed below; no external reference can bypass the cache identity.
@@ -11618,6 +11621,7 @@ def _build_image_only_record_image(
     processing_step = _normalize_processing_step(
         entry.processing_step or placement.metadata.get("processing_step")
     )
+    preserve_page_content = _entry_is_whole_page(entry)
     text_priority = _problem_prefers_text_preservation(
         entry.subject,
         entry.source_path,
@@ -11625,14 +11629,13 @@ def _build_image_only_record_image(
     ) or (
         processing_step != PROCESSING_STEP_RECONSTRUCT
         and _explicit_shared_passage_prefers_text(entry.subject, entry.passage_role, entry.passage_range)
-    )
+    ) or (processing_step == PROCESSING_STEP_CHALK and preserve_page_content)
     preserve_tall_text = (
         text_priority
         and processing_step != PROCESSING_STEP_RECONSTRUCT
         and len(entry.source_segments) > 1
     )
     chalk_color = _resolve_chalk_color(board_theme)
-    preserve_page_content = _entry_is_whole_page(entry)
     chalk_math_media = _stage2_prefers_chalk_math_media(
         entry.subject,
         processing_step,
