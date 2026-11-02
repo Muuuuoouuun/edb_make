@@ -191,6 +191,59 @@ class TestPdfTextMarkerSegmentation(unittest.TestCase):
         self.assertTrue(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(clean))
         self.assertEqual([5, 6, 7], [m["number"] for m in clean[1].metadata["pdf_problem_markers"]])
 
+    def test_pdf_badges_ignore_repeated_question_and_clock_numbers_through_100(self):
+        # KMA handouts carry a global badge, a larger workbook question number
+        # restarting at 06, and unrelated two-digit numbers inside figures.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "dual-numbering.pdf"
+            with fitz.open() as document:
+                for page_index in range(25):
+                    page = document.new_page(width=600, height=800)
+                    page.insert_text((30, 40), "Workbook title / Name", fontsize=12)
+                    for row in range(4):
+                        number = page_index * 4 + row + 1
+                        y = 90 + row * 170
+                        page.draw_rect((30, y - 12, 58, y + 4), fill=(0.1, 0.2, 0.4))
+                        page.insert_text((33, y), f"{number:02d}", fontsize=9.5, color=(1, 1, 1))
+                        page.insert_text((33, y + 30), f"{(number - 1) % 20 + 6:02d}", fontsize=20, color=(0, 0.3, 0.6))
+                        page.insert_text((80, y + 30), "Find the answer in the figure.", fontsize=12)
+                        page.draw_rect((420, y + 40, 540, y + 85), color=(0, 0, 0))
+                        for index, value in enumerate((12, 11, 10)):
+                            page.insert_text((430 + index * 35, y + 60), str(value), fontsize=8)
+                        page.insert_text((80, y + 110), "Answer: (                 )", fontsize=12)
+                document.save(source)
+
+            prepared = prepare_source_pages(source, pdf_dpi=72, crop_margins=False)
+            self.assertEqual(
+                list(range(1, 101)),
+                [marker["number"] for page in prepared for marker in page.metadata.get("pdf_problem_markers", [])],
+            )
+            for page in prepared:
+                segmented = segment_page(page, page_id=page.page_id, subject=Subject.MATH)
+                self.assertEqual("pdf-text-markers", segmented.metadata.get("segmenter"))
+                self.assertEqual(4, len(segmented.blocks))
+            model = build_page_model(prepared[0], subject=Subject.MATH, ocr_mode="none", ai_config=build_ai_fallback_config(mode="off"))
+            self.assertEqual(4, len(model.problems))
+            self.assertFalse(any(problem.metadata.get("fallback_grouping") for problem in model.problems))
+            # Each crop includes the stem, figure and answer, not just its badge.
+            for row, block in enumerate(model.blocks):
+                self.assertLess(block.bbox.top, 90 + row * 170)
+                self.assertGreaterEqual(block.bbox.right, 540)
+                self.assertGreater(block.bbox.bottom, 200 + row * 170)
+
+    def test_pdf_badge_style_selection_rejects_ambiguous_sequences(self):
+        pages = [
+            preprocess_module.NormalizedPageImage("page", "source.pdf", "page.png", index, 600, 800, {
+                "pdf_badge_markers": [
+                    {"number": index + 1, "badge_style": style, "bbox": {"left": 30, "top": top}}
+                    for style, top in (("white badge", 90), ("blue number", 120))
+                ],
+            })
+            for index in range(3)
+        ]
+        self.assertFalse(preprocess_module._promote_pdf_badge_markers_when_numeric_missing(pages))
+        self.assertTrue(all(not page.metadata.get("pdf_problem_markers") for page in pages))
+
     def test_mixed_numeric_and_badge_pages_keep_original_question_numbers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "mixed-numbering.pdf"

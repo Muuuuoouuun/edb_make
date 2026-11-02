@@ -978,6 +978,12 @@ def _assign_pdf_marker_columns(
     image: Image.Image,
     markers: list[dict[str, Any]],
 ) -> tuple[list[tuple[int, list[dict[str, Any]], tuple[float, float]]], int, bool]:
+    marker_columns = _cluster_pdf_marker_columns(markers, image.width)
+    if len(marker_columns) == 1 and all(marker.get("marker_kind") == "badge" for marker in markers):
+        # Document-validated workbook badges identify the card columns.
+        # A picture beside a short stem can look like a second text column;
+        # without a badge there it belongs to the same full-width card.
+        return [(1, markers, (0.0, float(image.width)))], 1, False
     visual_columns = _detect_pdf_visual_column_boxes(image)
     if len(visual_columns) == 2:
         boundary_x = (visual_columns[0].right + visual_columns[1].left) / 2.0
@@ -1010,7 +1016,6 @@ def _assign_pdf_marker_columns(
         if entries:
             return entries, len(visual_columns), True
 
-    marker_columns = _cluster_pdf_marker_columns(markers, image.width)
     column_bounds = _column_bounds_from_marker_columns(marker_columns, image.width)
     return [
         (index + 1, column_markers, column_bounds[index])
