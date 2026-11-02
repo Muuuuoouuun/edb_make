@@ -97,6 +97,25 @@ class TestPdfPreprocessCache(unittest.TestCase):
             self.assertEqual(200, prepared[0].metadata["dpi"])
             self.assertNotIn("resized_to_max_dimension", prepared[0].metadata)
 
+    def test_pdf_cache_from_before_badge_style_detection_is_rebuilt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "source.pdf"
+            source.write_bytes(b"%PDF-1.4 same workbook")
+            output = Path(temp_dir) / "out"
+
+            def render(src, target, dpi):
+                return [self._rendered_pdf_page(src, target)]
+
+            with mock.patch.object(preprocess, "render_pdf_pages", side_effect=render) as render_mock:
+                with mock.patch.object(preprocess, "PDF_NORMALIZED_CACHE_VERSION", 6):
+                    preprocess.prepare_pages(source, output, enable_deskew=False, enable_margin_crop=False)
+                rebuilt = preprocess.prepare_pages(source, output, enable_deskew=False, enable_margin_crop=False)
+                reused = preprocess.prepare_pages(source, output, enable_deskew=False, enable_margin_crop=False)
+
+            self.assertEqual(2, render_mock.call_count)
+            self.assertFalse(rebuilt[0].metadata.get("pdf_normalized_cache_hit"))
+            self.assertTrue(reused[0].metadata.get("pdf_normalized_cache_hit"))
+
     def test_prepare_pages_pdf_cache_is_content_keyed_and_updates_source_pdf_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

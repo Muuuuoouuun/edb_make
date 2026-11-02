@@ -52,7 +52,7 @@ except ImportError:  # pragma: no cover
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
-PDF_NORMALIZED_CACHE_VERSION = 6
+PDF_NORMALIZED_CACHE_VERSION = 7
 IMAGE_NORMALIZED_CACHE_VERSION = 2
 HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
@@ -3485,13 +3485,13 @@ def _extract_pdf_badge_markers(
     scale: float,
     data: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """Extract two-digit number badges ("01", "12") that head each problem.
+    """Extract number badges ("01", "12", "100") that head each problem.
 
     Workbook-style PDFs often print the problem number alone in a colored
     badge without a trailing period, so ``_extract_pdf_problem_markers`` never
-    sees them. These are only candidates: a lone two-digit line can also be a
+    sees them. These are only candidates: a lone numeric line can also be a
     table cell or fraction, so ``_promote_pdf_badge_markers_when_numeric_missing``
-    accepts them only when the whole document forms one clean sequence.
+    validates their numbering and, when needed, their text style and position.
     """
     import re
 
@@ -3513,16 +3513,31 @@ def _extract_pdf_badge_markers(
                 for span in line.get("spans") or []
                 if isinstance(span, dict)
             ).strip()
-            if not re.fullmatch(r"0[1-9]|[1-9][0-9]", text):
+            if not re.fullmatch(r"0[1-9]|[1-9][0-9]{1,2}", text):
                 continue
             bbox = line.get("bbox")
             if not bbox or len(bbox) != 4:
                 continue
             left, top, right, bottom = [float(value) * scale for value in bbox]
+            # A worksheet can print both global badges and larger local
+            # question numbers, plus numeric figure labels. Preserve the
+            # style so document validation can separate those sequences.
+            styles = sorted(
+                {
+                    (
+                        str(span.get("font") or ""),
+                        round(float(span.get("size") or 0.0), 2),
+                        int(span.get("color") or 0),
+                    )
+                    for span in line.get("spans") or []
+                    if isinstance(span, dict) and str(span.get("text") or "").strip()
+                }
+            )
             markers.append(
                 {
                     "number": int(text),
                     "marker_kind": "badge",
+                    "badge_style": json.dumps(styles),
                     "text": text,
                     "bbox": {
                         "left": left,
@@ -3655,13 +3670,40 @@ def _promote_pdf_badge_markers_when_numeric_missing(pages: list[NormalizedPageIm
     numbers = [int(marker["number"]) for markers in effective_pages for marker in markers]
     if not badge_pages or len(numbers) < PDF_BADGE_MARKER_MIN_COUNT:
         return False
-    if not (
+    valid_numbering = (
         _pdf_markers_form_one_sequence(effective_pages)
         # Badge placement is the only evidence for a compiled handout, so a
         # document with trusted "N." pages keeps the strict check above.
         or (not has_numeric_page and _pdf_badges_form_compiled_runs(pages, effective_pages))
-    ):
-        return False
+    )
+    if not valid_numbering:
+        if has_numeric_page:
+            return False
+        # Do not discard all badges just because a clock or a second question
+        # numbering shares their numeric format. Accept only one unambiguous
+        # style with a document-wide sequence, aligned anchors, and a marker
+        # on every page that had candidates. Never guess between two sequences.
+        styles = {
+            marker["badge_style"]
+            for markers in effective_pages
+            for marker in markers
+            if marker.get("badge_style")
+        }
+        valid_styles: list[list[list[dict[str, Any]]]] = []
+        for style in sorted(styles):
+            styled_pages = [
+                [marker for marker in markers if marker.get("badge_style") == style]
+                for markers in effective_pages
+            ]
+            if any(markers and not styled for markers, styled in zip(effective_pages, styled_pages)):
+                continue
+            if sum(map(len, styled_pages)) < PDF_BADGE_MARKER_MIN_COUNT:
+                continue
+            if _pdf_markers_form_one_sequence(styled_pages) and _pdf_badges_form_compiled_runs(pages, styled_pages):
+                valid_styles.append(styled_pages)
+        if len(valid_styles) != 1:
+            return False
+        badge_pages = [(page, markers) for page, markers in zip(pages, valid_styles[0]) if markers]
 
     for page, badges in badge_pages:
         page.metadata["pdf_problem_markers"] = badges
