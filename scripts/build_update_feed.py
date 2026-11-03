@@ -210,6 +210,7 @@ def platform_payload(
 def build_feed(args: argparse.Namespace) -> dict[str, Any]:
     validate_distinct_artifact_files({
         "macos": args.macos_file,
+        "macos-x64": args.macos_x64_file,
         "windows": args.windows_file,
     })
     platforms: dict[str, Any] = {}
@@ -222,6 +223,16 @@ def build_feed(args: argparse.Namespace) -> dict[str, Any]:
         artifact_type=args.macos_artifact_type,
         arch=args.macos_arch,
     )
+    # Intel Macs read "macos-x64"; everything else reads "macos".
+    macos_x64 = platform_payload(
+        version=args.version,
+        platform="macos",
+        download_url=args.macos_x64_url,
+        artifact_path=args.macos_x64_file,
+        release_notes_url=args.release_notes_url,
+        artifact_type=args.macos_artifact_type,
+        arch="x64",
+    )
     windows = platform_payload(
         version=args.version,
         platform="windows",
@@ -233,6 +244,8 @@ def build_feed(args: argparse.Namespace) -> dict[str, Any]:
     )
     if macos:
         platforms["macos"] = macos
+    if macos_x64:
+        platforms["macos-x64"] = macos_x64
     if windows:
         platforms["windows"] = windows
     if not platforms:
@@ -356,6 +369,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--macos-file", default="", help="Local macOS DMG path for sha256/size metadata")
     parser.add_argument("--macos-artifact-type", default="dmg", help="macOS artifact type")
     parser.add_argument("--macos-arch", default="arm64", help="macOS artifact architecture")
+    parser.add_argument("--macos-x64-url", default="", help="Public Intel macOS DMG download URL")
+    parser.add_argument("--macos-x64-file", default="", help="Local Intel macOS DMG path for sha256/size metadata")
     parser.add_argument("--windows-url", default="", help="Public Windows Setup.exe download URL")
     parser.add_argument("--windows-file", default="", help="Local Windows Setup.exe path for sha256/size metadata")
     parser.add_argument("--windows-artifact-type", default="setup-exe", help="Windows artifact type")

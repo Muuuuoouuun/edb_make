@@ -53,10 +53,7 @@ class TestReleaseVersionConsistency(unittest.TestCase):
             f'#define AppVersion "{version}"',
             (PROJECT_ROOT / "installer" / "windows" / "ClassInEDBMVP.iss").read_text(encoding="utf-8"),
         )
-        self.assertIn(
-            f'default: "{version}"',
-            (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8"),
-        )
+        # The installer workflow has no default version: a feed-enabled build must name a newer one.
 
 
 class TestReleaseInputValidation(unittest.TestCase):
@@ -430,11 +427,29 @@ class TestPackagingSourceHardening(unittest.TestCase):
         self.assertIn("!cancelled()", feed_condition)
         self.assertIn("needs.macos.result == 'success'", feed_condition)
         self.assertIn("needs.windows.result == 'success'", feed_condition)
-        self.assertIn("inputs.macos_download_url != '' && inputs.windows_download_url != ''", feed_condition)
+        self.assertIn("inputs.update_channel && inputs.macos_arch == 'both'", feed_condition)
         self.assertIn('arch=$(uname -m)', source)
-        self.assertIn("MACOS_ARTIFACT_ARCH: ${{ needs.macos.outputs.artifact_arch }}", source)
+        self.assertIn("Runner built $arch, expected $MATRIX_ARCH", source)
+        self.assertIn("--macos-x64-file release-artifacts/ClassInEDBMVP-macOS-x64.dmg", source)
         self.assertIn("WINDOWS_ARTIFACT_ARCH: ${{ needs.windows.outputs.artifact_arch }}", source)
         self.assertNotIn('--version "${{ inputs.version }}"', source)
+
+    def test_workflow_derives_the_update_urls_the_staging_script_expects(self) -> None:
+        from scripts.stage_draft_release import INSTALLERS, REQUIRED_JOBS
+
+        source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "format('https://github.com/{0}/releases/latest/download/update.json', github.repository)",
+            source,
+        )
+        self.assertIn("releases/download/v{1}/manifest.json'", source)
+        for row in INSTALLERS:
+            self.assertIn(f"releases/download/v{{1}}/{row[5]}'", source)
+        self.assertIn("name: macOS DMG (${{ matrix.arch }})", source)
+        self.assertTrue({"macOS DMG (arm64)", "macOS DMG (x64)"} <= REQUIRED_JOBS)
+        for removed in ("update_feed_url", "release_notes_url", "manifest_url", "macos_download_url", "windows_download_url"):
+            self.assertNotIn(f"inputs.{removed}", source)
+        self.assertNotIn('default: "0.2.4"', source)
 
 
 if __name__ == "__main__":

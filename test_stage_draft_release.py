@@ -42,3 +42,56 @@ class TestDraftReleaseGuards(unittest.TestCase):
             with self.subTest(key=key):
                 with self.assertRaises(ValueError):
                     validate_draft({**self.release, key: value}, self.commit, '0.2.4')
+
+
+class TestDraftReleaseArtifacts(unittest.TestCase):
+    def test_stages_both_macs_and_windows_under_their_release_names(self):
+        import subprocess
+        import sys
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import scripts.stage_draft_release as stage
+
+        commit, version, repo = 'a' * 40, '0.2.15', 'owner/edb_make'
+        base = f'https://github.com/{repo}/releases'
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            feed_input = root / 'feed-input'
+            feed_input.mkdir()
+            for _, _, artifact_dir, _, built_name, release_name in stage.INSTALLERS:
+                metadata = root / artifact_dir / 'release-metadata'
+                metadata.mkdir(parents=True)
+                (metadata / '.edb-release-metadata-output').write_bytes(b'generated')
+                body = f'{artifact_dir} bytes'.encode()
+                (root / artifact_dir / built_name).write_bytes(body)
+                (feed_input / release_name).write_bytes(body)
+            feed_dir = root / 'update-feed'
+            subprocess.run([
+                sys.executable, 'scripts/build_update_feed.py', '--version', version,
+                '--update-feed-url', f'{base}/latest/download/update.json',
+                '--manifest-url', f'{base}/download/v{version}/manifest.json',
+                '--git-commit', commit,
+                '--macos-url', f'{base}/download/v{version}/ClassInEDBMVP-macOS-arm64.dmg',
+                '--macos-file', str(feed_input / 'ClassInEDBMVP-macOS-arm64.dmg'),
+                '--macos-x64-url', f'{base}/download/v{version}/ClassInEDBMVP-macOS-x64.dmg',
+                '--macos-x64-file', str(feed_input / 'ClassInEDBMVP-macOS-x64.dmg'),
+                '--windows-url', f'{base}/download/v{version}/ClassInEDBMVP-Setup.exe',
+                '--windows-file', str(feed_input / 'ClassInEDBMVP-Setup.exe'),
+                '--manifest-output', str(feed_dir / 'manifest.json'),
+                '--checksums-output', str(feed_dir / 'checksums.txt'),
+                '--output', str(feed_dir / 'update.json'),
+            ], cwd=Path(__file__).resolve().parent, check=True, capture_output=True)
+
+            with patch.object(stage, 'collect_release_metadata_errors', return_value=[]), \
+                    patch.object(stage, 'collect_release_evidence_errors', return_value=[]):
+                files, report = stage.verify_artifacts(root, commit, version, repo)
+
+            self.assertEqual(
+                ['ClassInEDBMVP-macOS-arm64.dmg', 'ClassInEDBMVP-macOS-x64.dmg', 'ClassInEDBMVP-Setup.exe',
+                 'update.json', 'manifest.json', 'checksums.txt'],
+                [path.name for path in files],
+            )
+            self.assertTrue(all(path.is_file() for path in files))
+            self.assertEqual('passed', report['artifactAndMetadataVerification'])
