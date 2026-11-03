@@ -1,66 +1,72 @@
 # GitHub 업데이트 배포 연결
 
-확인일: 2026-10-16. `Muuuuoouuun/edb_make`는 공개 저장소이고 GitHub Releases는
-아직 없습니다. GitHub Actions의 다운로드 가능한 빌드 산출물은 공개 릴리스가
-아니므로 설치 앱의 업데이트 주소로 사용하지 않습니다.
+갱신일: 2026-11-03. 업데이트 채널은 공개 저장소 `Muuuuoouuun/edb_make`의
+GitHub Releases입니다. 설치된 앱은 로그인 없이 피드를 읽습니다. 그래서 게시된
+설치 파일은 누구나 받을 수 있습니다. GitHub Actions 산출물과 Draft 릴리스는
+앱이 읽을 수 없으므로 업데이트 주소로 쓰지 않습니다.
 
-현재 `app_update_config.json`의 업데이트 주소·다운로드 주소·PIN 검증값은
-비어 있습니다. 버그 신고는 별도 서비스
-`https://reports.classin.cloud/v1/edb-reports`를 사용합니다. 해당 서비스의
-읽기 전용 `/health` 검사에서 DB·요청 제한·스키마 v3가 준비된 상태를 확인했습니다.
-실제 운영 신고는 이 점검에서 보내지 않았습니다.
+2026-11-03 확인: 게시된 릴리스는 없습니다(모두 Draft). 등록된 repository
+secret도 없습니다. 버그 신고는 별도 서비스
+`https://reports.classin.cloud/v1/edb-reports`를 사용합니다.
 
-## 다음 공개 릴리스의 주소
+## 주소는 워크플로가 만듭니다
 
-다음 버전을 `0.2.4`, 태그를 `v0.2.4`로 정할 경우의 예입니다.
-아래 주소는 **아직 게시되지 않았으며 앱의 활성 설정으로 넣지 않았습니다.**
+`Build Installers`에서 `update_channel`(기본 켜짐)을 켜면 워크플로가 저장소
+이름과 `version`으로 아래 주소를 만들어 앱에 넣습니다. 주소를 직접 입력하는
+칸은 없습니다. `version=0.2.15`일 때의 예입니다.
 
-| Build Installers 입력 | 값 |
+| 용도 | 주소 |
 | --- | --- |
-| `version` | `0.2.4` |
-| `update_feed_url` | `https://github.com/Muuuuoouuun/edb_make/releases/latest/download/update.json` |
-| `release_notes_url` | `https://github.com/Muuuuoouuun/edb_make/releases/tag/v0.2.4` |
-| `manifest_url` | `https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.4/manifest.json` |
-| `macos_download_url` | `https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.4/ClassInEDBMVP-macOS.dmg` |
-| `windows_download_url` | `https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.4/ClassInEDBMVP-Setup.exe` |
+| 피드 | `https://github.com/Muuuuoouuun/edb_make/releases/latest/download/update.json` |
+| 릴리스 노트 | `https://github.com/Muuuuoouuun/edb_make/releases/tag/v0.2.15` |
+| manifest | `https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.15/manifest.json` |
+| Apple Silicon Mac | `https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.15/ClassInEDBMVP-macOS-arm64.dmg` |
+| Intel Mac | `https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.15/ClassInEDBMVP-macOS-x64.dmg` |
+| Windows | `https://github.com/Muuuuoouuun/edb_make/releases/download/v0.2.15/ClassInEDBMVP-Setup.exe` |
 
-`latest` 주소는 안정 버전 릴리스용입니다. Draft·Prerelease는 이 주소로
-공개되지 않습니다. 설치 파일과 manifest는 위와 같이 **버전별 주소**를 사용해
-다음 릴리스가 올라와도 다운로드 도중 파일과 해시가 서로 바뀌지 않게 합니다.
+피드 하나에 세 설치 파일이 모두 들어갑니다. Intel Mac 앱은 피드의 `macos-x64`
+항목을 읽고, Apple Silicon Mac 앱은 `macos` 항목을 읽습니다. 그래서 피드는
+`macos_arch=both`(기본)로 두 Mac과 Windows를 한 번에 빌드할 때만 만들어집니다.
 
-## 필요한 순서
+`latest` 주소는 Latest로 지정된 안정 버전 릴리스만 가리킵니다. Draft와
+Prerelease는 이 주소에 나오지 않습니다. 설치 파일과 manifest는 버전별 주소라서,
+다음 릴리스가 올라와도 내려받는 도중에 파일과 해시가 바뀌지 않습니다.
 
-1. 최신 UI 수정이 포함된 커밋과 새 버전을 확정합니다. 기존 `0.2.3` 산출물에
-   `0.2.4` 메타데이터를 붙여 배포하지 않습니다.
-2. 배포 권한·동봉 라이선스를 검토하고 기존 production quality gate를 통과합니다.
-   Windows 코드 서명, macOS Developer ID·공증·staple 설정을 준비합니다.
-   자세한 절차는 [PACKAGING_MVP.md](PACKAGING_MVP.md)를 따릅니다.
-3. 자동 설치를 사용할 경우 보호된 GitHub Actions secret `EDB_UPDATE_PIN`을
-   설정합니다. PIN은 4~12자리 숫자이며 저장소나 문서에 평문으로 쓰지 않습니다.
-   현재 세션은 repository secret 목록을 읽을 권한이 없어 등록 여부는 확인하지
-   못했습니다(HTTP 403). PIN 없이도 설정된 다운로드 주소로 수동 설치는 가능합니다.
-4. 위 URL 입력으로 `Build Installers`를 실행합니다. `production_release=true`와
-   검토 완료된 라이선스 승인을 사용합니다. `macos_arch=arm64`는 Apple Silicon용입니다.
-   Intel용은 별도 네이티브 빌드와 해당 아키텍처의 피드 항목이 필요합니다.
-5. 성공한 **같은 커밋·버전의 같은 실행**에서 Windows·macOS 설치 파일과
-   `update-feed` 산출물의 `update.json`, `manifest.json`, `checksums.txt`를 받습니다.
-   워크플로는 URL 두 개가 입력됐을 때 피드를 생성하지만, 현재 GitHub Release를
-   만들거나 게시하는 단계는 없습니다.
-6. 해당 커밋을 대상으로 GitHub에서 **Draft Release** `v0.2.4`를 만들고 위 다섯
-   파일을 첨부합니다. 설치 파일 이름이 표의 URL과 정확히 일치하는지, manifest와
-   피드가 빌드 증거의 버전·커밋·크기·SHA-256과 일치하는지 확인합니다.
-7. 공개 배포가 승인되면 안정 버전으로 게시하고 latest release로 지정합니다.
-   피드·manifest·설치 파일 URL이 로그인 없이 HTTP 200으로 열리는지 확인합니다.
-8. 실제 Windows·Mac 설치본에서 업데이트 확인, PIN 오류·정상 입력, 교체 후 재실행,
-   세션·API 키 보존을 확인합니다. `/api/app/update`에서 `configured`와
-   `automaticUpdateReady` 상태도 점검합니다.
+## 순서
 
-## 이미 설치된 0.2.3
+1. 저장소 **Settings → Secrets and variables → Actions**에 `EDB_UPDATE_PIN`을
+   등록합니다. PIN은 4~12자리 숫자이고, 저장소나 문서에 평문으로 적지 않습니다.
+   이 PIN이 없는 설치본은 자동 설치를 할 수 없고 `다운로드 페이지 열기`만 됩니다.
+   PIN은 수업 중 실수로 업데이트하는 일을 막는 잠금입니다. 보안 장치는 아닙니다.
+2. `Build Installers`를 master에서 실행합니다. `version`은 기본값이 없습니다.
+   이미 설치된 어떤 버전보다 높은 번호를 넣습니다. `update_channel=true`,
+   `macos_arch=both`로 둡니다. 내부 배포는 `production_release=false`로 합니다.
+   공개 서명·공증·라이선스 게이트는 [PACKAGING_MVP.md](PACKAGING_MVP.md)를 따릅니다.
+3. 빌드 커밋을 대상으로 Draft Release `v<version>`을 만들고 다음 명령을 실행합니다.
 
-주소가 비어 있는 기존 앱은 새 피드를 자동으로 발견할 수 없습니다. 주소가 포함된
-첫 설치본을 한 번 수동 설치하거나, 관리자가 앱의 runtime 폴더에
-`app_update_config.json` 로컬 override를 배포해야 합니다. PIN verifier도 필요한
-경우 안전한 배포 경로로 설정합니다. API 키·세션이 있는 runtime 폴더를 삭제하지 않습니다.
+   ```bash
+   python scripts/stage_draft_release.py --repository Muuuuoouuun/edb_make --run-id <실행 ID> --version <version>
+   ```
+
+   이 스크립트는 같은 실행의 설치 파일 세 개(`ClassInEDBMVP-macOS-arm64.dmg`,
+   `ClassInEDBMVP-macOS-x64.dmg`, `ClassInEDBMVP-Setup.exe`)와 `update.json`,
+   `manifest.json`, `checksums.txt`가 버전·커밋·크기·SHA-256과 맞는지 확인합니다.
+   확인이 끝나면 Draft에 첨부만 하고 게시하지 않습니다.
+4. 게시가 승인되면 Draft를 게시하고 **Latest**로 지정합니다. 피드, manifest,
+   설치 파일 주소가 로그인 없이 HTTP 200으로 열리는지 확인합니다.
+5. Windows, Apple Silicon Mac, Intel Mac 설치본에서 각각 확인합니다. 업데이트
+   확인, PIN 오류와 정상 입력, 교체 후 재실행, 세션·API 키 보존을 봅니다.
+   `/api/app/update`의 `configured`와 `automaticUpdateReady` 값도 확인합니다.
+
+## 이미 설치된 0.2.14 이하
+
+이 버전들은 업데이트 주소가 비어 있어 새 피드를 찾지 못합니다. PC마다 업데이트
+채널이 들어간 첫 설치본을 **한 번 직접 설치**해야 합니다. 그다음 버전부터는 앱이
+알아서 찾습니다. API 키와 세션이 있는 runtime 폴더는 지우지 않습니다.
+
+Windows 설치 파일은 서명되지 않았고, Mac 설치 파일은 ad-hoc 서명이며 공증되지
+않았습니다. 그래서 첫 직접 설치 때 Windows SmartScreen이나 macOS Gatekeeper
+경고가 뜰 수 있습니다.
 
 ## 버그 신고 운영
 
