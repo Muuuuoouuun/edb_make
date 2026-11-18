@@ -149,7 +149,7 @@ def test_actual_shared_only_export_marks_question_only_page_as_intentionally_exc
         '--passages-only', '--ocr', 'none', '--pdf-dpi', '144', '--record-mode', 'image-only'])
     assert board.main() == 0
     capsys.readouterr()
-    cli_session = json.loads((tmp_path / 'cli' / 'ui_session.json').read_text())
+    cli_session = json.loads((tmp_path / 'cli' / 'ui_session.json').read_text(encoding='utf-8'))
     assert cli_session['contentTarget'] == 'shared-passages'
     assert cli_session['pages'][1]['intentionallyExcluded'] is True
     assert cli_session['pages'][1]['reviewStatus'] == 'normal'

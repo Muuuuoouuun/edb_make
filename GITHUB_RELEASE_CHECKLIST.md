@@ -35,8 +35,8 @@ Prerelease는 이 주소에 나오지 않습니다. 설치 파일과 manifest는
 ## 순서
 
 1. 저장소 **Settings → Secrets and variables → Actions**에 `EDB_UPDATE_PIN`을
-   등록합니다. PIN은 4~12자리 숫자이고, 저장소나 문서에 평문으로 적지 않습니다.
-   이 PIN이 없는 설치본은 자동 설치를 할 수 없고 `다운로드 페이지 열기`만 됩니다.
+   등록합니다. PIN은 영문·숫자 4~12자리(대소문자 구분)이고, 저장소나 문서에 평문으로 적지 않습니다.
+   이 PIN이 없는 설치본은 자동 설치를 할 수 없고 `다운로드 열기`만 됩니다.
    PIN은 수업 중 실수로 업데이트하는 일을 막는 잠금입니다. 보안 장치는 아닙니다.
 2. `Build Installers`를 master에서 실행합니다. `version`은 기본값이 없습니다.
    이미 설치된 어떤 버전보다 높은 번호를 넣습니다. `update_channel=true`,
@@ -66,7 +66,8 @@ Prerelease는 이 주소에 나오지 않습니다. 설치 파일과 manifest는
 
 Windows 설치 파일은 서명되지 않았고, Mac 설치 파일은 ad-hoc 서명이며 공증되지
 않았습니다. 그래서 첫 직접 설치 때 Windows SmartScreen이나 macOS Gatekeeper
-경고가 뜰 수 있습니다.
+경고가 뜰 수 있습니다. 릴리스 본문에는 [EDB_MAKE_USER_GUIDE.md](EDB_MAKE_USER_GUIDE.md)의
+설치 안내(Windows `추가 정보` → `실행`, Mac 칩 고르기와 `그래도 열기`)를 붙여 넣습니다.
 
 ## 버그 신고 운영
 

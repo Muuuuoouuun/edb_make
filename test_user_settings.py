@@ -46,3 +46,23 @@ def test_failed_atomic_replace_preserves_previous_settings(tmp_path: Path, monke
 
     assert user_settings.load_user_settings(tmp_path) == previous
     assert list(tmp_path.iterdir()) == [user_settings.settings_path(tmp_path)]
+
+
+def test_brief_windows_file_lock_is_retried(tmp_path: Path, monkeypatch) -> None:
+    real_replace = os.replace
+    attempts = []
+
+    def locked_once(*args):
+        attempts.append(args)
+        if len(attempts) == 1:
+            error = OSError(13, "sharing violation")
+            error.winerror = 32
+            raise error
+        return real_replace(*args)
+
+    monkeypatch.setattr(os, "replace", locked_once)
+    monkeypatch.setattr(user_settings.time, "sleep", lambda _seconds: None)
+    user_settings.save_user_settings(tmp_path, {"ai_enabled": False})
+
+    assert len(attempts) == 2
+    assert user_settings.load_user_settings(tmp_path) == {"ai_enabled": False}

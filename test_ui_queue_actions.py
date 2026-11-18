@@ -481,7 +481,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("영역 다시 잡기", source)
         self.assertIn("applyExpandedCrop", source)
         self.assertIn("pendingReviewSelectionProblemIdRef", source)
-        self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소", source)
+        self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ${PRIMARY_MODIFIER_LABEL}+휠 확대/축소 · Enter 적용 · Esc 취소", source)
         self.assertIn("onBoxEditKeyDown", source)
         self.assertIn("aria-keyshortcuts=\"Enter\"", source)
         self.assertIn("aria-keyshortcuts=\"Escape\"", source)

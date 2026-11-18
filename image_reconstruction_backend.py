@@ -18,6 +18,11 @@ try:
 except ImportError:  # pragma: no cover
     np = None
 
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover
+    cv2 = None
+
 
 GEMINI_IMAGE_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -994,6 +999,7 @@ def _remove_background_with_numpy(
         alpha = _fade_flat_midtone_fills(
             alpha, luminance, visible & ~remove & ~remove_bright,
             paper_reference_image=paper_reference_image,
+            background_luminance=background_luminance,
         )
 
     next_alpha = np.clip(alpha, 0.0, 255.0).astype(np.uint8)
@@ -1037,6 +1043,11 @@ def _box_mean(values: Any, window: int) -> Any:
 
 def _label_mask_components(mask: Any) -> tuple[Any, int]:
     """8-connected component labels for a boolean mask (run-length union-find)."""
+    if cv2 is not None and mask.size:
+        # Wu/SAUF numbers components in raster order, exactly like the loop below.
+        count, labels = cv2.connectedComponentsWithAlgorithm(
+            np.ascontiguousarray(mask, dtype=np.uint8), 8, cv2.CV_32S, cv2.CCL_WU)
+        return labels, int(count) - 1
     height, width = mask.shape
     labels = np.zeros((height, width), dtype=np.int32)
     parent: list[int] = []
@@ -1106,6 +1117,7 @@ def _component_encloses_ink(component: Any, luminance_patch: Any, fill_luminance
 
 def _fade_flat_midtone_fills(
     alpha: Any, luminance: Any, candidates: Any, *, paper_reference_image: Any | None = None,
+    background_luminance: float | None = None,
 ) -> Any:
     """Fade shaded cells and tinted boxes instead of turning them solid white.
 
@@ -1153,6 +1165,14 @@ def _fade_flat_midtone_fills(
         return alpha
     keep = np.zeros(region.shape, dtype=bool)
     faded = alpha.copy()
+    reference_cut = 0
+    if (paper_reference_image is not None
+            and paper_reference_image.size == (luminance.shape[1], luminance.shape[0])):
+        # Only near-white original paper separates material from paper gaps.
+        # On off-white scans and photos every pixel would count as material.
+        reference_paper = _estimate_border_background(paper_reference_image.convert("RGBA"))
+        if reference_paper is not None and min(reference_paper) >= 248:
+            reference_cut = min(248, min(reference_paper) - 6)
 
     def apply_tone(mask: Any, *, top: int, bottom: int, left: int, right: int, fill_value: float) -> None:
         # Preserve the established faint fill level, with one continuous
@@ -1186,22 +1206,34 @@ def _fade_flat_midtone_fills(
         left, right = int(comp_xs.min()), int(comp_xs.max()) + 1
         label = int(sorted_labels[start])
         component = labels[top:bottom, left:right] == label
-        fill_value = float(np.median(luminance[comp_ys, comp_xs]))
+        component_luminance = luminance[comp_ys, comp_xs]
+        fill_value = float(np.median(component_luminance))
         patch_luminance = luminance[top:bottom, left:right]
         if area < FLAT_FILL_LARGE_AREA_PIXELS:
             enclosed = _component_encloses_ink(component, patch_luminance, fill_value)
             if enclosed < FLAT_FILL_MIN_ENCLOSED_INK_PIXELS:
                 continue
+        on_edge = ((comp_ys == 0) | (comp_xs == 0)
+                   | (comp_ys == luminance.shape[0] - 1) | (comp_xs == luminance.shape[1] - 1))
+        if background_luminance is not None and np.any(
+                on_edge & (np.abs(component_luminance - background_luminance) <= FLAT_FILL_GROW_LUMINANCE_SLACK)):
+            # The page's own gray paper (scan or photo) reaches the crop edge.
+            # Fade only its pixels; text printed on paper is not in a fill.
+            faded[comp_ys, comp_xs] = alpha[comp_ys, comp_xs] * np.clip(
+                (FLAT_FILL_MAX_LUMINANCE - component_luminance)
+                / (FLAT_FILL_MAX_LUMINANCE - FLAT_FILL_MIN_LUMINANCE), 0.0, 1.0,
+            ) ** FLAT_FILL_FADE_EXPONENT
+            keep[comp_ys, comp_xs] = True
+            continue
         keep_patch = keep[top:bottom, left:right]
-        if (paper_reference_image is not None
-                and paper_reference_image.size == (luminance.shape[1], luminance.shape[0])):
+        if reference_cut:
             # Original paper separates a bubble's gray lettering from its
             # surrounding shaded surface, even with a one-pixel white gap.
             # A true counter and the enclosing dark glyph remain connected
             # to the original non-paper surface. Use that source topology,
             # never a white halo introduced by sharpening, to select pixels.
             reference = np.asarray(paper_reference_image.crop((left, top, right, bottom)).convert("RGB"))
-            reference_labels, reference_count = _label_mask_components(reference.min(axis=2) < 248)
+            reference_labels, reference_count = _label_mask_components(reference.min(axis=2) < reference_cut)
             attached = np.zeros(reference_count + 1, dtype=bool)
             attached[reference_labels[component]] = True
             attached[0] = False

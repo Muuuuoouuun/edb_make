@@ -626,6 +626,10 @@ if [[ -f "$PLIST_PATH" && -x "/usr/libexec/PlistBuddy" ]]; then
     /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $EFFECTIVE_APP_VERSION" "$PLIST_PATH" >/dev/null
   /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$PLIST_PATH" >/dev/null 2>&1 || \
     /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $BUNDLE_ID" "$PLIST_PATH" >/dev/null
+  # Native libraries target this macOS; older Macs get Finder's clear message instead of a crash.
+  MIN_MACOS="$("$PYTHON_EXE" -c 'import json, sys; print(json.load(open(sys.argv[1]))["minimumMacOS"])' "$PROJECT_ROOT/release/opencv-image-profile.json")"
+  /usr/libexec/PlistBuddy -c "Set :LSMinimumSystemVersion $MIN_MACOS" "$PLIST_PATH" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string $MIN_MACOS" "$PLIST_PATH" >/dev/null
 fi
 
 PACKAGED_APP_ROOT=""
@@ -680,7 +684,11 @@ if [[ -d "$APP_PATH" ]] && command -v codesign >/dev/null 2>&1; then
       fi
     fi
   else
-    codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1 || true
+    # A broken ad-hoc seal makes Gatekeeper report the app as damaged and
+    # fails every in-app update, so signing errors must stop the build.
+    xattr -cr "$APP_PATH" 2>/dev/null || true
+    codesign --force --deep --sign - "$APP_PATH"
+    codesign --verify --deep --strict --verbose=2 "$APP_PATH"
   fi
   verify_packaged_app_root "$APP_PATH"
 fi

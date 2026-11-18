@@ -167,7 +167,7 @@ class TestUiPlacementSaveState(unittest.TestCase):
         const restoredSnapshots = [];
         Object.assign(sandbox, {
           session, items, fileName: session.session_name, boardColumns: 1, layoutGapMode: 'compact',
-          useCallback: fn => fn, mutatingRef: { current: false },
+          useCallback: fn => fn, mutatingRef: { current: false }, hasRunningBackgroundJobs: false,
           setMutating() {}, setLoading() {}, setHistoryStack() {},
           adoptMutatedSession() {}, refreshSessionHistory() {}, showSimpleErrorToast() {}, showToast() {},
           postRestore: async snapshot => { restoredSnapshots.push(snapshot); },

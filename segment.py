@@ -2218,7 +2218,6 @@ def _build_pdf_passage_range_blocks(
             0,
         )
         range_blocks_start = len(blocks)
-        range_has_visible_body = False
         stopped_at_problem = False
         for fragment_index, (
             fragment_column_index,
@@ -2430,7 +2429,6 @@ def _build_pdf_passage_range_blocks(
                 page_width=image.width,
                 page_height=image.height,
             )
-            range_has_visible_body = range_has_visible_body or fragment_has_visible_body
             blocks.append(
                 ContentBlock(
                     block_id=f"{page_id}-block-{start_index + len(blocks):03d}",
@@ -2445,10 +2443,6 @@ def _build_pdf_passage_range_blocks(
             if stopped_at_problem:
                 break
 
-        if stopped_at_problem and not range_has_visible_body:
-            # A range directive immediately followed by its child questions,
-            # with no visible common body, is not an extractable passage.
-            del blocks[range_blocks_start:]
         range_fragment_count = len(blocks) - range_blocks_start
         range_blocks = blocks[range_blocks_start:]
         total_text_line_count = sum(

@@ -145,7 +145,7 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("step3_page_chrome_artifact", target_helper)
         self.assertIn("blockedPublish?.blockingProblemIds", target_helper)
         self.assertIn("problemIds: focusedProblemIds", target_helper)
-        self.assertIn("서버 사전점검", on_publish)
+        self.assertIn("제작 전 자동 점검", on_publish)
         self.assertIn("setView('review')", on_publish)
 
     def test_publish_blocked_page_chrome_artifacts_get_retry_ui(self) -> None:

@@ -69,6 +69,7 @@ const sandbox = {
   },
 };
 vm.createContext(sandbox);
+vm.runInContext(section('function isNetworkRequestError(', 'async function probeLocalServerHealth('), sandbox);
 vm.runInContext(Babel.transform(section('// ─── PROBLEM-ONLY GALLERY', 'ReactDOM.createRoot('), { presets: ['react'] }).code, sandbox);
 const nodes = value => !value ? [] : Array.isArray(value) ? value.flatMap(nodes)
   : typeof value === 'object' ? [value, ...nodes(value.props?.children)] : [];

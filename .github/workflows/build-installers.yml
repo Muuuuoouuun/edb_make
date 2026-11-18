@@ -49,6 +49,8 @@ env:
   MACOS_ARM64_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-macOS-arm64.dmg', github.repository, inputs.version) || '' }}
   MACOS_X64_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-macOS-x64.dmg', github.repository, inputs.version) || '' }}
   WINDOWS_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-Setup.exe', github.repository, inputs.version) || '' }}
+  # Apps keep a fallback link for when the feed can't be read; it must reach the newest release, not this build.
+  WINDOWS_FALLBACK_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/latest/download/ClassInEDBMVP-Setup.exe', github.repository) || '' }}
 
 jobs:
   quality-gate:
@@ -87,7 +89,14 @@ jobs:
           RELEASE_MODE: ${{ inputs.production_release && 'public' || 'internal-test' }}
           LICENSE_COMPLIANCE_APPROVED: ${{ inputs.license_compliance_approved }}
           MACOS_DOWNLOAD_URL: ${{ env.MACOS_ARM64_DOWNLOAD_URL }}
+          UPDATE_CHANNEL: ${{ inputs.update_channel }}
+          MACOS_ARCH: ${{ inputs.macos_arch }}
         run: |
+          # The update feed needs both Macs, so stop public runs before the long build.
+          if [[ "$RELEASE_MODE" == "public" && ( "$UPDATE_CHANNEL" != "true" || "$MACOS_ARCH" != "both" ) ]]; then
+            echo "Public releases need update_channel=true and macos_arch=both." >&2
+            exit 1
+          fi
           license_args=()
           if [[ "$LICENSE_COMPLIANCE_APPROVED" == "true" ]]; then
             license_args+=(--license-compliance-approved)
@@ -273,17 +282,39 @@ jobs:
                   shutil.rmtree(target)
           PY
 
+  macos-update-baseline:
+    name: macOS 0.2.8 update baseline
+    if: inputs.verify_native_update
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Run artifacts expire; the 0.2.8 draft keeps the same DMGs. Draft assets
+    # need push access, so keep that permission out of the build jobs.
+    permissions:
+      contents: write
+    steps:
+      - name: Download the original 0.2.8 macOS DMGs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download v0.2.8 --repo "$GITHUB_REPOSITORY" --pattern 'ClassInEDBMVP-macOS-*.dmg' --dir baseline
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-update-baseline
+          path: baseline/
+          if-no-files-found: error
+          retention-days: 1
+
   macos:
     name: macOS DMG (${{ matrix.arch }})
     runs-on: ${{ matrix.arch == 'x64' && 'macos-15-intel' || 'macos-15' }}
-    needs: [quality-gate, private-quality-gate]
+    needs: [quality-gate, private-quality-gate, macos-update-baseline]
     if: ${{ always() && needs.quality-gate.result == 'success' && (!inputs.production_release || needs.private-quality-gate.result == 'success') }}
     timeout-minutes: 60
     strategy:
       matrix:
         arch: ${{ fromJSON(inputs.macos_arch == 'both' && '["arm64","x64"]' || format('["{0}"]', inputs.macos_arch)) }}
     env:
-      MACOS_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-macOS-{2}.dmg', github.repository, inputs.version, matrix.arch) || '' }}
+      MACOS_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/latest/download/ClassInEDBMVP-macOS-{1}.dmg', github.repository, matrix.arch) || '' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -452,27 +483,30 @@ jobs:
         env:
           RELEASE_VERSION: ${{ inputs.version }}
 
+      - name: Download the original 0.2.8 macOS DMGs
+        if: inputs.verify_native_update
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: macos-update-baseline
+          path: ${{ runner.temp }}/edb-update-baseline
+
       - name: Verify actual PIN update from 0.2.8 on macOS
         if: inputs.verify_native_update
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
           MACOS_ARCH: ${{ matrix.arch }}
         run: |
           baseline_root="$RUNNER_TEMP/edb-update-baseline"
           if [[ "$MACOS_ARCH" == "x64" ]]; then
-            baseline_run=39938897913
             baseline_sha=6a8a871bbbb882286dcf3d66967c1ce8d9c852b90781a9cc1b98b1faea0fb829
           else
-            baseline_run=39938842927
             baseline_sha=fbc7a74f466e83b13ffb1b488a1de9d653e77204505b4f9361c93fb7d6098970
           fi
-          gh run download "$baseline_run" --repo "$GITHUB_REPOSITORY" --name macos-installer --dir "$baseline_root"
           .venv/bin/python -m unittest -q test_smoke_packaged_update test_windows_update_helper_diagnostics
           target_sha="$(.venv/bin/python -c 'import hashlib; print(hashlib.file_digest(open("dist/ClassInEDBMVP-macOS.dmg", "rb"), "sha256").hexdigest())')"
           .venv/bin/python scripts/smoke_packaged_update.py \
             --platform macos --arch "$MACOS_ARCH" \
-            --baseline-artifact "$baseline_root/ClassInEDBMVP-macOS.dmg" \
+            --baseline-artifact "$baseline_root/ClassInEDBMVP-macOS-$MACOS_ARCH.dmg" \
             --baseline-version 0.2.8 --baseline-sha256 "$baseline_sha" \
             --target-artifact dist/ClassInEDBMVP-macOS.dmg \
             --target-version "$RELEASE_VERSION" --target-sha256 "$target_sha" \
@@ -715,7 +749,7 @@ jobs:
             Version = $env:RELEASE_VERSION
           }
           if ($env:UPDATE_FEED_URL) { $packageArgs.UpdateFeedUrl = $env:UPDATE_FEED_URL }
-          if ($env:WINDOWS_DOWNLOAD_URL) { $packageArgs.DownloadUrl = $env:WINDOWS_DOWNLOAD_URL }
+          if ($env:WINDOWS_FALLBACK_DOWNLOAD_URL) { $packageArgs.DownloadUrl = $env:WINDOWS_FALLBACK_DOWNLOAD_URL }
           if ($env:RELEASE_NOTES_URL) { $packageArgs.ReleaseNotesUrl = $env:RELEASE_NOTES_URL }
 
           $certificatePath = ""
@@ -815,7 +849,7 @@ jobs:
               --expected-app-name ClassInEDBMVP `
               --expected-version $env:RELEASE_VERSION `
               --expected-update-feed-url $env:UPDATE_FEED_URL `
-              --expected-download-url $env:WINDOWS_DOWNLOAD_URL `
+              --expected-download-url $env:WINDOWS_FALLBACK_DOWNLOAD_URL `
               --expected-release-notes-url $env:RELEASE_NOTES_URL `
               --expected-git-commit $env:GITHUB_SHA
             Assert-NativeCommandSucceeded "Relocated portable metadata verification"
@@ -836,7 +870,7 @@ jobs:
               --expected-app-name ClassInEDBMVP `
               --expected-version $env:RELEASE_VERSION `
               --expected-update-feed-url $env:UPDATE_FEED_URL `
-              --expected-download-url $env:WINDOWS_DOWNLOAD_URL `
+              --expected-download-url $env:WINDOWS_FALLBACK_DOWNLOAD_URL `
               --expected-release-notes-url $env:RELEASE_NOTES_URL `
               --expected-git-commit $env:GITHUB_SHA
             Assert-NativeCommandSucceeded "Installed package metadata verification"

@@ -39,6 +39,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, unquote, urlparse
 from urllib.request import Request, url2pathname, urlopen
 
@@ -109,7 +110,8 @@ def _publish_failure_payload(
 ) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"{message}: {exc}",
+        "error": f"{message.rstrip('.')}.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": code,
         "operation": "session_publish",
         "retryable": retryable,
@@ -125,13 +127,10 @@ def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, 
     ):
         return _publish_failure_payload(
             code="publish_path_too_long",
-            message="EDB 제작 경로가 너무 깁니다",
+            message="저장 폴더 경로가 너무 길어 EDB를 저장하지 못했습니다",
             exc=exc,
             retryable=False,
-            recovery_steps=[
-                "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-                "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-            ],
+            recovery_steps=["오류 상세를 복사해 문제 신고로 보내 주세요. 편집 내용은 그대로 있습니다."],
         )
     if stage == "prepare" and isinstance(exc, FileNotFoundError):
         return _publish_failure_payload(
@@ -143,34 +142,29 @@ def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, 
     if isinstance(exc, FileNotFoundError):
         return _publish_failure_payload(
             code="publish_asset_missing",
-            message="EDB 제작에 필요한 원본 파일을 찾지 못했습니다",
+            message="EDB를 만들 문항 이미지를 찾지 못했습니다",
             exc=exc,
             retryable=False,
-            recovery_steps=[
-                "최근 작업에서 원본 PDF 또는 이미지가 열리는지 확인해 주세요.",
-                "파일이 이동되었다면 원본 PDF를 다시 등록하고 제작해 주세요.",
-            ],
+            recovery_steps=["원본 PDF를 다시 등록한 뒤 다시 제작해 주세요."],
         )
-    if isinstance(exc, ValueError) and ("page limit" in text or "50" in text and "page" in text):
-        return _publish_failure_payload(
-            code="publish_page_limit_exceeded",
-            message="ClassIn 보드 페이지 제한을 초과했습니다",
-            exc=exc,
-            retryable=False,
-            recovery_steps=[
-                "문항을 나누거나 일부 문항을 제외한 뒤 다시 제작해 주세요.",
-                "계속 필요하면 여러 EDB로 나누어 제작해 주세요.",
-            ],
-        )
+    # Classify first so a single too-tall problem gets its specific copy.
     classified = _classified_processing_error(exc) if isinstance(exc, Exception) else None
     if classified is not None:
         return {**classified, "operation": "session_publish", "stage": stage}
+    if isinstance(exc, ValueError) and ("page limit" in text or "classin limit" in text):
+        return _publish_failure_payload(
+            code="publish_page_limit_exceeded",
+            message="자동 분할 후에도 ClassIn 50페이지 제한을 넘었습니다",
+            exc=exc,
+            retryable=False,
+            recovery_steps=["오류 상세를 복사해 문제 신고로 보내 주세요."],
+        )
     definitions = {
         "prepare": ("publish_output_unavailable", "제작 파일을 저장할 폴더를 준비하지 못했습니다"),
         "build": ("publish_build_failed", "EDB 제작 데이터 생성에 실패했습니다"),
         "write": ("edb_write_failed", "EDB 파일 저장 또는 검증에 실패했습니다"),
-        "handoff": ("publish_handoff_failed", "ClassIn 전달 파일 생성에 실패했습니다"),
-        "commit": ("publish_session_commit_failed", "완성 파일을 현재 작업에 반영하지 못했습니다"),
+        "handoff": ("publish_handoff_failed", "ClassIn 전달 파일을 만들지 못했습니다"),
+        "commit": ("publish_session_commit_failed", "완성된 EDB를 작업에 반영하지 못했습니다"),
     }
     code, message = definitions.get(stage, ("publish_failed", "EDB 제작에 실패했습니다"))
     return _publish_failure_payload(code=code, message=message, exc=exc)
@@ -179,42 +173,36 @@ def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, 
 def _recognition_retry_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"AI 재인식 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "error": "저장 폴더 경로가 너무 길어 AI 재인식 결과를 저장하지 못했습니다.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": "recognition_retry_path_too_long",
         "operation": "session_retry_ai",
         "retryable": False,
-        "recoverySteps": [
-            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-        ],
+        "recoverySteps": ["오류 상세를 복사해 문제 신고로 보내 주세요. 편집 내용은 그대로 있습니다."],
     }
 
 
 def _session_mutation_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"편집 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "error": "저장 폴더 경로가 너무 길어 편집 내용을 저장하지 못했습니다.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": "session_mutation_path_too_long",
         "operation": "session_mutate",
         "retryable": False,
-        "recoverySteps": [
-            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-        ],
+        "recoverySteps": ["오류 상세를 복사해 문제 신고로 보내 주세요. 방금 한 편집은 저장되지 않았을 수 있습니다."],
     }
 
 
 def _image_enhancement_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"고화질 이미지 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "error": "저장 폴더 경로가 너무 길어 고화질 이미지를 저장하지 못했습니다.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": "image_enhancement_path_too_long",
         "operation": "session_enhance_image",
         "retryable": False,
-        "recoverySteps": [
-            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-        ],
+        "recoverySteps": ["오류 상세를 복사해 문제 신고로 보내 주세요. 편집 내용은 그대로 있습니다."],
     }
 
 
@@ -517,9 +505,29 @@ def default_frozen_app_home() -> Path:
     return (documents_directory / "ClassInEDBMVP").resolve()
 
 
+def _app_home_is_writable(home: Path) -> bool:
+    try:
+        probe_dir = home / ".app_runtime"
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=probe_dir):
+            pass
+        return True
+    except OSError:
+        return False
+
+
 def app_root() -> Path:
     if is_frozen_app():
-        return default_frozen_app_home()
+        home = default_frozen_app_home()
+        if os.environ.get("EDB_APP_HOME", "").strip() or _app_home_is_writable(home):
+            return home
+        # Documents is blocked (Windows Controlled Folder Access, macOS privacy denial):
+        # start from a per-user folder instead of failing to open at all.
+        if sys.platform.startswith("win"):
+            fallback_base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+        else:
+            fallback_base = Path.home() / "Library" / "Application Support"
+        return (fallback_base / "ClassInEDBMVP").resolve()
     return Path(__file__).resolve().parent
 
 
@@ -611,10 +619,12 @@ class AppUpdateError(RuntimeError):
         *,
         status: HTTPStatus = HTTPStatus.CONFLICT,
         recovery_steps: list[str] | None = None,
+        detail: str = "",
     ) -> None:
         self.code = code
         self.status = status
         self.recovery_steps = list(recovery_steps or [])
+        self.detail = detail
         super().__init__(message)
 
 
@@ -982,6 +992,10 @@ def _cached_update_status(cache_key: tuple[str, ...]) -> dict[str, Any] | None:
 
 
 def _remember_update_status(cache_key: tuple[str, ...], status: dict[str, Any]) -> dict[str, Any]:
+    if status.get("channelStatus") in {"invalid_feed", "invalid_config"} and "detail" not in status:
+        # Every bad feed/config branch exits here: show one Korean sentence, keep the diagnosis copyable.
+        status["detail"] = str(status.get("error") or "")
+        status["error"] = "업데이트 정보가 올바르지 않아 확인을 멈췄습니다. 관리자에게 알려 주세요."
     snapshot = _clone_jsonish(status)
     with _update_status_cache_lock:
         _update_status_cache[cache_key] = (time.monotonic() + UPDATE_STATUS_CACHE_TTL_SECONDS, snapshot)
@@ -1013,8 +1027,23 @@ def _normalized_app_arch(value: Any) -> str:
     return aliases.get(arch, arch)
 
 
+@lru_cache(maxsize=1)
+def _macos_rosetta_translated() -> bool:
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"], capture_output=True, text=True, timeout=2
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.stdout.strip() == "1"
+
+
 def _app_arch_key() -> str:
-    return _normalized_app_arch(platform.machine())
+    arch = _normalized_app_arch(platform.machine())
+    # An Intel build under Rosetta reports x64; select the native Apple silicon build instead.
+    if arch == "x64" and sys.platform == "darwin" and _macos_rosetta_translated():
+        return "arm64"
+    return arch
 
 
 def _app_update_config_alias_conflict_error(label: str, source: dict[str, Any], *field_names: str) -> str:
@@ -1069,11 +1098,12 @@ def build_update_pin_verifier(
     iterations: int = UPDATE_PIN_PBKDF2_ITERATIONS,
 ) -> str:
     normalized_pin = str(pin or "").strip()
-    if not normalized_pin.isascii() or not normalized_pin.isdigit():
-        raise ValueError("update PIN must contain ASCII digits only")
+    # Case-sensitive ASCII letters and digits; digit-only PINs from earlier builds still verify.
+    if not normalized_pin.isascii() or not normalized_pin.isalnum():
+        raise ValueError("update PIN must contain ASCII letters or digits only")
     if not UPDATE_PIN_MIN_LENGTH <= len(normalized_pin) <= UPDATE_PIN_MAX_LENGTH:
         raise ValueError(
-            f"update PIN must contain {UPDATE_PIN_MIN_LENGTH}-{UPDATE_PIN_MAX_LENGTH} digits"
+            f"update PIN must contain {UPDATE_PIN_MIN_LENGTH}-{UPDATE_PIN_MAX_LENGTH} letters or digits"
         )
     if not 100_000 <= int(iterations) <= 2_000_000:
         raise ValueError("update PIN PBKDF2 iterations are outside the allowed range")
@@ -1094,7 +1124,7 @@ def verify_update_pin(pin: Any, verifier: Any) -> bool:
     normalized_pin = str(pin or "").strip()
     if parsed is None:
         return False
-    if not normalized_pin.isascii() or not normalized_pin.isdigit():
+    if not normalized_pin.isascii() or not normalized_pin.isalnum():
         return False
     if not UPDATE_PIN_MIN_LENGTH <= len(normalized_pin) <= UPDATE_PIN_MAX_LENGTH:
         return False
@@ -1602,6 +1632,12 @@ def build_app_update_status() -> dict[str, Any]:
         ),
         "automaticUpdateReady": False,
     }
+    if status["automaticUpdateSupported"]:
+        try:
+            _check_update_target(platform_key)
+        except AppUpdateError as exc:
+            # The UI then hides the PIN install and offers the manual download.
+            status["automaticUpdateBlockedReason"] = str(exc)
     if not feed_url:
         if config_error:
             status["channelStatus"] = "invalid_config"
@@ -1619,7 +1655,14 @@ def build_app_update_status() -> dict[str, Any]:
         selected = _select_platform_update(feed, platform_key, current_arch)
     except Exception as exc:
         status["channelStatus"] = "error"
-        status["error"] = str(exc)
+        status["detail"] = f"{type(exc).__name__}: {exc}"
+        # HTTPError is an OSError too, so check it first.
+        if isinstance(exc, HTTPError) and exc.code == 404:
+            status["error"] = "아직 받을 수 있는 업데이트가 없습니다. 나중에 다시 확인해 주세요."
+        elif isinstance(exc, OSError) and not isinstance(exc, HTTPError):
+            status["error"] = "업데이트 서버에 연결하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 확인해 주세요."
+        else:
+            status["error"] = "업데이트 정보를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요."
         return _remember_update_status(cache_key, status)
     if selected.get("platformSupported") is False:
         status["channelStatus"] = "unsupported_platform"
@@ -1706,17 +1749,19 @@ def build_app_update_status() -> dict[str, Any]:
         status["updateAvailable"] = False
         status["channelStatus"] = "unsupported_architecture"
         status["code"] = "update_architecture_mismatch"
-        status["error"] = (
+        status["error"] = "이 기기에 맞는 업데이트 파일이 아직 없습니다."
+        status["detail"] = (
             f"update architecture {feed_arch!r} is not compatible with this device ({current_arch!r})"
         )
         status["availableDownloadUrl"] = status.get("downloadUrl") or ""
         status["downloadUrl"] = ""
         if isinstance(status.get("latest"), dict):
             status["latest"]["downloadUrl"] = ""
-        status["recoverySteps"] = [
-            f"{current_arch}용 설치 파일을 선택해 주세요.",
-            "지원 파일이 보이지 않으면 오류 정보와 함께 신고해 주세요.",
-        ]
+        if platform_key == "macos":
+            device_label = {"arm64": "Apple 실리콘 Mac", "x64": "Intel Mac"}.get(current_arch, "이 Mac")
+        else:
+            device_label = "Windows PC" if platform_key == "windows" else "이 기기"
+        status["recoverySteps"] = [f"관리자에게 {device_label}용 설치 파일을 요청해 주세요."]
         return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
     if comparison > 0 and not download_url:
@@ -1828,14 +1873,43 @@ def _update_storage_writer(path: Path):
         _perform_update_storage(output.close)
 
 
+def _update_root() -> Path:
+    # Windows Documents is often OneDrive-synced: keep installers in the local, unsynced profile
+    # unless an explicit EDB_APP_HOME asks for everything in one place.
+    local = ""
+    if sys.platform.startswith("win") and not os.environ.get("EDB_APP_HOME", "").strip():
+        local = os.environ.get("LOCALAPPDATA", "").strip()
+    return Path(local) / "ClassInEDBMVP" / "updates" if local else RUNTIME_DIR / "updates"
+
+
+def _consume_update_failure_marker() -> bool:
+    """Report once that an update helper gave up (it leaves ``update-failed`` in its folder)."""
+    found = False
+    for marker in _update_root().glob("pending-*/update-failed"):
+        try:
+            marker.unlink()
+            found = True
+        except OSError:
+            pass
+    return found
+
+
 def _download_update_artifact(
     status: dict[str, Any],
     *,
     runtime_dir: Path | None = None,
 ) -> Path:
     download_url, file_name, _artifact_type, expected_size, expected_sha256 = _update_artifact_details(status)
-    update_root = (runtime_dir or RUNTIME_DIR) / "updates"
+    update_root = runtime_dir / "updates" if runtime_dir else _update_root()
     _perform_update_storage(update_root.mkdir, parents=True, exist_ok=True)
+    # Earlier attempts leave their helper script and logs behind; drop week-old ones.
+    stale_before = time.time() - 7 * 24 * 3600
+    for stale in update_root.glob("pending-*"):
+        try:
+            if not stale.is_symlink() and stale.stat().st_mtime < stale_before:
+                shutil.rmtree(stale)
+        except OSError:
+            pass
     download_dir = Path(_perform_update_storage(tempfile.mkdtemp, prefix="pending-", dir=update_root))
     partial_path = download_dir / f"{file_name}.part"
     final_path = download_dir / file_name
@@ -1915,6 +1989,32 @@ def _current_macos_bundle_path(executable: Path | None = None) -> Path | None:
     return None
 
 
+def _check_update_target(platform_key: str) -> Path:
+    """Return the installed app to replace, or fail before anything is downloaded."""
+    if platform_key not in UPDATE_PLATFORM_ARTIFACT_TYPES:
+        raise AppUpdateError("unsupported_update_platform", "이 운영체제의 자동 업데이트는 아직 지원하지 않습니다.")
+    target = _current_macos_bundle_path() if platform_key == "macos" else Path(sys.executable).absolute()
+    if target is None or not is_frozen_app():
+        raise AppUpdateError("update_requires_packaged_app", "설치된 앱에서만 자동 업데이트할 수 있습니다.")
+    writable = target.exists() and os.access(target.parent, os.W_OK)
+    # Translocated apps and apps opened straight from the DMG run from read-only places.
+    if platform_key == "macos" and (
+        "AppTranslocation" in str(target) or (not writable and str(target).startswith("/Volumes/"))
+    ):
+        raise AppUpdateError(
+            "update_translocated_app",
+            "앱이 ‘응용 프로그램’ 폴더 밖에서 실행 중이라 자동 업데이트할 수 없습니다.",
+            recovery_steps=["앱을 종료하고 ‘응용 프로그램’ 폴더로 옮긴 뒤 다시 열어 주세요."],
+        )
+    if not writable:
+        raise AppUpdateError(
+            "update_target_not_writable",
+            "이 계정에는 앱을 업데이트할 권한이 없습니다.",
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치하거나 관리자에게 요청해 주세요."],
+        )
+    return target
+
+
 MACOS_UPDATE_HELPER = r'''#!/bin/zsh
 set -euo pipefail
 parent_pid="$1"
@@ -1934,10 +2034,16 @@ extract_dir="$work_dir/extract"
 staged_app="$target_parent/.${bundle_name}.updating.$$"
 backup_app="$target_parent/.${bundle_name}.backup.$$"
 mounted=0
+installed=0
 cleanup() {
   if [[ "$mounted" == "1" ]]; then /usr/bin/hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || true; fi
   /bin/rm -rf "$work_dir" "$staged_app"
   /bin/rm -f "$artifact"
+  if [[ "$installed" != "1" ]]; then
+    # Tell the next launch the update did not finish, then reopen the kept previous app.
+    /usr/bin/touch "${artifact:h}/update-failed" 2>/dev/null || true
+    if [[ -d "$target_app" ]]; then /usr/bin/open "$target_app" >/dev/null 2>&1 || true; fi
+  fi
 }
 trap cleanup EXIT
 /bin/mkdir -p "$work_dir"
@@ -1972,6 +2078,7 @@ if ! /bin/mv "$target_app" "$backup_app"; then
   exit 24
 fi
 if /bin/mv "$staged_app" "$target_app"; then
+  installed=1
   /bin/rm -rf "$backup_app" "$artifact"
   /usr/bin/open "$target_app"
   echo "update installed and app relaunched"
@@ -1993,12 +2100,14 @@ WINDOWS_UPDATE_HELPER = r'''param(
 $ErrorActionPreference = 'Stop'
 # Keep installer diagnostics separate: Inno Setup owns its /LOG file.
 $installerLog = Join-Path (Split-Path -Parent $LogFile) 'update-install.log'
+$appExited = $false
 try {
   Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Updater waiting for the app to exit.'
   $parent = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue
   if ($parent -and -not $parent.WaitForExit(120000)) {
     throw "app did not exit within 120 seconds; update cancelled"
   }
+  $appExited = $true
   $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $installerLog + '"'))
   $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
   if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
@@ -2012,6 +2121,15 @@ try {
 } catch {
   # Detached helpers have no console. Persist errors before propagating failure.
   Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value ('Update failed: ' + $_.Exception.ToString()) -ErrorAction SilentlyContinue
+  # Tell the next launch the update did not finish.
+  Set-Content -LiteralPath (Join-Path (Split-Path -Parent $LogFile) 'update-failed') -Value (Get-Date -Format o) -ErrorAction SilentlyContinue
+  # Reopen the previous version only once the app is gone; never start a second copy.
+  if ($appExited -and (Test-Path -LiteralPath $AppExecutable -PathType Leaf)) {
+    try {
+      Start-Process -FilePath $AppExecutable -ErrorAction Stop
+      Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Previous version reopened.' -ErrorAction SilentlyContinue
+    } catch {}
+  }
   throw
 } finally {
   Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
@@ -2020,24 +2138,7 @@ try {
 
 
 def _launch_macos_update_helper(artifact_path: Path, artifact_type: str) -> dict[str, Any]:
-    target_app = _current_macos_bundle_path()
-    if target_app is None or not is_frozen_app():
-        raise AppUpdateError(
-            "update_requires_packaged_app",
-            "자동 업데이트는 설치된 macOS 앱에서만 사용할 수 있습니다.",
-        )
-    if "AppTranslocation" in str(target_app):
-        raise AppUpdateError(
-            "update_translocated_app",
-            "격리 실행 중인 앱은 자동으로 교체할 수 없습니다.",
-            recovery_steps=["앱을 응용 프로그램 폴더로 옮겨 다시 실행해 주세요."],
-        )
-    if not target_app.exists() or not os.access(target_app.parent, os.W_OK):
-        raise AppUpdateError(
-            "update_target_not_writable",
-            "현재 앱 설치 위치에 업데이트를 덮어쓸 권한이 없습니다.",
-            recovery_steps=["쓰기 가능한 응용 프로그램 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
-        )
+    target_app = _check_update_target("macos")
     helper_path = artifact_path.parent / "apply-macos-update.zsh"
     log_path = artifact_path.parent / "update-install.log"
     helper_path.write_text(MACOS_UPDATE_HELPER, encoding="utf-8")
@@ -2068,18 +2169,7 @@ def _launch_macos_update_helper(artifact_path: Path, artifact_type: str) -> dict
 def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> dict[str, Any]:
     if artifact_type != "setup-exe":
         raise AppUpdateError("unsupported_update_artifact", "Windows 자동 업데이트는 Setup.exe만 지원합니다.")
-    if not is_frozen_app():
-        raise AppUpdateError(
-            "update_requires_packaged_app",
-            "자동 업데이트는 설치된 Windows 앱에서만 사용할 수 있습니다.",
-        )
-    executable = Path(sys.executable).absolute()
-    if not executable.is_file() or not os.access(executable.parent, os.W_OK):
-        raise AppUpdateError(
-            "update_target_not_writable",
-            "현재 앱 설치 위치에 업데이트를 덮어쓸 권한이 없습니다.",
-            recovery_steps=["쓰기 가능한 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
-        )
+    executable = _check_update_target("windows")
     helper_path = artifact_path.parent / "apply-windows-update.ps1"
     log_path = artifact_path.parent / "update-helper.log"
     helper_path.write_text(WINDOWS_UPDATE_HELPER, encoding="utf-8-sig")
@@ -2091,7 +2181,7 @@ def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> di
     # Capture PowerShell parse/startup errors as well as the helper's own log.
     log_stream = (artifact_path.parent / "update-helper-process.log").open("ab")
     try:
-        subprocess.Popen(
+        process = subprocess.Popen(
             [
                 "powershell.exe",
                 "-NoProfile",
@@ -2119,6 +2209,19 @@ def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> di
         )
     finally:
         log_stream.close()
+    # Policy or antivirus can kill PowerShell before the helper's first log line;
+    # then keep this app running instead of shutting down with nothing to reopen it.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not log_path.exists():
+        if process.poll() is not None:
+            raise AppUpdateError(
+                "update_installer_launch_failed",
+                "업데이트를 시작하지 못했습니다.",
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요."],
+                detail=f"update helper exited with code {process.returncode} before writing {log_path.name}",
+            )
+        time.sleep(0.1)
     return {"platform": "windows", "targetName": executable.name, "restartScheduled": True}
 
 
@@ -2134,8 +2237,10 @@ def _launch_update_helper(artifact_path: Path, status: dict[str, Any], artifact_
     except Exception as exc:
         raise AppUpdateError(
             "update_installer_launch_failed",
-            f"업데이트 설치 도우미를 시작하지 못했습니다: {exc}",
+            "업데이트를 시작하지 못했습니다.",
             status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요."],
+            detail=f"{type(exc).__name__}: {exc}",
         ) from exc
     raise AppUpdateError("unsupported_update_platform", "이 운영체제의 자동 업데이트는 아직 지원하지 않습니다.")
 
@@ -2143,7 +2248,7 @@ def _launch_update_helper(artifact_path: Path, status: dict[str, Any], artifact_
 def _discard_update_download(artifact_path: Path) -> None:
     """Discard only the temporary update directory owned by this runtime."""
     download_dir = artifact_path.parent
-    update_root = RUNTIME_DIR / "updates"
+    update_root = _update_root()
     try:
         if (
             update_root.is_symlink()
@@ -2214,6 +2319,7 @@ def prepare_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, An
     if expected_update is not None:
         _validate_confirmed_update(status, expected_update)
     _download_url, file_name, artifact_type, _expected_size, _expected_sha256 = _update_artifact_details(status)
+    _check_update_target(str(status.get("platform") or "").strip().lower())
     artifact_path = _download_update_artifact(status)
     try:
         helper = _launch_update_helper(artifact_path, status, artifact_type)
@@ -2273,6 +2379,12 @@ def read_generated_session_js() -> str:
 def configure_app_logging(log_file: str | Path | None = None) -> None:
     target = Path(log_file).expanduser() if log_file else APP_LOG_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
+    # ponytail: rotates only at launch (print/faulthandler need one fixed file); a weeks-long session can exceed 5 MB.
+    try:
+        if target.stat().st_size > 5 * 1024 * 1024:
+            os.replace(target, target.with_name(target.name + ".1"))
+    except OSError:
+        pass
     stream = target.open("a", encoding="utf-8", buffering=1)
     sys.stdout = stream
     sys.stderr = stream
@@ -2635,7 +2747,13 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     elif any(isinstance(item, PermissionError) or isinstance(item, OSError) and _is_windows_file_busy(item) for item in causes):
         code, kind = "runtime_storage_access_denied", "storage_access_denied"
         summary = "작업 폴더에 파일을 저장하지 못했습니다. 파일 잠금 또는 폴더 쓰기 권한을 확인해 주세요."
-        steps = ["해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.", "OneDrive 동기화 상태와 Windows 보안의 제어된 폴더 액세스 알림을 확인해 주세요.", "계속 실패하면 쓰기 가능한 작업 폴더에서 다시 실행한 뒤 오류 상세를 복사해 신고해 주세요."]
+        steps = [
+            "해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.",
+            "시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더에서 ClassInEDBMVP의 접근을 허용해 주세요."
+            if sys.platform == "darwin"
+            else "OneDrive 동기화가 끝났는지, Windows 보안이 접근을 막지 않았는지 확인해 주세요.",
+            "계속 실패하면 오류 상세를 복사해 신고해 주세요.",
+        ]
         retryable = True
     elif (
         any(isinstance(item, MemoryError) or isinstance(item, OSError) and (item.errno == errno.ENOMEM or getattr(item, "winerror", None) in {8, 14, 1455}) for item in causes)
@@ -2647,16 +2765,16 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     ):
         code, kind = "processing_memory_exhausted", "memory_exhausted"
         summary = "처리할 자료가 사용 가능한 메모리보다 커서 작업을 완료하지 못했습니다."
-        steps = ["다른 프로그램을 닫아 메모리를 확보해 주세요.", "PDF를 더 작은 페이지 묶음으로 나누거나 이미지 해상도를 낮춘 뒤 다시 시도해 주세요."]
-        retryable = False
+        steps = ["다른 프로그램을 닫은 뒤 다시 시도해 주세요.", "계속 실패하면 PDF를 나누거나 이미지 해상도를 낮춰 다시 등록해 주세요."]
+        retryable = True
     elif any(isinstance(item, OSError) and (
         item.errno == errno.ENOSPC or getattr(item, "winerror", None) == 112
         or any(signal in reason_text for signal in ("disk full", "no space left on device", "not enough space on the disk"))
     ) for item in causes):
         code, kind = "runtime_storage_full", "storage_full"
         summary = "디스크의 남은 용량이 부족해 원본 또는 변환 파일을 저장하지 못했습니다."
-        steps = ["작업 폴더가 있는 디스크의 여유 공간을 확보해 주세요.", "파일을 나누어 다시 등록해 주세요. 기존 편집 내용과 원본은 유지됩니다."]
-        retryable = False
+        steps = ["작업 폴더가 있는 디스크의 여유 공간을 확보해 주세요.", "공간을 확보한 뒤 다시 시도해 주세요. 기존 편집 내용과 원본은 그대로 있습니다."]
+        retryable = True
         for item in causes:
             if getattr(item, "available_bytes", None) is not None:
                 context["availableBytes"] = item.available_bytes
@@ -2672,7 +2790,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     elif not pdf_open_failure and ("bundled pymupdf" in reason_text or "pymupdf is required to render pdf" in reason_text):
         code, kind = "pdf_renderer_unavailable", "app_dependency_missing"
         summary = "앱 내부의 PDF 변환 기능을 불러오지 못했습니다. 파일 용량 문제가 아닌 프로그램 설치 오류입니다."
-        steps = ["최신 설치파일로 앱을 다시 설치해 주세요. 별도 Python 설치는 필요하지 않습니다.", "계속 실패하면 아래 오류 상세를 복사해 버그 리포트로 보내 주세요."]
+        steps = ["최신 설치파일로 앱을 다시 설치해 주세요. 별도 Python 설치는 필요하지 않습니다.", "계속 실패하면 아래 오류 상세를 복사해 문제 신고로 보내 주세요."]
         retryable = False
     elif not pdf_open_failure and ("password protected" in reason_text or "password-protected" in reason_text or "encrypted pdf" in reason_text):
         code, kind = "pdf_password_protected", "invalid_document"
@@ -2692,7 +2810,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     elif getattr(exc, "code", "") == "pdf_page_processing_failed":
         code, kind = "pdf_page_processing_failed", "app_internal_error"
         summary = "PDF 페이지를 처리하던 중 프로그램 오류가 발생했습니다. 용량 초과로 확인된 오류는 아닙니다."
-        steps = ["아래 파일명과 페이지 범위, 오류 상세를 복사해 버그 리포트로 보내 주세요.", "원본 파일과 기존 편집 내용은 유지됩니다."]
+        steps = ["아래 파일명과 페이지 범위, 오류 상세를 복사해 문제 신고로 보내 주세요.", "원본 파일과 기존 편집 내용은 유지됩니다."]
         retryable = False
     elif isinstance(exc, (ImportError, ModuleNotFoundError)):
         code, kind = "app_dependency_missing", "app_dependency_missing"
@@ -2704,7 +2822,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     ):
         code, kind = "app_internal_error", "app_internal_error"
         summary = "프로그램 내부 오류로 작업을 완료하지 못했습니다. 파일 용량 초과로 확인된 오류는 아닙니다."
-        steps = ["오류 상세를 복사해 버그 리포트로 보내 주세요.", "앱을 다시 실행한 뒤 같은 작업을 시도해 주세요. 기존 편집 내용은 유지됩니다."]
+        steps = ["오류 상세를 복사해 문제 신고로 보내 주세요.", "앱을 다시 실행한 뒤 같은 작업을 시도해 주세요. 기존 편집 내용은 유지됩니다."]
         retryable = True
     else:
         return None
@@ -2746,28 +2864,14 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
         "detail": f"{type(exc).__name__}: {message}",
         **_processing_error_context(exc),
     }
-    if isinstance(exc, PermissionError) or (
-        isinstance(exc, OSError) and _is_windows_file_busy(exc)
-    ):
-        payload.update({
-            "code": "runtime_storage_access_denied",
-            "errorKind": "storage_access_denied",
-            "error": "작업 폴더에 파일을 저장하지 못했습니다. 파일 잠금 또는 폴더 쓰기 권한을 확인해 주세요.",
-            "detail": message,
-            "retryable": True,
-            "recoverySteps": [
-                "해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.",
-                "OneDrive 동기화 상태와 Windows 보안의 제어된 폴더 액세스 알림을 확인해 주세요.",
-                "계속 실패하면 쓰기 가능한 작업 폴더로 실행하거나 오류 내용을 복사해 신고해 주세요. 원본 파일과 대기열은 유지됩니다.",
-            ],
-        })
-        return payload
+    # PermissionError / file-busy is already classified above as runtime_storage_access_denied.
     if isinstance(exc, FileNotFoundError) and (
         "problem_crops" in message or "problem_cutouts" in message
     ):
         payload.update({
             "code": "recognition_asset_missing",
             "operation": "session_export",
+            "error": "문항 이미지 파일을 찾지 못했습니다.",
             "retryable": True,
             "recoverySteps": [
                 "같은 원본 파일로 문제 인식을 다시 시도해 주세요.",
@@ -2780,12 +2884,16 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
         or "valid HWPX" in message
         or "한컴오피스" in message
     ):
-        payload["errorKind"] = "hangul_conversion_failed"
-        payload["recoverySteps"] = [
-            "한컴오피스에서 원본 HWP/HWPX를 PDF로 내보낸 뒤 PDF를 다시 업로드해 주세요.",
-            "또는 HWP/HWPX를 PDF로 변환할 수 있는 로컬 변환기를 설치한 뒤 다시 실행해 주세요.",
-            "암호, 배포용, DRM, 복사 방지 문서라면 보호를 해제하거나 권한 있는 PDF 내보내기를 사용해 주세요.",
-        ]
+        payload.update({
+            "code": "hwp_conversion_failed",
+            "errorKind": "hangul_conversion_failed",
+            "error": "한글(HWP) 파일을 PDF로 바꾸지 못했습니다. 한컴오피스에서 PDF로 저장한 뒤 등록해 주세요.",
+            "retryable": False,
+            "recoverySteps": [
+                "한컴오피스(한글)에서 파일을 열어 PDF로 저장한 뒤, 그 PDF를 등록해 주세요.",
+                "배포용·암호 문서라면 보호를 해제한 뒤 PDF로 저장해 주세요.",
+            ],
+        })
     elif "code" not in payload:
         if isinstance(exc, FileNotFoundError):
             payload.update({
@@ -2793,17 +2901,38 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
                 "error": "원본 파일을 찾을 수 없습니다. 파일이 이동되거나 삭제되었는지 확인해 주세요.",
                 "retryable": False, "recoverySteps": ["원본 파일을 다시 선택해 등록해 주세요."],
             })
+        elif isinstance(exc, ValueError) and "공통 지문" in message and "찾지 못했" in message:
+            # build_problem_board_edb raises these for an empty shared-passage / questions target.
+            passages = "제외한" not in message
+            payload.update({
+                "code": "content_target_empty", "errorKind": "content_target_empty",
+                "error": "이 자료에서 여러 문항이 함께 쓰는 공통 지문을 찾지 못했습니다." if passages
+                else "이 자료에서 공통 지문을 제외한 문항을 찾지 못했습니다.",
+                "retryable": False,
+                "recoverySteps": [
+                    "‘문항 AI 인식’으로 등록하거나 ‘수동 자르기’로 지문 영역을 지정해 주세요." if passages
+                    else "‘문항 AI 인식’으로 다시 등록해 주세요.",
+                ],
+            })
         elif isinstance(exc, ValueError):
             payload.update({
                 "code": "invalid_input", "errorKind": "invalid_input",
-                "error": f"입력 자료 또는 처리 요청을 처리하지 못했습니다. 원인: {message}",
+                # Korean messages are already written for teachers; English ones stay in detail.
+                "error": message if re.search(r"[가-힣]", message) else "이 파일을 처리하지 못했습니다.",
                 "retryable": False,
-                "recoverySteps": ["아래 오류 상세를 확인해 원본 파일이나 선택한 옵션을 점검해 주세요.", "같은 정상 파일에서도 반복되면 오류 상세를 복사해 신고해 주세요."],
+                "recoverySteps": ["원본을 PDF로 다시 저장한 뒤 등록해 주세요.", "반복되면 오류 상세를 복사해 문제 신고로 보내 주세요."],
+            })
+        elif type(exc).__name__ == "UnidentifiedImageError":
+            payload.update({
+                "code": "image_invalid_document", "errorKind": "invalid_document",
+                "error": "이미지 파일이 손상되었거나 지원하지 않는 형식입니다.",
+                "retryable": False,
+                "recoverySteps": ["이미지를 PNG나 JPG로 다시 저장한 뒤 등록해 주세요."],
             })
         elif isinstance(exc, OSError):
             payload.update({
                 "code": "runtime_storage_error", "errorKind": "storage_error",
-                "error": f"파일을 읽거나 저장하는 중 운영체제 오류가 발생했습니다. 원인: {message}",
+                "error": "파일을 읽거나 저장하지 못했습니다.",
                 "retryable": True,
                 "recoverySteps": ["원본 파일과 작업 폴더에 접근할 수 있는지 확인해 주세요.", "반복되면 오류 상세를 복사해 신고해 주세요."],
             })
@@ -3079,6 +3208,12 @@ def sanitize_edb_file_name(
     fallback = _clean_stem(fallback_stem, "classin")
     stem = _clean_stem(value, fallback) if value is not None else fallback
     return f"{stem}.edb"
+
+
+def _lesson_name_from_sources(source_paths: list[Path]) -> str:
+    """Readable lesson name: the first file's name without the managed upload digest."""
+    stem = re.sub(r"^[0-9a-f]{40,64}_", "", source_paths[0].stem).strip() or "새 수업"
+    return stem if len(source_paths) == 1 else f"{stem} 외 {len(source_paths) - 1}개"
 
 
 def _managed_upload_target_name(
@@ -4560,7 +4695,7 @@ def _session_publish_preflight_blocked_payload(
         "code": "publish_preflight_blocked",
         "operation": "session_publish",
         "retryable": False,
-        "error": "ClassIn 사전점검에서 제작 전 확인 문제가 발견되어 EDB publish를 중단했습니다.",
+        "error": "제작 전 확인이 필요한 문항이 있어 EDB 제작을 멈췄습니다.",
         "errorKind": "publish_preflight_blocked",
         "error_kind": "publish_preflight_blocked",
         "classinPreflight": preflight,
@@ -4571,10 +4706,7 @@ def _session_publish_preflight_blocked_payload(
         "classin_preflight_passed": False,
         "classinPreflightIssueCount": int(preflight.get("issueCount") or 0),
         "classin_preflight_issue_count": int(preflight.get("issueCount") or 0),
-        "recoverySteps": [
-            "표시된 문항 오류를 수정하거나 원본 PDF를 다시 등록해 주세요.",
-            "수정 후 같은 작업에서 다시 제작해 주세요.",
-        ],
+        "recoverySteps": ["표시된 문항을 고친 뒤 다시 제작해 주세요."],
         "blockingDuplicateProblemNumberGroups": duplicate_groups,
         "blocking_duplicate_problem_number_groups": duplicate_groups,
         "blockingIssueTypes": issue_types,
@@ -5025,7 +5157,7 @@ def _session_history_entry(session: dict[str, Any], *, updated_at: str | None = 
     counts = _session_problem_count_payload(problems)
     output_dir = str(session_snapshot.get("output_dir") or session_snapshot.get("outputDir") or "")
     generated_at = str(session_snapshot.get("generated_at") or session_snapshot.get("generatedAt") or "")
-    session_name = str(session_snapshot.get("session_name") or session_snapshot.get("sessionName") or "새 세션")
+    session_name = str(session_snapshot.get("session_name") or session_snapshot.get("sessionName") or "새 수업")
     history_key = _session_history_key(session_snapshot)
     entry_id = hashlib.sha1(history_key.encode("utf-8", errors="ignore")).hexdigest()[:16]
     publish_summary = session_snapshot.get("publishSummary")
@@ -9069,7 +9201,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         subject = _problem_image_subject(session, problem)
         enhance_plan[problem_id] = (subject, _resolved_image_enhance_mode(requested_mode, subject))
     if any(mode == "ai" for _subject, mode in enhance_plan.values()) and not api_key:
-        raise ValueError(f"{provider_label} API 키가 필요합니다. 칠판 설정에서 {env_key}를 저장한 뒤 다시 시도해 주세요.")
+        raise ValueError(f"{provider_label} API 키가 필요합니다. 설정 → AI 사용·연결에서 키를 저장한 뒤 다시 시도해 주세요.")
 
     model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
     custom_prompt = str(payload.get("prompt") or payload.get("imagePrompt") or "").strip()
@@ -9779,7 +9911,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
     if not _global_ai_enabled():
         raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
     if not os.environ.get("GEMINI_API_KEY", "").strip():
-        raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
+        raise ValueError("Gemini API 키가 필요합니다. 설정 → AI 사용·연결에서 키를 저장한 뒤 다시 시도해 주세요.")
 
     if _coerce_bool(payload.get("partial") or payload.get("partialRetry") or payload.get("partial_retry")):
         problem_ids = _retry_target_problem_ids(payload)
@@ -10343,6 +10475,21 @@ class AppHTTPServer(ThreadingHTTPServer):
         return None, cleared_revision
 
 
+def _uncaught_errors_as_json(method):
+    """Answer an uncaught handler error with classified JSON instead of dropping the socket."""
+    def wrapper(self) -> None:
+        try:
+            method(self)
+        except Exception as exc:
+            _log_operation_exception(f"{getattr(self, 'command', '')} {urlparse(self.path).path}", exc)
+            if getattr(self, "_response_started", False) or isinstance(exc, ConnectionError):
+                self.close_connection = True  # a half-written response cannot be repaired
+                return
+            payload = _export_error_payload(exc)
+            self._send_json(payload, status=_export_error_status(exc, payload))
+    return wrapper
+
+
 class AppRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(UI_DIR), **kwargs)
@@ -10352,6 +10499,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def parse_request(self) -> bool:
+        self._response_started = False  # handler objects are reused across keep-alive requests
         if not super().parse_request():
             return False
         if not _request_host_is_loopback(self.headers):
@@ -10548,6 +10696,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self.send_header("Pragma", "no-cache")
         super().end_headers()
 
+    def send_response(self, *args, **kwargs) -> None:
+        self._response_started = True
+        super().send_response(*args, **kwargs)
+
     def _rewrite_legacy_ui_asset_path(self, path: str) -> bool:
         alias = LEGACY_UI_ASSET_ALIASES.get(path)
         if not alias:
@@ -10565,6 +10717,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self.path = parsed.path
         return super().do_HEAD()
 
+    @_uncaught_errors_as_json
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/parser/jobs":
@@ -10589,7 +10742,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             refresh = parse_qs(parsed.query).get("refresh", [""])[0].strip().lower()
             if refresh in {"1", "true", "yes"}:
                 clear_app_update_status_cache()
-            self._send_json(build_app_update_status())
+            status = build_app_update_status()
+            if _consume_update_failure_marker():
+                status["lastUpdateFailed"] = True
+            self._send_json(status)
             return
         if parsed.path == "/api/session/latest":
             self._handle_latest_session()
@@ -10612,6 +10768,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self.path = parsed.path
         return super().do_GET()
 
+    @_uncaught_errors_as_json
     def do_POST(self) -> None:
         try:
             self._dispatch_post()
@@ -10706,6 +10863,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
+    @_uncaught_errors_as_json
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/session/latest":
@@ -10855,10 +11013,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(_publish_stage_failure_payload("build", exc), status=HTTPStatus.CONFLICT)
             return
         except (KeyError, ValueError) as exc:
+            classified = _classified_processing_error(exc) if isinstance(exc, ValueError) else None
             self._send_json(
-                _publish_failure_payload(
+                {**classified, "operation": "session_publish_plan"} if classified else _publish_failure_payload(
                     code="publish_plan_invalid",
-                    message="현재 작업의 EDB 분할 수를 계산하지 못했습니다",
+                    message="EDB 분할을 계산하지 못했습니다",
                     exc=exc,
                     retryable=False,
                     recovery_steps=[
@@ -10987,7 +11146,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(
                 _publish_failure_payload(
                     code="publish_session_invalid",
-                    message="현재 작업에 EDB 제작 필수 정보가 없습니다",
+                    message="이 작업에는 EDB 제작에 필요한 정보가 없습니다",
                     exc=exc,
                     retryable=False,
                     recovery_steps=[
@@ -11746,6 +11905,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "bundled": True,
         })
 
+    def _send_problem_image_failure(self, exc: Exception) -> None:
+        # Exception text never goes in the latin-1 status line; Korean OS errors would crash it.
+        _log_operation_exception("problem_image", exc)
+        if getattr(self, "_response_started", False):
+            self.close_connection = True
+            return
+        self._send_json({
+            "ok": False,
+            "code": "problem_image_unavailable",
+            "error": "문항 이미지를 만들지 못했습니다.",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "retryable": True,
+            "recoverySteps": ["잠시 후 다시 시도해 주세요."],
+        }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
     def _send_session_problem_image_response(self, session: dict[str, Any], problem_id: str, variant: str) -> None:
         if not problem_id:
             self.send_error(HTTPStatus.BAD_REQUEST, "problemId is required")
@@ -11765,7 +11939,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     board_theme=str(session.get("board_theme") or session.get("boardTheme") or DEFAULT_BOARD_THEME),
                 )
             except Exception as exc:  # noqa: BLE001 - surface a direct download failure.
-                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"failed to render problem image: {exc}")
+                self._send_problem_image_failure(exc)
                 return
             if rendered_payload is not None:
                 self.send_response(HTTPStatus.OK)
@@ -11793,7 +11967,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 return
             payload = _encode_image_as_png_bytes(source_path)
         except OSError as exc:
-            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"failed to read problem image: {exc}")
+            self._send_problem_image_failure(exc)
             return
 
         self.send_response(HTTPStatus.OK)
@@ -12336,6 +12510,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             response = {"ok": False, "error": str(exc), "code": exc.code}
             if exc.recovery_steps:
                 response["recoverySteps"] = exc.recovery_steps
+            if exc.detail:
+                response["detail"] = exc.detail
             self._send_json(response, status=exc.status)
             return
         self._send_json(result, status=HTTPStatus.ACCEPTED)
@@ -12389,7 +12565,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 ai_enabled=_coerce_bool(raw_ai_enabled) if has_ai_enabled else None,
             )
         except OSError as exc:
-            self._send_json({"ok": False, "error": f"failed to persist settings: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            classified = _classified_processing_error(exc) or {}
+            self._send_json({
+                "ok": False,
+                "code": classified.get("code", "settings_save_failed"),
+                "error": "설정을 저장하지 못했습니다.",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "retryable": True,
+                "recoverySteps": classified.get("recoverySteps") or ["앱을 다시 실행한 뒤 다시 저장해 주세요."],
+            }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "settings": summary})
 
@@ -13001,6 +13185,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
 
         session = result["ui_session"]
+        if not reuse_session_sources and source_paths:
+            # The builder names the session after its output folder (hash-prefixed upload name).
+            session["session_name"] = _lesson_name_from_sources(source_paths)
         session["ai_enabled"] = ai_enabled
         session["aiEnabled"] = ai_enabled
         session.setdefault("input_intent", input_intent)
@@ -13184,23 +13371,33 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
     ensure_runtime_dirs()
     hydrate_user_settings_env()
     write_placeholder_generated_session()
-    url = f"http://{host}:{port}/"
-    if _local_server_is_healthy(host, port):
-        print(f"{APP_NAME} already running at {url}")
-        if open_browser:
-            webbrowser.open(url)
-        return
     handler = partial(AppRequestHandler)
-    try:
-        server = AppHTTPServer((host, port), handler)
-    except OSError as exc:
-        address_in_use = exc.errno in {errno.EADDRINUSE, 48, 98, 10048}
-        if address_in_use and _local_server_is_healthy(host, port):
+    # 8765 stays first (bookmarks, browser storage); the next ports cover another program
+    # (e.g. AnkiConnect) holding it. Each port is health-checked first so a second launch
+    # finds a copy that already moved.
+    candidate_ports = range(port, port + 10)
+    for candidate in candidate_ports:
+        url = f"http://{host}:{candidate}/"
+        if _local_server_is_healthy(host, candidate):
             print(f"{APP_NAME} already running at {url}")
             if open_browser:
                 webbrowser.open(url)
             return
-        raise
+        try:
+            server = AppHTTPServer((host, candidate), handler)
+            break
+        except OSError as exc:
+            # 10013: Windows reserved/excluded port range.
+            address_in_use = exc.errno in {errno.EADDRINUSE, 48, 98, 10048} or getattr(exc, "winerror", None) == 10013
+            # A double-click can land while the first copy is bound but still loading; the long
+            # timeout waits for its answer, while another program answers (or refuses) at once.
+            if address_in_use and _local_server_is_healthy(host, candidate, timeout=15.0):
+                print(f"{APP_NAME} already running at {url}")
+                if open_browser:
+                    webbrowser.open(url)
+                return
+            if not address_in_use or candidate == candidate_ports[-1]:
+                raise
     _run_startup_artifact_cleanup(server)
     print(f"{APP_NAME} running at {url}")
     if open_browser:
@@ -13238,6 +13435,56 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
             signal.signal(signum, previous)
 
 
+def _startup_error_message(exc: BaseException) -> str:
+    # winerror 10013 is a blocked port, not a folder permission problem.
+    if isinstance(exc, PermissionError) and getattr(exc, "winerror", None) != 10013:
+        if sys.platform == "darwin":
+            return (
+                "작업 폴더에 접근할 수 없어 ClassIn EDB를 열지 못했습니다. "
+                "시스템 설정 > 개인정보 보호 및 보안 > 파일 및 폴더에서 ClassInEDBMVP를 허용한 뒤 다시 열어 주세요."
+            )
+        return (
+            "작업 폴더에 파일을 저장할 수 없어 ClassIn EDB를 열지 못했습니다. "
+            "Windows 보안의 랜섬웨어 방지에서 ClassInEDBMVP를 허용한 뒤 다시 열어 주세요."
+        )
+    return "ClassIn EDB를 열지 못했습니다. 컴퓨터를 다시 시작한 뒤 다시 열어 주세요."
+
+
+def _report_startup_failure(exc: BaseException) -> None:
+    """Log the traceback and show a Korean dialog instead of PyInstaller's English one."""
+    detail = traceback.format_exc()
+    # Outside Documents, so the log survives a blocked work folder.
+    log_dir = Path.home() / "Library" / "Logs" if sys.platform == "darwin" else Path(tempfile.gettempdir())
+    try:
+        with (log_dir / "ClassInEDBMVP-startup.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n{detail}")
+    except OSError:
+        pass
+    try:
+        print(detail, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    message = _startup_error_message(exc)
+    try:
+        if sys.platform == "darwin":
+            # Text goes in through argv so quotes in the copy cannot break the AppleScript.
+            subprocess.run(
+                [
+                    "/usr/bin/osascript", "-e", "on run argv", "-e",
+                    "display alert (item 1 of argv) message (item 2 of argv) as critical",
+                    "-e", "end run", "ClassIn EDB", message,
+                ],
+                check=False,
+                timeout=600,
+            )
+        elif sys.platform.startswith("win"):
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message, "ClassIn EDB", 0x10)
+    except Exception:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the local MVP app server for the ClassIn EDB builder.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
@@ -13246,12 +13493,35 @@ def main() -> int:
     parser.add_argument("--no-open-browser", dest="open_browser", action="store_false", help="Do not open the default browser")
     parser.add_argument("--log-file", default="", help="Write stdout/stderr to this file")
     args = parser.parse_args()
-    ensure_runtime_dirs()
-    if args.log_file or is_frozen_app():
-        configure_app_logging(args.log_file or None)
-    enable_fatal_error_logging()
-    open_browser = is_frozen_app() if args.open_browser is None else bool(args.open_browser)
-    run_server(host=args.host, port=args.port, open_browser=open_browser)
+    try:
+        # macOS never starts a second copy of a running .app: Finder/Dock only send a reopen
+        # event, which this windowed process cannot handle. So a plain open (no flags) is a
+        # short launcher that reopens the page or starts the server in the background, and a
+        # closed tab comes back from the app icon. CLI and smoke runs pass flags and serve here.
+        if is_frozen_app() and sys.platform == "darwin" and len(sys.argv) == 1:
+            if _local_server_is_healthy(args.host, args.port):
+                webbrowser.open(f"http://{args.host}:{args.port}/")
+            else:
+                subprocess.Popen(
+                    [sys.executable, "--open-browser"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            return 0
+        ensure_runtime_dirs()
+        if args.log_file or is_frozen_app():
+            configure_app_logging(args.log_file or None)
+        enable_fatal_error_logging()
+        open_browser = is_frozen_app() if args.open_browser is None else bool(args.open_browser)
+        run_server(host=args.host, port=args.port, open_browser=open_browser)
+    except Exception as exc:
+        if not is_frozen_app():
+            raise  # dev and terminal runs keep the real traceback
+        _report_startup_failure(exc)
+        return 1
     return 0
 
 

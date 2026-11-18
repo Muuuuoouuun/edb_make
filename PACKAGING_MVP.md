@@ -280,7 +280,7 @@ The app supports both PIN-gated automatic replacement and a manual download fall
 2. The top bar's `···` menu → `업데이트` shows the current app version and an `업데이트 확인` button.
 3. If the configured update feed reports a newer version, an administrator can enter the numeric update PIN and press `관리자 PIN 확인 후 업데이트`.
 4. The app downloads the platform installer, verifies the exact `sizeBytes` and `sha256`, exits, replaces the existing installation, and relaunches. Existing API keys and session data stay in the runtime folder.
-5. `다운로드 페이지 열기` remains available when a manual install is needed.
+5. `다운로드 열기` remains available when a manual install is needed.
 
 Automatic replacement is available only in a packaged macOS or Windows app. macOS accepts the packaged `.dmg` or `.zip`; Windows accepts the Inno Setup `.exe`. The macOS helper verifies the downloaded app bundle's code signature before replacing the current bundle. The old macOS bundle is moved to a temporary backup and restored if the replacement move fails. Five incorrect PIN attempts pause PIN checks for 60 seconds.
 
@@ -300,7 +300,7 @@ EDB_PACKAGE_UPDATE_PIN=4826 ./package_macos_app.sh --clean --dmg --zip \
   --update-feed-url "https://example.com/classin-edb/update.json"
 ```
 
-Use your own 4–12 digit PIN; `4826` above is only a command example. For an unpackaged local runtime test, set `EDB_UPDATE_PIN_HASH` to the generated verifier. If no verifier is configured, the UI explains that PIN automatic updates are unavailable and keeps the manual download action.
+Use your own PIN of 4–12 ASCII letters or digits (case-sensitive); `4826` above is only a command example. For an unpackaged local runtime test, set `EDB_UPDATE_PIN_HASH` to the generated verifier. If no verifier is configured, the UI explains that PIN automatic updates are unavailable and keeps the manual download action.
 The installer GitHub Actions workflow reads the protected repository secret `EDB_UPDATE_PIN` and fails a production release when it is missing. Configure that secret before dispatching a production installer build; the workflow passes it only to the build-scoped metadata generator.
 
 Update feed and download URLs must use HTTPS. Plain HTTP is accepted only for loopback development URLs such as `http://127.0.0.1:9999/update.json`.

@@ -235,7 +235,7 @@ def test_neutral_unknown_cli_shared_asset_and_session_restore_use_explicit_text_
     assert render.call_args_list
     assert all(call.args[0].subject == Subject.UNKNOWN and call.args[0].text_priority
                for call in render.call_args_list)
-    session = json.loads(result["ui_session_path"].read_text())
+    session = json.loads(result["ui_session_path"].read_text(encoding="utf-8"))
     entries = app_server._problems_to_entries(json.loads(json.dumps(session["problems"])))
     assert len(entries) == 1
     entry = entries[0]

@@ -221,7 +221,7 @@ class TestPackagingSourceHardening(unittest.TestCase):
     def test_installer_artifacts_keep_hidden_metadata_with_scoped_paths(self) -> None:
         source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
         expected_paths = {
-            "macos-installer": {
+            "macos-installer-${{ matrix.arch }}": {
                 "dist/ClassInEDBMVP-macOS.dmg", "dist/macos-release-evidence.json",
                 "dist/package-size.json", "dist/release-metadata", "dist/update-smoke.json",
             },
@@ -443,7 +443,7 @@ class TestPackagingSourceHardening(unittest.TestCase):
         self.assertIn('--python "$QUALITY_PYTHON"', source)
         self.assertIn('"edb-quality-venv."', source)
         self.assertIn("Run synthetic harness smoke (not production evidence)", source)
-        installer_gate = "needs: [quality-gate, private-quality-gate]"
+        installer_gate = "needs: [quality-gate, private-quality-gate"
         self.assertEqual(2, source.count(installer_gate))
         self.assertEqual(2, source.count("!inputs.production_release || needs.private-quality-gate.result == 'success'"))
 
@@ -477,6 +477,41 @@ class TestPackagingSourceHardening(unittest.TestCase):
         for removed in ("update_feed_url", "release_notes_url", "manifest_url", "macos_download_url", "windows_download_url"):
             self.assertNotIn(f"inputs.{removed}", source)
         self.assertNotIn('default: "0.2.4"', source)
+
+    def test_public_release_gate_requires_feed_and_both_macs(self) -> None:
+        source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
+        gate = source.split("- name: Validate release inputs", 1)[1].split("scripts/validate_release_inputs.py", 1)[0]
+        self.assertIn("UPDATE_CHANNEL: ${{ inputs.update_channel }}", gate)
+        self.assertIn("MACOS_ARCH: ${{ inputs.macos_arch }}", gate)
+        self.assertIn('"$RELEASE_MODE" == "public" && ( "$UPDATE_CHANNEL" != "true" || "$MACOS_ARCH" != "both" )', gate)
+
+    def test_packaged_fallback_links_point_at_the_newest_release(self) -> None:
+        source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
+        # The feed keeps versioned URLs; the link baked into each app must not re-download that same build.
+        self.assertIn("releases/latest/download/ClassInEDBMVP-macOS-{1}.dmg', github.repository, matrix.arch)", source)
+        self.assertIn("releases/latest/download/ClassInEDBMVP-Setup.exe', github.repository)", source)
+        self.assertIn("$packageArgs.DownloadUrl = $env:WINDOWS_FALLBACK_DOWNLOAD_URL", source)
+        self.assertEqual(2, source.count("--expected-download-url $env:WINDOWS_FALLBACK_DOWNLOAD_URL"))
+        self.assertIn('--windows-url "$WINDOWS_DOWNLOAD_URL"', source)
+
+    def test_macos_update_baseline_comes_from_the_draft_release(self) -> None:
+        source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
+        # Run artifacts expire after 14 days; the 0.2.8 draft assets do not.
+        self.assertNotIn("gh run download", source)
+        baseline_job = source.split("  macos-update-baseline:\n", 1)[1].split("\n  macos:\n", 1)[0]
+        self.assertIn("contents: write", baseline_job)
+        self.assertIn("gh release download v0.2.8", baseline_job)
+        self.assertIn("needs: [quality-gate, private-quality-gate, macos-update-baseline]", source)
+        self.assertIn('--baseline-artifact "$baseline_root/ClassInEDBMVP-macOS-$MACOS_ARCH.dmg"', source)
+
+    def test_macos_bundle_declares_minimum_os_and_fails_on_bad_ad_hoc_signature(self) -> None:
+        source = (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8")
+        self.assertIn('"$PROJECT_ROOT/release/opencv-image-profile.json"', source)
+        self.assertIn("Add :LSMinimumSystemVersion string $MIN_MACOS", source)
+        ad_hoc = source.split('codesign --force --deep --sign - "$APP_PATH"', 1)[1].split("\n  fi\n", 1)[0]
+        self.assertNotIn("|| true", ad_hoc)
+        self.assertIn('codesign --verify --deep --strict --verbose=2 "$APP_PATH"', ad_hoc)
+        self.assertNotIn('--sign - "$APP_PATH" >/dev/null 2>&1 || true', source)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,7 @@ function controller() {
     setActiveId: value => { sandbox.activeId = value; },
     setHistoryStack: value => { sandbox.history = value(sandbox.history); },
     setMutating() {}, setLoading() {}, refreshSessionHistory() {}, setReviewFocus() {}, setActionToast() {},
+    hasRunningBackgroundJobs: false,
     showToast: message => state.toasts.push(message), showSimpleErrorToast: error => state.errors.push(error),
     showActionToast() {}, stepLabel: value => value,
     requestViewChange: value => state.views.push(value),

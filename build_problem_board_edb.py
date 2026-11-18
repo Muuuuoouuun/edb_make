@@ -4488,6 +4488,12 @@ def _passage_document_identity(page: PageModel) -> str | None:
         # An explicit original document is stronger than a possibly stale
         # conversion/cache pointer. Conflicting originals must stay separate.
         return str(Path(original).expanduser().resolve())
+    if (str(page.metadata.get("source_type") or "") == "image"
+            and not page.metadata.get("source_pdf_path")
+            and not page.metadata.get("source_hwp_path")):
+        # Photos/screenshots of one worksheet arrive as separate image files;
+        # one upload batch is one document so [18~20] still owns Q19 on photo 2.
+        return "image-upload-batch"
     # HWP normalized caches may label each rendered PNG as original_source_path.
     # Prefer explicit document provenance before that generic image path.
     for key in ("source_hwp_path", "source_pdf_path", "original_source_path"):
@@ -6779,7 +6785,9 @@ def build_problem_entries(
             all_assigned_ids.update(_iter_problem_block_ids_raw(prob))
 
         for problem in ordered_problems:
-            if (_problem_is_passage_fragment_unit(problem)
+            # Header-only seeds stay crop boundaries; only passage-only exports drop them.
+            if (resolved_content_target == "shared-passages"
+                    and _problem_is_passage_fragment_unit(problem)
                     and not body_evidence_by_group.get(str(problem.metadata.get("passage_group_id") or problem.unit_id), True)):
                 continue
             if not _problem_matches_content_target(problem, resolved_content_target):

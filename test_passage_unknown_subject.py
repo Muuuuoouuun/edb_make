@@ -155,6 +155,39 @@ def test_reading_directive_without_visible_shared_body_is_not_passage(tmp_path, 
     assert entries == []
 
 
+def test_reading_directive_without_body_stays_crop_boundary_in_all_export(tmp_path):
+    source = tmp_path / "directive.pdf"
+    with pymupdf.open() as document:
+        page = document.new_page(width=600, height=800)
+        page.insert_text((40, 40), "1. Earlier unrelated question?", fontsize=12)
+        page.insert_text((40, 120), "[7~9] Read the passage and answer the questions.", fontsize=10)
+        page.insert_text((40, 160), "7. What is the title?", fontsize=12)
+        page.insert_text((40, 360), "8. Which statement is true?", fontsize=12)
+        page.insert_text((330, 160), "9. Which word fits?", fontsize=12)
+        document.save(source)
+    prepared, models = board.build_pages(source, subject=Subject.UNKNOWN, ocr_mode="none", ai_fallback_config=None,
+        pdf_dpi=144, detect_perspective=False, deskew=False, crop_margins=False, max_dimension=None)
+    header_top = next(line["bbox"]["top"] for line in prepared[0].metadata["pdf_text_lines"]
+                      if line["text"].startswith("[7~9]"))
+    entries = board.build_problem_entries(prepared, models, tmp_path / "out", LayoutTemplate(name="test"), content_target="all")
+    first = next(entry for entry in entries if entry.problem_number == 1)
+    assert first.bounds.bottom < header_top
+
+
+def test_image_upload_batch_keeps_shared_passage_across_photos(tmp_path):
+    from structured_schema import PageModel, ProblemUnit
+    first = PageModel("a-page-001", 900, 1200, Subject.UNKNOWN, str(tmp_path / "a.png"),
+        problems=[ProblemUnit("frag", Subject.UNKNOWN, "passage", metadata={
+            "passage_group_id": "g1", "passage_role": "passage_fragment",
+            "passage_range": {"start": 18, "end": 20}})],
+        metadata={"source_type": "image", "original_source_path": str(tmp_path / "a.png")})
+    second = PageModel("b-page-001", 900, 1200, Subject.UNKNOWN, str(tmp_path / "b.png"),
+        problems=[ProblemUnit(f"q{n}", Subject.UNKNOWN, str(n), metadata={"problem_number": n}) for n in (19, 20)],
+        metadata={"source_type": "image", "original_source_path": str(tmp_path / "b.png")})
+    board._annotate_cross_page_passage_groups([first, second])
+    assert [(p.metadata.get("passage_group_id"), p.metadata.get("passage_role")) for p in second.problems] == [("g1", "child_question")] * 2
+
+
 @pytest.mark.parametrize("body_type", ["vector", "raster"])
 def test_low_text_shared_graphic_body_is_retained(tmp_path, body_type):
     import io

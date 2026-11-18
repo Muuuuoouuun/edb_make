@@ -24,7 +24,7 @@ class BugReportUiTests(unittest.TestCase):
         settings = self.app.split("{settingsTabActive && (", 1)[1].split(
             "function LoadingOverlay", 1
         )[0]
-        self.assertIn('aria-label="버그 리포트"', settings)
+        self.assertIn('aria-label="문제 신고"', settings)
         self.assertIn('title="도움말 및 문제 신고"', settings)
         self.assertIn('className="settings-support-disclosure"', settings)
         self.assertIn('onClick={onOpenBugReport} aria-haspopup="dialog"', settings)
@@ -38,7 +38,7 @@ class BugReportUiTests(unittest.TestCase):
         self.assertIn("이 문제에 관한 회신에 동의", settings)
         self.assertIn("진단 정보 포함", settings)
         self.assertIn("리포트 보내기", settings)
-        self.assertIn("원본 시험지, 세션 내용, API 키, 전체 로컬 경로", settings)
+        self.assertIn("원본 시험지, 작업 내용, API 키, 컴퓨터 안의 전체 파일 경로", settings)
 
     def test_submit_posts_only_allowlisted_context_to_local_endpoint(self):
         helper = self.app.split("async function submitBugReport", 1)[1].split(
@@ -102,7 +102,7 @@ class BugReportUiTests(unittest.TestCase):
             "최근 저장본 열기",
             "PNG로 대체 저장",
             "초기화 후 다시 시작",
-            "버그 리포트 열기",
+            "문제 신고 열기",
             "오류 내용 복사",
         ):
             self.assertIn(label, banner)
@@ -133,7 +133,7 @@ class BugReportUiTests(unittest.TestCase):
             "앱 재실행 후 연결 확인",
             "앱 연결됨 · 작업을 다시 시작할 수 있습니다",
             "연결이 돌아오면 자동으로 알려드립니다",
-            "로컬 앱 서버와 다시 연결됐습니다. 원본 파일과 대기열은 그대로 유지됩니다.",
+            "앱과 다시 연결됐습니다. 원본 파일과 대기열은 그대로 유지됩니다.",
         ):
             self.assertIn(label, banner)
         self.assertIn("probeLocalServerHealth(1400)", banner)
@@ -296,7 +296,7 @@ process.stdout.write(JSON.stringify({
         self.assertNotIn("appendBoundedHistory", load_latest)
         self.assertIn("conflictSafeUndoHistory(conflict.latestSession)", rebase)
         self.assertNotIn("appendBoundedHistory(prev, localDraft", rebase)
-        self.assertIn("latest.session_name = latest.session_name || '새 세션'", helper)
+        self.assertIn("latest.session_name = latest.session_name || '새 수업'", helper)
         self.assertNotIn("fileName || latest.session_name", helper)
 
         clone_start = self.app.index("function cloneSession")
@@ -395,7 +395,7 @@ process.stdout.write(JSON.stringify({ history, latest }));
         self.assertIn("missingSessionError.code = 'session_missing'", publish)
         self.assertIn("missingSessionError.hasLatestSessionState = true", publish)
         self.assertIn("await fetchLatestSessionState()", publish)
-        self.assertIn("버그 리포트", banner)
+        self.assertIn("문제 신고", banner)
         self.assertIn("onReset", banner)
         self.assertIn("disabled={anyBusy || resetBlocked}", banner)
         reset_from_recovery = self.app.split("const resetAfterOperationError", 1)[1].split(

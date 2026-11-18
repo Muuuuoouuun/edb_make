@@ -212,7 +212,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                 "app_update_config.json downloadUrl aliases conflict: "
                 "downloadUrl='https://example.test/old/ClassInEDBMVP-macOS.zip', "
                 "download_url='https://example.test/new/ClassInEDBMVP-macOS.zip'",
-                status["error"],
+                status["detail"],
             )
 
     def test_sanitize_edb_file_name_normalizes_requested_name(self):
@@ -710,6 +710,7 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertFalse(status["updateAvailable"])
         self.assertEqual("unsupported_architecture", status["channelStatus"])
         self.assertEqual("update_architecture_mismatch", status["code"])
+        self.assertEqual(["관리자에게 Intel Mac용 설치 파일을 요청해 주세요."], status["recoverySteps"])
         self.assertEqual("", status["downloadUrl"])
         self.assertEqual("", status["latest"]["downloadUrl"])
 
@@ -804,7 +805,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                 "update feed downloadUrl aliases conflict: "
                 "downloadUrl='https://example.test/old/ClassInEDBMVP-macOS.zip', "
                 "download_url='https://example.test/new/ClassInEDBMVP-macOS.zip'",
-                status["error"],
+                status["detail"],
             )
             self.assertIsNone(status["latest"])
 
@@ -849,7 +850,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                 "update feed fileName aliases conflict: "
                 "fileName='ClassInEDBMVP-macOS-old.dmg', "
                 "file_name='ClassInEDBMVP-macOS.dmg'",
-                status["error"],
+                status["detail"],
             )
             self.assertIsNone(status["latest"])
 
@@ -890,7 +891,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual(
                 "update feed appId mismatch: expected ClassInEDBMVP, found OtherApp",
-                status["error"],
+                status["detail"],
             )
             self.assertEqual("ClassInEDBMVP", status["appId"])
             self.assertIsNone(status["latest"])
@@ -933,7 +934,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual(
                 "update feed appName mismatch: expected ClassInEDBMVP, found Other App",
-                status["error"],
+                status["detail"],
             )
             self.assertEqual("ClassInEDBMVP", status["appName"])
             self.assertIsNone(status["latest"])
@@ -1011,7 +1012,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed does not include a usable download URL", status["error"])
+            self.assertEqual("update feed does not include a usable download URL", status["detail"])
             self.assertEqual("", status["downloadUrl"])
 
     def test_update_status_rejects_invalid_integrity_digest_from_feed(self):
@@ -1050,7 +1051,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed has invalid manifestSha256", status["error"])
+            self.assertEqual("update feed has invalid manifestSha256", status["detail"])
             self.assertNotIn("manifestSha256", status)
 
     def test_update_status_rejects_invalid_artifact_size_from_feed(self):
@@ -1088,7 +1089,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed has invalid sizeBytes", status["error"])
+            self.assertEqual("update feed has invalid sizeBytes", status["detail"])
             self.assertNotIn("sizeBytes", status["latest"])
 
     def test_update_status_rejects_platform_artifact_type_mismatch(self):
@@ -1127,7 +1128,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed artifactType for macos must be one of: dmg, zip", status["error"])
+            self.assertEqual("update feed artifactType for macos must be one of: dmg, zip", status["detail"])
 
     def test_update_status_rejects_platform_file_name_mismatch_without_artifact_type(self):
         with TemporaryDirectory() as raw_tmp:
@@ -1163,7 +1164,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed fileName for macos must use one of: .dmg, .zip", status["error"])
+            self.assertEqual("update feed fileName for macos must use one of: .dmg, .zip", status["detail"])
 
     def test_update_status_rejects_file_name_download_url_mismatch(self):
         with TemporaryDirectory() as raw_tmp:
@@ -1204,7 +1205,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(
                 "update feed fileName 'ClassInEDBMVP-macOS.dmg' "
                 "does not match download URL file name 'ClassInEDBMVP-macOS-old.dmg'",
-                status["error"],
+                status["detail"],
             )
 
     def test_update_status_rejects_snake_case_file_name_download_url_mismatch(self):
@@ -1246,7 +1247,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(
                 "update feed fileName 'ClassInEDBMVP-macOS.dmg' "
                 "does not match download URL file name 'ClassInEDBMVP-macOS-old.dmg'",
-                status["error"],
+                status["detail"],
             )
 
     def test_update_status_rejects_download_url_without_artifact_extension(self):
@@ -1291,7 +1292,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual(
                 "update feed download URL for macos must include artifact extension (.dmg, .zip)",
-                status["error"],
+                status["detail"],
             )
 
     def test_update_status_rejects_typed_download_url_without_artifact_extension(self):
@@ -1331,7 +1332,7 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual("invalid_feed", status["channelStatus"])
         self.assertEqual(
             "update feed download URL must include dmg artifact extension (.dmg)",
-            status["error"],
+            status["detail"],
         )
 
     def test_update_status_caches_feed_fetches_for_short_ttl(self):
@@ -3454,7 +3455,10 @@ class TestExportErrorPayload(unittest.TestCase):
 
         self.assertFalse(payload["ok"])
         self.assertEqual("hangul_conversion_failed", payload["errorKind"])
+        self.assertEqual("hwp_conversion_failed", payload["code"])
+        self.assertFalse(payload["retryable"])
         self.assertIn("한컴오피스", payload["error"])
+        self.assertNotIn("Diagnosis", payload["error"])
         self.assertGreaterEqual(len(payload["recoverySteps"]), 2)
         self.assertTrue(any("PDF" in step for step in payload["recoverySteps"]))
 
@@ -3464,7 +3468,7 @@ class TestExportErrorPayload(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual("invalid_input", payload["errorKind"])
         self.assertEqual("invalid_input", payload["code"])
-        self.assertIn("plain failure", payload["error"])
+        self.assertEqual("이 파일을 처리하지 못했습니다.", payload["error"])
         self.assertEqual("ValueError: plain failure", payload["detail"])
         self.assertTrue(payload["recoverySteps"])
 
@@ -3604,7 +3608,7 @@ class TestExportSourceResolution(unittest.TestCase):
             handler._handle_export()
 
         self.assertFalse(responses[0][0]["ok"])
-        self.assertIn("only allowed for preview", responses[0][0]["error"])
+        self.assertIn("only allowed for preview", responses[0][0]["detail"])
         self.assertEqual(current_session, handler.server.latest_session)
 
     def test_session_source_reextract_missing_sources_keeps_current_session(self):

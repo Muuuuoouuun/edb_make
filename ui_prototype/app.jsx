@@ -78,6 +78,7 @@ class AppErrorBoundary extends React.Component {
         'div',
         {
           className: 'runtime-crash-panel',
+          role: 'alert',
           style: {
             margin: 16,
             padding: 16,
@@ -88,7 +89,16 @@ class AppErrorBoundary extends React.Component {
             whiteSpace: 'pre-wrap',
           },
         },
-        `앱 화면을 렌더링하지 못했습니다.\n\n${this.state.error?.message || this.state.error}`
+        React.createElement('strong', null, '화면을 표시하지 못했어요.'),
+        React.createElement('p', { style: { margin: '8px 0' } }, '새로고침하면 앱 화면을 다시 열어요. 계속되면 아래 오류 상세를 복사해 문제 신고로 알려 주세요.'),
+        React.createElement('button', {
+          type: 'button',
+          onClick: () => window.location.reload(),
+          style: { padding: '6px 14px', borderRadius: 6, border: '1px solid #dc2626', background: '#ef4444', color: '#fff', fontWeight: 600, cursor: 'pointer' },
+        }, '새로고침'),
+        React.createElement('details', { style: { marginTop: 12 } },
+          React.createElement('summary', null, '오류 상세 보기'),
+          String(this.state.error?.message || this.state.error))
       );
     }
     return this.props.children;
@@ -3441,9 +3451,9 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
   };
   return <div className="lesson-name-control">
     {!open ? <button type="button" className="lesson-name-trigger" ref={triggerRef}
-      aria-label={`수업 이름 변경: ${fileName || '새 세션'}`} aria-keyshortcuts="F2"
-      title={`${fileName || '새 세션'} · 이름 변경 (F2)`} disabled={disabled || saving} onClick={start}>
-      <span className="lesson-name-text">{fileName || '새 세션'}</span>{Icon.pen}<kbd>F2</kbd>
+      aria-label={`수업 이름 변경: ${fileName || '새 수업'}`} aria-keyshortcuts="F2"
+      title={`${fileName || '새 수업'} · 이름 변경 (F2)`} disabled={disabled || saving} onClick={start}>
+      <span className="lesson-name-text">{fileName || '새 수업'}</span>{Icon.pen}<kbd>F2</kbd>
     </button> : <form className="lesson-name-inline" onSubmit={submit} aria-busy={saving}>
         <input id="lesson-name-input" type="text" ref={inputRef} value={draft} maxLength={160}
           aria-label="수업 이름" aria-describedby={error ? 'lesson-name-error' : undefined}
@@ -3530,7 +3540,7 @@ function TopBar({
               ? [{ id: 'board', icon: Icon.board, label: '칠판으로 돌아가기',
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('board') }]
               : reviewAvailable ? [{ id: 'review', icon: Icon.check, label: '문항 검수 열기',
-                  description: reviewAttentionCount > 0 ? `확인 필요 ${reviewAttentionCount}개 · 필요할 때 검수합니다` : '원본과 분할 영역을 확인하거나 직접 수정합니다',
+                  description: reviewAttentionCount > 0 ? `확인 필요 ${reviewAttentionCount}개 · 제작 전에 확인해 주세요` : '원본과 분할 영역을 확인하거나 직접 수정합니다',
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('review') }] : []),
             { id: 'refresh', icon: Icon.refresh, label: refreshing ? '불러오는 중…' : '최신 저장본 불러오기', description: refreshReason, disabled: refreshing || pageReviewActive || operationBusy, onSelect: onRefresh },
             { id: 'settings', icon: Icon.rows3, label: '설정', description: 'AI·API 키, 화면, 한글 변환, 업데이트', disabled: !onOpenSettings, onSelect: onOpenSettings },
@@ -3550,7 +3560,11 @@ function TopBar({
           ? '페이지 확인 후 제작할 수 있습니다'
           : conflictBlocked
             ? '오류 안내에서 최신 상태를 먼저 선택해 주세요'
-            : published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
+            : operationBusy
+              ? '진행 중인 작업이나 대기 중인 파일이 있어요. 끝나거나 대기 목록에서 뺀 뒤 제작해 주세요'
+              : reviewAttentionCount > 0
+                ? `확인 필요 ${reviewAttentionCount}개를 먼저 확인해 주세요`
+                : published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
         onClick={onPublish}
         disabled={pageReviewActive || operationBusy}
       >
@@ -5762,8 +5776,8 @@ function ReviewStage({
       <span className="count-chip">{boxEdit.multi ? '지문 영역 합치기' : '영역 다시 잡기'}</span>
       <span className="hint">
         {boxEdit.multi
-          ? '페이지를 스크롤하며 영역을 추가하세요. 목록 순서대로 한 지문이 됩니다. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'
-          : '시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소'}
+          ? `페이지를 스크롤하며 영역을 추가하세요. 목록 순서대로 한 지문이 됩니다. ${PRIMARY_MODIFIER_LABEL}+휠 확대/축소 · Enter 적용 · Esc 취소`
+          : `시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ${PRIMARY_MODIFIER_LABEL}+휠 확대/축소 · Enter 적용 · Esc 취소`}
       </span>
       <div className="spacer" />
       {boxEdit.multi && (
@@ -7722,8 +7736,8 @@ function ItemsRail({
           type="button"
           aria-label="현재 원본에서 공통 지문 다시 추출"
           title={canReextractSharedPassages
-            ? '현재 세션의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
-            : '현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.'}
+            ? '지금 작업의 원본 PDF·이미지를 다시 읽어 긴 공통 지문만 추출합니다. 기존 문항은 유지됩니다.'
+            : '원본 파일을 찾을 수 없어 다시 추출할 수 없습니다. 파일을 다시 추가해 주세요.'}
           data-tooltip={reextractSharedPassagesBusy ? '공통 지문 추출 중…' : '원본에서 공통 지문 다시 추출'}
           onClick={onReextractSharedPassages}
           disabled={!!editScope || !canReextractSharedPassages || reextractSharedPassagesBusy || reorderBusy}
@@ -9951,6 +9965,8 @@ function HomeDashboard({
 }){
   const [dropActive, setDropActive] = useState(false);
   const [recentLimit, setRecentLimit] = useState(6);
+  const homeMethods = [['recognize','문항 AI 인식','문제별로 자동 분리','sparkle'],['register','페이지 전체 넣기','쪽번호까지 원본 유지','fileText'],['passage-only','공통 지문만 추출','공유 본문만 · 문제·선지 제외','fileText'],['manual-split','수동 자르기','필요한 영역만 직접','pen']];
+  const activeHomeMethod = homeMethods.find(([mode]) => mode === splitMode) || homeMethods[0];
   const hangulDiagnostics = runtimeDiagnostics?.hangul || null;
   const hangulMeta = hangulRuntimeStatusMeta(hangulDiagnostics);
 
@@ -10054,6 +10070,16 @@ function HomeDashboard({
           <h2 id="home-launch-title">어떤 자료로 시작할까요?</h2>
         </div>
 
+        <div className="home-methods" aria-labelledby="home-methods-title">
+          <h3 id="home-methods-title">어떻게 넣을까요?</h3>
+          <ul className="home-method-cards">
+            {homeMethods.map(([mode,label,hint,icon]) =>
+              <li key={mode}><button className="home-method-card" type="button" aria-pressed={splitMode === mode} onClick={() => setSplitMode?.(mode)}>
+                <span className="home-method-icon" aria-hidden="true">{Icon[icon]}</span><strong>{label}</strong><span>{hint}</span>
+              </button></li>)}
+          </ul>
+        </div>
+
         <button
           type="button"
           className={`home-hero-dropzone ${dropActive ? 'is-active' : ''}`}
@@ -10066,7 +10092,7 @@ function HomeDashboard({
           </span>
           <span className="home-dropzone-text">
             <strong>{dropActive ? '여기에 놓으면 자료가 담겨요' : '끌어다 놓거나 클릭하세요'}</strong>
-            <span>파일당 512MB · 한 번에 총 2GB · 큰 PDF도 차례로 처리합니다.</span>
+            <span>{`선택한 방식: ${activeHomeMethod[1]} · 파일당 512MB · 한 번에 총 2GB`}</span>
           </span>
           <span className="btn primary home-upload-btn" aria-hidden="true">
             {Icon.plus} 파일 선택
@@ -10080,16 +10106,6 @@ function HomeDashboard({
         <p id="home-upload-help" className="home-upload-help">
           방식을 고르고 파일을 놓거나 {PRIMARY_MODIFIER_LABEL}+V로 붙여넣으세요. 바로 처리해 칠판에 배치합니다.
         </p>
-
-        <div className="home-methods" aria-labelledby="home-methods-title">
-          <h3 id="home-methods-title">어떻게 넣을까요?</h3>
-          <ul className="home-method-cards">
-            {[['recognize','문항 AI 인식','문제별로 자동 분리','sparkle'],['register','페이지 전체 넣기','쪽번호까지 원본 유지','fileText'],['passage-only','공통 지문만 추출','공유 본문만 · 문제·선지 제외','fileText'],['manual-split','수동 자르기','필요한 영역만 직접','pen']].map(([mode,label,hint,icon]) =>
-              <li key={mode}><button className="home-method-card" type="button" aria-pressed={splitMode === mode} onClick={() => setSplitMode?.(mode)}>
-                <span className="home-method-icon" aria-hidden="true">{Icon[icon]}</span><strong>{label}</strong><span>{hint}</span>
-              </button></li>)}
-          </ul>
-        </div>
         </section>
         </div>
 
@@ -10244,10 +10260,19 @@ async function openPublishedEdb(target){
     const json = await readJsonResponse(resp, '파일 열기 실패').catch(() => ({}));
     if (!resp.ok || !json.ok) {
       console.warn('[board] open-file failed:', json.error || resp.status);
+      notifyOpenFailure(resp.status === 404
+        ? '파일을 찾지 못했어요. EDB를 다시 제작해 주세요.'
+        : 'ClassIn을 열지 못했어요. ClassIn이 설치돼 있는지 확인해 주세요.');
     }
   } catch (e) {
     console.warn('[board] open-file error:', e.message);
+    notifyOpenFailure(userErrorText(e));
   }
+}
+
+// The open helpers live outside App, so App turns this event into its usual toast.
+function notifyOpenFailure(message){
+  window.dispatchEvent(new CustomEvent('edb-notice', { detail: { message, type: 'error' } }));
 }
 
 function openClassinHandoff(target){
@@ -10971,6 +10996,7 @@ function SidePanel({
   const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || '';
   const updateAutomaticEnabled = Boolean(updateInfo?.automaticUpdateEnabled);
   const updateAutomaticReady = Boolean(updateInfo?.automaticUpdateReady);
+  const updateAutomaticBlockedReason = String(updateInfo?.automaticUpdateBlockedReason || '').trim();
   const updateActionBusy = updateBusy || updateInstallBusy;
   useEffect(() => {
     if (updateInfo?.updateAvailable) return;
@@ -10994,7 +11020,7 @@ function SidePanel({
                 : updateStatus === 'invalid_config'
                   ? '설정 오류'
                 : updateStatus === 'invalid_feed'
-                  ? '피드 오류'
+                  ? '확인 실패'
                   : updateStatus === 'unsupported_platform'
                     ? '미지원'
                     : '확인 전';
@@ -11199,14 +11225,18 @@ function SidePanel({
       {updateInfo?.channelStatus === 'not_configured' && <div className="runtime-note warn" role="status">
         업데이트 배포 주소가 아직 설정되지 않았습니다. 현재 버전이 최신인지 확인하거나 새 버전을 설치할 수 없습니다. 관리자에게 업데이트가 설정된 배포본을 요청해 주세요.
       </div>}
+      {updateInfo?.lastUpdateFailed && <div className="runtime-note warn" role="status">
+        지난 자동 업데이트를 마치지 못했습니다. ‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요.
+      </div>}
       {updateArchitectureBlocked ? (
         <div className="runtime-note warn update-architecture-note" role="status">
-          <strong>이 기기용 업데이트 파일 없음</strong>
+          <strong>이 컴퓨터용 업데이트 파일이 아직 없습니다</strong>
           {updateArchitectureSteps.map(step => <small key={step}>{step}</small>)}
         </div>
       ) : updateInfo?.error && (
-        <div className="runtime-note warn">
-          {updateInfo.error}
+        <div className="runtime-note warn" role="status">
+          {updateInfo.detail ? updateInfo.error : (UPDATE_CHANNEL_ERROR_COPY[updateStatus] || UPDATE_CHANNEL_ERROR_COPY.error)}
+          <details><summary>오류 상세 보기</summary><small style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{updateInfo.detail || updateInfo.error}</small></details>
         </div>
       )}
       <div className="settings-action-row">
@@ -11224,13 +11254,16 @@ function SidePanel({
           onClick={() => onOpenUpdate?.()}
           disabled={updateActionBusy || !updateDownloadUrl}
           title={updateArchitectureBlocked
-            ? '현재 아키텍처용 설치 파일을 선택해 주세요'
-            : updateDownloadUrl ? '다운로드 페이지 열기' : '업데이트 다운로드 URL이 없습니다'}
+            ? '이 컴퓨터용 설치파일이 아직 없습니다'
+            : updateDownloadUrl ? '다운로드 페이지 열기' : '다운로드 주소가 아직 없습니다. 잠시 후 ‘업데이트 확인’을 다시 눌러 주세요.'}
         >
           {Icon.download} 다운로드 열기
         </button>
       </div>
-      {updateInfo?.updateAvailable && <div className="update-install-card">
+      {updateInfo?.updateAvailable && updateAutomaticBlockedReason && <div className="runtime-note warn" role="status">
+        {updateAutomaticBlockedReason} ‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요.
+      </div>}
+      {updateInfo?.updateAvailable && !updateAutomaticBlockedReason && <div className="update-install-card">
         {updateInstallSafetyReason && <div className="runtime-note warn" role="status">{updateInstallSafetyReason}</div>}
         <div className="lbl">
           관리자 PIN 업데이트
@@ -11245,14 +11278,14 @@ function SidePanel({
             type={showUpdatePin ? 'text' : 'password'}
             className="key-input"
             aria-label="업데이트 PIN"
-            placeholder="업데이트 PIN (숫자 4~12자리)"
+            placeholder="업데이트 PIN (영문·숫자 4~12자리)"
             value={updatePinDraft}
-            inputMode="numeric"
-            pattern="[0-9]*"
             maxLength={12}
-            autoComplete="one-time-code"
+            autoComplete="off"
+            autoCapitalize="none"
+            spellCheck={false}
             disabled={updateActionBusy || !updateAutomaticEnabled}
-            onChange={event => setUpdatePinDraft(event.target.value.replace(/\D/g, '').slice(0, 12))}
+            onChange={event => setUpdatePinDraft(event.target.value.replace(/[^A-Za-z0-9]/g, '').slice(0, 12))}
             onKeyDown={event => {
               if (event.key !== 'Enter' || !updatePinDraft || !updateAutomaticReady || updateActionBusy || updateInstallSafetyReason) return;
               event.preventDefault();
@@ -11276,11 +11309,11 @@ function SidePanel({
           type="button"
           disabled={updateActionBusy || !updateAutomaticReady || updatePinDraft.length < 4 || Boolean(updateInstallSafetyReason)}
           title={updateInstallSafetyReason || (!updateAutomaticEnabled
-            ? '이 배포본에 업데이트 PIN이 설정되지 않았습니다'
+            ? '이 설치본은 자동 업데이트를 지원하지 않습니다. ‘다운로드 열기’로 새 설치파일을 받아 주세요.'
             : !updateInfo?.updateAvailable
               ? '업데이트 확인 후 새 버전이 있을 때 사용할 수 있습니다'
               : !updateAutomaticReady
-                ? '자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다'
+                ? '지금은 자동 업데이트를 할 수 없습니다. ‘다운로드 열기’로 새 설치파일을 받아 주세요.'
                 : 'PIN 확인 후 새 버전을 덮어씁니다')}
           onClick={requestUpdateInstall}
         >
@@ -11440,10 +11473,10 @@ function SidePanel({
               summary="오류나 불편한 점을 알려 주세요"
               className="settings-support-disclosure"
             >
-              <section className="bug-report-card open" aria-label="버그 리포트">
+              <section className="bug-report-card open" aria-label="문제 신고">
                 <p className="placement-control-note">문제가 생긴 작업과 화면을 알려 주세요. 넓은 신고 창에서 내용을 작성할 수 있습니다.</p>
                 <button className="btn primary" type="button" onClick={onOpenBugReport} aria-haspopup="dialog">문제 신고 작성</button>
-                <p className="bug-report-privacy">원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.</p>
+                <p className="bug-report-privacy">원본 시험지, 작업 내용, API 키, 컴퓨터 안의 전체 파일 경로는 보내지 않습니다.</p>
               </section>
             </SidebarDisclosure>
             <div className="panel-section-hd settings-group-label">앱 관리 <span className="line" /></div>
@@ -11944,7 +11977,7 @@ function SidePanel({
                         title="글자를 새로 만들지 않고 원본 픽셀을 보존해 2K 투명 PNG로 개선합니다"
                       >
                         <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 글자 보존 고화질</span>
-                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>LOCAL 2K</span>
+                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>2K · 내 컴퓨터</span>
                       </button>
                       <button
                         className="btn"
@@ -11952,10 +11985,10 @@ function SidePanel({
                         style={{width: '100%', justifyContent: 'space-between', marginTop: 7}}
                         onClick={() => onEnhanceImage?.([item.id], { mode: 'ai' })}
                         disabled={!canEnhanceCurrent || panelBusy || !aiEnabled || !userSettings?.hasGeminiApiKey}
-                        title={!aiEnabled ? '설정에서 AI 기능을 켜면 선택적으로 사용할 수 있습니다' : userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 Nano Banana 2로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
+                        title={!aiEnabled ? '설정에서 AI 기능을 켜면 선택적으로 사용할 수 있습니다' : userSettings?.hasGeminiApiKey ? '그림·도표 또는 심하게 깨진 자료를 AI로 선택 재구성합니다' : 'Gemini API 키를 저장하면 선택적으로 사용할 수 있습니다'}
                       >
                         <span style={{display:'flex', alignItems:'center', gap:8}}>{Icon.wand} 선택적 AI 재구성</span>
-                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>Nano Banana 1K</span>
+                        <span style={{fontFamily:'JetBrains Mono, monospace', fontSize:11, opacity:.82}}>1K · AI</span>
                       </button>
                       <div style={{fontSize: 11.5, lineHeight: 1.45, color: 'var(--muted)', marginTop: 7}}>
                         수식·문자·선지가 있는 자료는 글자 보존형이 기본입니다. AI 재구성은 도표 중심 자료에 선택적으로 사용하고 내용 변화 검사를 거칩니다.
@@ -12379,6 +12412,7 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
   const [errorMessage, setErrorMessage] = useState('');
   const [invalidField, setInvalidField] = useState('');
   const [copyStatus, setCopyStatus] = useState('');
+  const [sendFailed, setSendFailed] = useState(false);
   const dialogRef = useRef(null);
   const descriptionRef = useRef(null);
   const consentRef = useRef(null);
@@ -12398,6 +12432,7 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
     setErrorMessage('');
     setInvalidField('');
     setCopyStatus('');
+    setSendFailed(false);
     const previousFocus = request.returnFocus || document.activeElement;
     const dialog = dialogRef.current;
     const previousBodyOverflow = document.body.style.overflow;
@@ -12457,6 +12492,8 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
     setErrorMessage('');
     setInvalidField('');
     setResult(null);
+    setSendFailed(false);
+    setCopyStatus('');
     try {
       const receipt = await submitBugReport({
         description: draftText || `자동 첨부 오류 리포트 · ${errorSnapshot?.code || 'unknown'}`,
@@ -12474,7 +12511,8 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
       setContact('');
       setConsentToContact(false);
     } catch (error) {
-      setErrorMessage(error?.message || '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.');
+      setErrorMessage(userErrorText(error, '리포트를 보내지 못했습니다. 잠시 후 다시 시도해 주세요.'));
+      setSendFailed(true);
     } finally {
       submitInFlightRef.current = false;
       setBusy(false);
@@ -12505,7 +12543,7 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
             <strong id="bug-report-dialog-title">문제 신고</strong>
             <small id="bug-report-dialog-help">{result?.reportId ? '접수 번호를 보관해 주세요. 문의할 때 이 번호로 신고를 확인할 수 있습니다.' : '어떤 작업에서 불편했는지 알려 주세요. 닫아도 작성 중인 설명은 유지됩니다.'}</small>
           </div>
-          <button className="icon-btn" type="button" aria-label="버그 리포트 닫기" disabled={busy} onClick={onClose}>
+          <button className="icon-btn" type="button" aria-label="문제 신고 닫기" disabled={busy} onClick={onClose}>
             {Icon.close}
           </button>
         </header>
@@ -12561,8 +12599,17 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
             <input type="checkbox" checked={includeDiagnostics} disabled={busy || Boolean(result?.reportId)} onChange={event => setIncludeDiagnostics(event.target.checked)} />
             <span><strong>진단 정보 포함</strong><small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small></span>
           </label>
-          <p className="bug-report-privacy">원본 시험지, 세션 내용, API 키, 전체 로컬 경로는 보내지 않습니다.</p>
+          <p className="bug-report-privacy">원본 시험지, 작업 내용, API 키, 컴퓨터 안의 전체 파일 경로는 보내지 않습니다.</p>
           {errorMessage && <div id="global-bug-report-error" className="bug-report-status error" role="alert">{errorMessage}</div>}
+          {sendFailed && !busy && <div className="bug-report-field-help">
+            <span>보내기가 계속 안 되면 내용을 복사해 담당자에게 전달해 주세요.</span>{' '}
+            <button className="btn" type="button" onClick={async () => {
+              const reportText = [draftText, errorSnapshot ? operationErrorClipboardText(errorSnapshot) : ''].filter(Boolean).join('\n\n');
+              try { await navigator.clipboard.writeText(reportText); setCopyStatus('신고 내용을 복사했어요.'); }
+              catch (_error) { setCopyStatus('내용을 직접 선택해 복사해 주세요.'); }
+            }}>신고 내용 복사</button>
+            {copyStatus && <small role="status">{copyStatus}</small>}
+          </div>}
           {busy && <p className="bug-report-field-help" role="status">신고를 보내고 있습니다. 잠시만 기다려 주세요.</p>}
           </>}
           {result?.reportId && (
@@ -12651,7 +12698,7 @@ function OperationRecoveryBanner({
   const serverChecking = localServerUnavailable
     && (serverConnectionState === 'checking' || serverCheckBusy);
   const displayedSummary = serverConnected
-    ? '로컬 앱 서버와 다시 연결됐습니다. 원본 파일과 대기열은 그대로 유지됩니다.'
+    ? '앱과 다시 연결됐습니다. 원본 파일과 대기열은 그대로 유지됩니다.'
     : summary;
   const anyBusy = retryBusy || restoreBusy || exportBusy || resetBusy || downloadBusy;
   const recoverySteps = Array.isArray(error.recoverySteps)
@@ -12700,7 +12747,7 @@ function OperationRecoveryBanner({
         : localServerUnavailable
           ? (serverConnected
             ? '연결이 돌아왔습니다. 이 화면을 새로고침하지 말고 아래 버튼으로 중단된 작업을 다시 시작하세요.'
-            : 'Finder 또는 다운로드한 폴더에서 ClassIn EDB 앱을 다시 실행하세요. 이 화면은 닫지 않아도 되며, 연결이 돌아오면 자동으로 알려드립니다.')
+            : `${IS_MAC_PLATFORM ? '응용 프로그램 폴더' : '시작 메뉴'}에서 ClassIn EDB 앱을 다시 실행하세요. 이 화면은 닫지 않아도 되며, 연결이 돌아오면 자동으로 알려드립니다.`)
         : isQueue
           ? '같은 파일로 다시 시도하세요. 인식이 계속 실패하면 페이지 PNG 등록 또는 수동 자르기를 이용할 수 있습니다.'
           : isReset
@@ -12708,7 +12755,7 @@ function OperationRecoveryBanner({
               ? '진행 중인 제작·다운로드가 끝나거나 취소된 뒤 초기화를 다시 시도하세요.'
               : '잠시 기다린 뒤 초기화를 다시 시도하세요. 계속 실패하면 앱을 다시 실행해 주세요.')
             : isRestore
-              ? '현재 화면의 배치는 보존했습니다. 같은 최근 작업을 다시 열거나 버그 리포트를 보내 주세요.'
+              ? '현재 화면의 배치는 보존했습니다. 같은 최근 작업을 다시 열거나 문제 신고를 보내 주세요.'
               : '먼저 EDB를 다시 제작하세요. 계속 실패하면 PNG로 대체 저장하거나 초기화 후 원본 PDF를 다시 등록해 주세요.';
   const retryLabel = conflictNeedsResolution
     ? '먼저 최신 상태 선택'
@@ -12740,7 +12787,7 @@ function OperationRecoveryBanner({
         {error.detail && <details><summary>오류 상세 보기</summary><small style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{error.detail}</small></details>}
         <small>
           {guidance}
-          {!localServerUnavailable && <> 해결되지 않으면 <b>설정 → 도움말 및 문제 신고 → 버그 리포트</b>에서 오류를 보내 주세요.</>}
+          {!localServerUnavailable && <> 해결되지 않으면 <b>설정 → 도움말 및 문제 신고 → 문제 신고 작성</b>에서 오류를 보내 주세요.</>}
         </small>
         {localServerUnavailable && (
           <div className={`operation-recovery-server-status ${serverConnectionState}`} role="status" aria-live="polite" aria-atomic="true">
@@ -12810,7 +12857,7 @@ function OperationRecoveryBanner({
         </div>
         <div className="operation-recovery-actions operation-recovery-actions-support" role="group" aria-label="오류 지원 작업">
           <button className="btn" type="button" onClick={onReport} disabled={anyBusy} title={localServerUnavailable ? '연결 복구 후 리포트를 전송할 수 있습니다' : undefined}>
-            {Icon.bug} 버그 리포트 열기
+            {Icon.bug} 문제 신고 열기
           </button>
           <button className="btn" type="button" onClick={onCopy} disabled={anyBusy}>
             {Icon.copy} 오류 내용 복사
@@ -13472,7 +13519,7 @@ function materializeSessionForItems(
   const activeIds = new Set(mergedProblems.map(problem => problem.id));
   snapshot.problems = mergedProblems;
   applyProblemCounts(snapshot, mergedProblems);
-  snapshot.session_name = fileName || snapshot.session_name || '새 세션';
+  snapshot.session_name = fileName || snapshot.session_name || '새 수업';
   snapshot.layoutGapMode = normalizedGapMode;
   snapshot.layout_gap_mode = normalizedGapMode;
   snapshot.edb_path = null;
@@ -13604,7 +13651,7 @@ function rebaseSessionBoardLayout(
       });
     });
   latest.problems = latestProblems;
-  latest.session_name = latest.session_name || '새 세션';
+  latest.session_name = latest.session_name || '새 수업';
   latest.boardColumns = normalizeBoardColumns(boardColumns);
   latest.board_columns = latest.boardColumns;
   latest.layoutGapMode = normalizeLayoutGapMode(layoutGapMode);
@@ -13704,7 +13751,7 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
   const merged = {
     ...base,
-    session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    session_name: fileName || base.session_name || incoming.session_name || '새 수업',
     layoutGapMode,
     layout_gap_mode: layoutGapMode,
     data_source: 'question_export',
@@ -13957,7 +14004,7 @@ function mergeReextractedSharedPassages(baseSession, incomingSession, fileName){
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
   const merged = {
     ...base,
-    session_name: fileName || base.session_name || incoming.session_name || '새 세션',
+    session_name: fileName || base.session_name || incoming.session_name || '새 수업',
     input_file_count: sessionReusableSourcePaths(base).length,
     input_files: sessionReusableSourcePaths(base),
     rendered_page_paths: concatUnique(base.rendered_page_paths || [], incoming.rendered_page_paths || []),
@@ -14315,7 +14362,7 @@ async function fetchLatestSessionState(){
   if (result.error) throw result.error;
   const resp = result.response;
   if (resp.status === 404) return { ok: true, session: null };
-  return expectOkJson(resp, '세션 로드 실패');
+  return expectOkJson(resp, '작업을 불러오지 못했어요');
 }
 
 async function fetchSessionHistory(){
@@ -14543,6 +14590,7 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   board_placement_overlap: '판서 배치 겹침',
   duplicate_problem_id: '문항 ID 중복',
   duplicate_problem_number: '중복 번호',
+  horizontal_crop_edge_risk: '좌우 원본 경계 확인',
   low_ink_problem_image: '이미지 내용 부족',
   missing_problem_id: '문항 ID 누락',
   missing_problem_image: '문항 이미지 없음',
@@ -14559,7 +14607,7 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
 };
 const PASSAGE_REVIEW_REASON_LABELS = {
   cross_page_passage_group: '페이지 이어짐',
-  hwp_text_fallback_problem: 'HWP 텍스트 fallback',
+  hwp_text_fallback_problem: 'HWP 텍스트로 대체',
   marker_document_continuation: '문서 이어짐 표시',
   passage_cross_page_merge_check: '병합 확인',
   passage_fragment: '지문 본문',
@@ -14571,7 +14619,7 @@ const PASSAGE_REVIEW_REASON_LABELS = {
 
 function classinPreflightIssueLabel(type){
   const normalized = String(type || '').trim();
-  return CLASSIN_PREFLIGHT_ISSUE_LABELS[normalized] || normalized || '기타 주의';
+  return CLASSIN_PREFLIGHT_ISSUE_LABELS[normalized] || '기타 확인 필요';
 }
 
 function passageReviewReasonLabel(reason){
@@ -16571,7 +16619,10 @@ async function readJsonResponse(resp, fallbackMessage){
     return JSON.parse(text);
   } catch (err) {
     const excerpt = text.replace(/\s+/g, ' ').trim().slice(0, 180);
-    throw new Error(`${fallbackMessage || '응답 파싱 실패'} (${resp.status}) · JSON 응답 아님${excerpt ? `: ${excerpt}` : ''}`);
+    const error = new Error(`${String(fallbackMessage || '요청을 처리하지 못했습니다').replace(/[.。]\s*$/, '')} · 앱을 다시 실행한 뒤 다시 시도해 주세요`);
+    error.status = resp.status;
+    error.detail = `HTTP ${resp.status} · JSON 응답 아님${excerpt ? `: ${excerpt}` : ''}`;
+    throw error;
   }
 }
 
@@ -16591,6 +16642,7 @@ function assertOkJson(resp, json, fallbackMessage){
     error.sessionEpoch = String(json?.sessionEpoch || '').trim() || null;
     error.retryable = json?.retryable !== false;
     error.recoverySteps = Array.isArray(json?.recoverySteps) ? json.recoverySteps.slice(0, 5) : [];
+    error.detail = String(json?.detail || '');
     throw error;
   }
   return json;
@@ -16726,7 +16778,7 @@ async function postPublishPlan(publishRequest, options = {}){
 async function postReextractSharedPassages(options = {}){
   const sourcePaths = sessionReusableSourcePaths(options.session);
   if (!sourcePaths.length) {
-    throw new Error('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다.');
+    throw new Error('원본 파일을 찾을 수 없습니다. 파일을 다시 추가해 주세요.');
   }
   const resp = await fetch('/api/export', {
     method: 'POST',
@@ -16834,7 +16886,7 @@ const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
   artifact_cleanup_busy: '다른 작업이 제작 파일을 사용 중이라 초기화를 마치지 못했습니다.',
   recognition_failed: 'PDF 또는 이미지에서 문제를 인식하는 중 문제가 발생했습니다.',
   recognition_connection_failed: '인식 중 앱과의 연결이 끊겼습니다.',
-  local_server_unavailable: '로컬 앱 서버가 종료되어 요청을 처리할 수 없습니다.',
+  local_server_unavailable: 'ClassIn EDB 앱이 꺼져 있어 작업을 처리하지 못했습니다.',
   registration_failed: 'PDF 또는 이미지 페이지를 등록하는 중 문제가 발생했습니다.',
   registration_connection_failed: '자료 등록 중 앱과의 연결이 끊겼습니다.',
   reset_failed: '작업 목록과 최근 저장 상태를 초기화하는 중 문제가 발생했습니다.',
@@ -16882,6 +16934,12 @@ function isNetworkRequestError(error){
   return /failed to fetch|networkerror|load failed|network/i.test(raw);
 }
 
+function userErrorText(error, fallback = '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'){
+  return isNetworkRequestError(error)
+    ? '앱과 연결이 끊겼습니다. 앱을 다시 실행한 뒤 다시 시도해 주세요.'
+    : String(error?.message || fallback);
+}
+
 async function probeLocalServerHealth(timeoutMs = 1200){
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
@@ -16904,19 +16962,19 @@ async function classifyNetworkRequestError(error, fallbackCode){
   if (!isNetworkRequestError(error)) return error;
   const serverAvailable = await probeLocalServerHealth(1200);
   const classified = new Error(serverAvailable
-    ? '로컬 앱 서버 연결은 복구됐지만 요청이 중간에 끊겼습니다.'
-    : '로컬 앱 서버가 종료되었거나 응답하지 않습니다. ClassIn EDB 실행 파일을 다시 열어 주세요.');
+    ? '앱 연결은 돌아왔지만 요청이 중간에 끊겼습니다. 같은 작업을 다시 시도해 주세요.'
+    : 'ClassIn EDB 앱이 꺼져 있거나 응답하지 않습니다. 앱을 다시 실행해 주세요.');
   classified.code = serverAvailable ? fallbackCode : 'local_server_unavailable';
   classified.retryable = true;
   classified.recoverySteps = serverAvailable
     ? [
       '잠시 기다린 뒤 같은 파일로 다시 시도해 주세요.',
-      '반복되면 버그 리포트에 오류 시각을 함께 보내 주세요.',
+      '반복되면 문제 신고에 오류 시각을 함께 보내 주세요.',
     ]
     : [
-      'ClassIn EDB 실행 파일을 다시 열어 로컬 서버를 시작해 주세요.',
+      'ClassIn EDB 앱을 다시 실행해 주세요.',
       '이 화면으로 돌아와 대기열을 유지한 채 다시 시도해 주세요.',
-      '반복되면 진단 정보 포함을 켠 채 버그 리포트를 보내 주세요.',
+      '반복되면 진단 정보 포함을 켠 채 문제 신고를 보내 주세요.',
     ];
   classified.originalError = String(error?.message || error || '').trim();
   return classified;
@@ -16937,6 +16995,11 @@ function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
     update_installer_launch_failed: '업데이트 설치기 실행 오류 · 오류 상세를 복사해 신고해 주세요',
     update_size_mismatch: '업데이트 파일 크기 검증 실패 · 업데이트를 다시 확인해 주세요',
     update_checksum_mismatch: '업데이트 파일 무결성 검증 실패 · 업데이트를 다시 확인해 주세요',
+    update_translocated_app: '앱이 임시 위치에서 실행 중입니다 · 응용 프로그램 폴더로 옮긴 뒤 다시 실행해 주세요',
+    update_target_not_writable: '현재 설치 위치에 덮어쓸 수 없습니다 · ‘다운로드 열기’로 받은 설치파일로 설치해 주세요',
+    update_requires_packaged_app: '설치된 앱에서만 자동 업데이트할 수 있습니다 · ‘다운로드 열기’로 설치해 주세요',
+    update_pin_not_configured: '이 설치본은 자동 업데이트를 지원하지 않습니다 · ‘다운로드 열기’로 설치해 주세요',
+    update_artifact_too_large: '업데이트 파일 정보가 올바르지 않습니다 · 관리자에게 알려 주세요',
     pdf_invalid_document: 'PDF 손상 또는 파일 형식 확인', pdf_password_protected: 'PDF 암호 해제 필요',
     pdf_renderer_unavailable: '앱의 PDF 처리 기능 오류', app_dependency_missing: '앱 구성 요소 오류',
     app_internal_error: '앱 내부 오류 · 오류 상세를 확인해 주세요',
@@ -16961,6 +17024,8 @@ function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
   if (/pdf/i.test(raw)) {
     return `${fallbackMessage} · PDF 상태 확인`;
   }
+  const step = String((Array.isArray(error?.recoverySteps) && error.recoverySteps[0]) || '').trim();
+  if (/[가-힣]/.test(step)) return `${fallbackMessage} · ${step.replace(/[.。]\s*$/, '')}`;
   return `${fallbackMessage} · 다시 시도해 주세요`;
 }
 
@@ -17035,6 +17100,13 @@ async function postAppUpdateInstall(pin, expectedUpdate){
   return expectOkJson(resp, '자동 업데이트 시작 실패');
 }
 
+// Main copy for failed update checks; the raw status `error` stays in the details.
+const UPDATE_CHANNEL_ERROR_COPY = Object.freeze({
+  error: '업데이트 정보를 확인하지 못했습니다. 인터넷 연결을 확인한 뒤 ‘업데이트 확인’을 다시 눌러 주세요.',
+  invalid_feed: '배포된 업데이트 정보에 문제가 있어 지금은 업데이트할 수 없습니다. 관리자에게 알려 주세요.',
+  invalid_config: '이 설치본의 업데이트 설정에 문제가 있습니다. 최신 설치파일로 다시 설치해 주세요.',
+});
+
 function isUpdateArchitectureMismatch(info){
   const channelStatus = String(info?.channelStatus || '').trim();
   const code = String(info?.code || '').trim();
@@ -17043,19 +17115,16 @@ function isUpdateArchitectureMismatch(info){
     || code === 'unsupported_architecture';
 }
 
+// Prefer the server's device-specific Korean step; there is no file to pick here.
 function updateArchitectureRecoverySteps(info){
-  const provided = Array.isArray(info?.recoverySteps)
-    ? info.recoverySteps.map(step => String(step || '').trim()).filter(Boolean)
-    : [];
-  return listUnique([
-    '현재 아키텍처용 설치 파일을 선택해 주세요.',
-    ...provided,
-    '지원 파일이 보이지 않으면 설정 → 도움말 및 문제 신고에서 버그 리포트를 보내 주세요.',
-  ]).slice(0, 3);
+  const steps = (Array.isArray(info?.recoverySteps) ? info.recoverySteps : [])
+    .map(step => String(step || '').trim())
+    .filter(step => /[가-힣]/.test(step));
+  return steps.length ? steps.slice(0, 2) : ['관리자에게 알려 주세요.'];
 }
 
 function updateArchitectureNotice(info){
-  return `이 기기용 업데이트 파일 없음 · ${updateArchitectureRecoverySteps(info).join(' ')}`;
+  return `이 컴퓨터용 업데이트 파일이 아직 없습니다. ${updateArchitectureRecoverySteps(info).join(' ')}`;
 }
 
 async function clearSession(){
@@ -17066,7 +17135,7 @@ async function clearSession(){
   const query = queryParams.size ? `?${queryParams.toString()}` : '';
   const resp = await fetch(`/api/session/latest${query}`, { method: 'DELETE' });
   if (resp.status === 404) return { history: [] }; // already cleared
-  const json = await expectOkJson(resp, '세션 초기화 실패');
+  const json = await expectOkJson(resp, '작업을 비우지 못했어요');
   return json;
 }
 
@@ -17264,9 +17333,13 @@ async function openOutputFolder(path){
     const json = await readJsonResponse(resp, '폴더 열기 실패').catch(() => ({}));
     if (!resp.ok || !json.ok) {
       console.warn('[board] open-folder failed:', json.error || resp.status);
+      notifyOpenFailure(resp.status === 404
+        ? '폴더를 찾지 못했어요. EDB를 다시 제작해 주세요.'
+        : '폴더를 열지 못했어요. 잠시 후 다시 시도해 주세요.');
     }
   } catch (e) {
     console.warn('[board] open-folder error:', e.message);
+    notifyOpenFailure(userErrorText(e));
   }
 }
 
@@ -17301,7 +17374,7 @@ function App(){
   const focusPanelReopenRef = useRef(null);
   const [activeId, setActiveId] = useState(null);
   const [moveFeedback, setMoveFeedback] = useState(null);
-  const [fileName, setFileName] = useState('새 세션');
+  const [fileName, setFileName] = useState('새 수업');
   const [bulk, setBulk] = useState(false);
   const [leftRailCollapsed, setLeftRailCollapsed] = useState(() => {
     try {
@@ -17335,6 +17408,7 @@ function App(){
   const updateCheckInFlightRef = useRef(false);
   const [settingsRequest, setSettingsRequest] = useState(0);
   const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
+  const [updateRestarting, setUpdateRestarting] = useState(null); // {version, startedAt} once the installer took over
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
   const [aiEnabled, setAiEnabled] = useState(true);
@@ -17579,6 +17653,7 @@ function App(){
             : loading || mutating || hasRunningBackgroundJobs || confirmingRecognition || publishBusy || downloadBusy || resetBusy
               ? '진행 중인 작업이 끝난 뒤 업데이트해 주세요.'
               : '';
+  const workInProgress = Boolean(loading || mutating || hasRunningBackgroundJobs || confirmingRecognition || publishBusy || downloadBusy || resetBusy);
   const sourcePageCount = session?.pages?.length || 0;
   const recognitionDisabledReason = !sourcePageCount
     ? '문항을 찾을 원본 페이지가 없습니다.'
@@ -17670,7 +17745,9 @@ function App(){
       ? { message: String(msg.message || ''), type: msg.type || tone }
       : { message: String(msg || ''), type: tone };
     setToast(toastObj);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), options.duration || 2500);
+    // Errors stay at least 6 s; long messages get ~80 ms per character, capped at 10 s.
+    const readMs = Math.min(10000, Math.max(toastObj.type === 'error' ? 6000 : 2500, toastObj.message.length * 80));
+    toastTimerRef.current = window.setTimeout(() => setToast(null), options.duration || readMs);
   }, []);
 
   const showActionToast = useCallback((message, actionLabel, onAction) => {
@@ -17695,6 +17772,12 @@ function App(){
     return diagnostic;
   }, [showToast]);
 
+  useEffect(() => {
+    const onNotice = event => showToast(event.detail?.message || '', event.detail?.type || 'info');
+    window.addEventListener('edb-notice', onNotice);
+    return () => window.removeEventListener('edb-notice', onNotice);
+  }, [showToast]);
+
   const clearOperationRecovery = useCallback(() => {
     setOperationRecoveryState(state => operationRecoveryStateTransition(state, { type: 'clear' }));
   }, []);
@@ -17704,14 +17787,14 @@ function App(){
       && Number(detail.status ?? error?.status ?? 0) === 0
       && String(detail.code || error?.code || '') !== 'local_server_unavailable';
     const recoveryError = networkUnavailable
-      ? Object.assign(new Error('로컬 앱 서버가 종료되었거나 응답하지 않습니다. ClassIn EDB 앱을 다시 실행해 주세요.'), {
+      ? Object.assign(new Error('ClassIn EDB 앱이 꺼져 있거나 응답하지 않습니다. 앱을 다시 실행해 주세요.'), {
           ...error,
           code: 'local_server_unavailable',
           operation: detail.operation || error?.operation || 'ui_action',
           status: 0,
           retryable: true,
           recoverySteps: [
-            'ClassIn EDB 앱을 다시 실행해 로컬 서버를 시작해 주세요.',
+            'ClassIn EDB 앱을 다시 실행해 주세요.',
             '이 화면을 닫지 말고 연결 복구 안내를 기다려 주세요.',
             '연결됨 표시가 나오면 중단된 작업을 다시 시도해 주세요.',
           ],
@@ -17816,9 +17899,8 @@ function App(){
     if (info.channelStatus === 'manual_download') return '다운로드 페이지를 열 수 있습니다';
     if (info.channelStatus === 'not_configured') return '업데이트 채널이 아직 설정되지 않았습니다';
     if (info.channelStatus === 'unsupported_platform') return '이 OS용 업데이트가 아직 없습니다';
-    if (info.channelStatus === 'invalid_feed') return `업데이트 피드 오류: ${info.error || '채널 정보가 올바르지 않습니다'}`;
-    if (info.channelStatus === 'invalid_config') return `업데이트 설정 오류: ${info.error || '배포 설정이 올바르지 않습니다'}`;
-    if (info.channelStatus === 'error') return `업데이트 확인 오류: ${info.error || '채널 확인 실패'}`;
+    // The server sends a specific Korean sentence (raw text in detail) when it classified the failure.
+    if (UPDATE_CHANNEL_ERROR_COPY[info.channelStatus]) return (info.detail && info.error) || UPDATE_CHANNEL_ERROR_COPY[info.channelStatus];
     return '업데이트 정보를 확인했습니다';
   };
 
@@ -17829,14 +17911,17 @@ function App(){
     try {
       const info = await fetchAppUpdateStatus({ refresh: !options.silent });
       setUpdateInfo(info);
-      if (!options.silent) showToast(updateStatusToast(info));
+      // The server reports a failed automatic update only once, so say it even on silent checks.
+      if (info?.lastUpdateFailed) showToast('지난 업데이트를 마치지 못했어요. 메뉴의 ‘업데이트’에서 새 설치파일을 받아 주세요.', { duration: 8000 });
+      else if (!options.silent) showToast(updateStatusToast(info), UPDATE_CHANNEL_ERROR_COPY[info?.channelStatus] ? 'error' : 'info');
       return info;
     } catch (e) {
       setUpdateInfo({
         channelStatus: 'error',
         updateAvailable: false,
         automaticUpdateReady: false,
-        error: `업데이트 정보를 다시 확인하지 못했습니다. ${e?.message || '연결 상태를 확인한 뒤 다시 시도해 주세요.'}`,
+        // Raw cause only; the dialog shows it under 오류 상세 보기.
+        error: String(e?.message || e || '') || 'update check request failed',
       });
       if (!options.silent) showSimpleErrorToast(e, '업데이트 확인 실패');
       console.warn('[board] update check skipped:', e.message);
@@ -17859,12 +17944,12 @@ function App(){
     }
     const info = updateInfo || await checkForUpdates({ silent: true });
     if (isUpdateArchitectureMismatch(info)) {
-      showToast(updateArchitectureNotice(info));
+      showToast(updateArchitectureNotice(info), 'error');
       return;
     }
     const url = info?.downloadUrl || info?.latest?.downloadUrl || '';
     if (!url) {
-      showToast('업데이트 다운로드 URL이 없습니다');
+      showToast('다운로드 주소가 아직 없습니다. 잠시 후 ‘업데이트 확인’을 다시 눌러 주세요.', 'error');
       return;
     }
     try {
@@ -17874,6 +17959,30 @@ function App(){
       showSimpleErrorToast(e, '다운로드 페이지 열기 실패');
     }
   }, [updateInfo, updateBusy, checkForUpdates, showSimpleErrorToast, showToast]);
+
+  // Lift the install overlay once a server answers again after going down (new or reopened app),
+  // or if the old server never stopped; the silent check then reports lastUpdateFailed if needed.
+  useEffect(() => {
+    if (!updateRestarting) return undefined;
+    let cancelled = false;
+    let sawServerDown = false;
+    const intervalId = window.setInterval(async () => {
+      const healthy = await probeLocalServerHealth(1500);
+      if (cancelled) return;
+      if (!healthy) {
+        sawServerDown = true;
+        return;
+      }
+      if (sawServerDown || Date.now() - updateRestarting.startedAt > 150000) {
+        setUpdateRestarting(null);
+        checkForUpdates({ silent: true });
+      }
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [updateRestarting, checkForUpdates]);
 
   const installUpdateVersion = useCallback(async (pin, expectedUpdate) => {
     if (updateBusy || updateInstallBusy) {
@@ -17885,8 +17994,8 @@ function App(){
       return false;
     }
     const normalizedPin = String(pin || '').trim();
-    if (!/^\d{4,12}$/.test(normalizedPin)) {
-      showToast('업데이트 PIN은 숫자 4~12자리로 입력해 주세요');
+    if (!/^[A-Za-z0-9]{4,12}$/.test(normalizedPin)) {
+      showToast('업데이트 PIN은 영문·숫자 4~12자리로 입력해 주세요');
       return false;
     }
     const info = updateInfo || await checkForUpdates({ silent: true });
@@ -17895,11 +18004,11 @@ function App(){
       return false;
     }
     if (!info?.automaticUpdateEnabled) {
-      showToast('이 배포본에는 업데이트 PIN이 설정되어 있지 않습니다');
+      showToast('이 설치본은 자동 업데이트를 지원하지 않습니다. ‘다운로드 열기’로 새 설치파일을 받아 주세요.', 'error');
       return false;
     }
-    if (!info?.automaticUpdateReady) {
-      showToast('자동 업데이트에 필요한 설치 파일 검증 정보가 없습니다');
+    if (!info?.automaticUpdateReady || info?.automaticUpdateBlockedReason) {
+      showToast(info?.automaticUpdateBlockedReason || '지금은 자동 업데이트를 할 수 없습니다. ‘다운로드 열기’로 새 설치파일을 받아 주세요.', 'error');
       return false;
     }
     if (!expectedUpdate || JSON.stringify(expectedUpdate) !== JSON.stringify(appUpdateArtifactSnapshot(info))) {
@@ -17910,15 +18019,17 @@ function App(){
     try {
       const result = await postAppUpdateInstall(normalizedPin, expectedUpdate);
       const targetVersion = result?.targetVersion || info?.latest?.version || '새 버전';
-      showToast(`${targetVersion} 업데이트 준비 완료 · 앱을 종료한 뒤 자동으로 다시 엽니다`);
+      // The server stops right after this reply; keep a full-screen notice up instead of a short toast.
+      setHomeUpdateOpen(false);
+      setUpdateRestarting({ version: targetVersion, startedAt: Date.now() });
       return true;
     } catch (error) {
       if (error?.code === 'invalid_update_pin') {
-        showToast('업데이트 PIN이 올바르지 않습니다');
+        showToast('업데이트 PIN이 맞지 않습니다. 다시 입력해 주세요.', 'error');
         return false;
       }
       if (error?.code === 'update_pin_rate_limited') {
-        showToast(error?.message || 'PIN 입력이 잠시 잠겼습니다. 잠시 후 다시 시도해 주세요');
+        showToast(error?.message || 'PIN 입력이 잠시 잠겼습니다. 잠시 후 다시 시도해 주세요', 'error');
         return false;
       }
       showSimpleErrorToast(error, '자동 업데이트 시작 실패');
@@ -18035,7 +18146,7 @@ function App(){
     showToast(message);
   };
 
-  const hideMockItems = (message = '빈 세션으로 전환했어요') => {
+  const hideMockItems = (message = '빈 화면으로 전환했어요') => {
     setRecognitionReview(null);
     setSession(null);
     setLayoutGapModeState(LAYOUT_GAP_MODE_GRID);
@@ -18043,7 +18154,7 @@ function App(){
     setActiveId(null);
     setUsingMock(false);
     setPublished(false);
-    setFileName('새 세션');
+    setFileName('새 수업');
     setHistoryStack([]);
     setView('board');
     showToast(message);
@@ -18159,12 +18270,17 @@ function App(){
   // so that a failed mutation does not clutter the stack.
   const mutateSession = useCallback(async (action, args, options = {}) => {
     if (!session) {
-      showToast('변경할 세션이 없습니다');
+      showToast('변경할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
     if (mutatingRef.current) {
       showToast('이전 변경을 적용하는 중입니다');
       return;
+    }
+    // AI recognition holds the server's job lock; an edit now would hang behind it.
+    if (hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
+      return null;
     }
     mutatingRef.current = true;
     setMutating(true);
@@ -18213,11 +18329,11 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [session, items, fileName, boardColumns, layoutGapMode, adoptMutatedSession, refreshSessionHistory, showSimpleErrorToast, showToast]);
+  }, [session, items, fileName, boardColumns, layoutGapMode, adoptMutatedSession, refreshSessionHistory, showSimpleErrorToast, showToast, hasRunningBackgroundJobs]);
 
   const retryAiSession = useCallback(async (args) => {
     if (!session) {
-      showToast('변경할 세션이 없습니다');
+      showToast('변경할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
     if (!userSettings?.hasGeminiApiKey) {
@@ -18232,7 +18348,7 @@ function App(){
       sessionRecognitionInFlightRef.current
       || Date.now() < sessionRecognitionGuardUntilRef.current
     ) {
-      showToast('이미 세션 인식 작업을 진행 중입니다');
+      showToast('이미 인식 작업을 진행 중입니다');
       return;
     }
     sessionRecognitionInFlightRef.current = true;
@@ -18253,7 +18369,7 @@ function App(){
         : (pageIds.length === 1 ? 'AI 문제 인식 중' : `${pageIds.length || '전체'}개 페이지 AI 인식 중`),
       hint: isPartialRetry
         ? '선택한 원본 영역에서 경계를 다시 찾습니다. 완료되면 바로 반영합니다.'
-        : '보드 작업은 계속할 수 있습니다. 완료되면 바로 반영합니다.',
+        : '완료되면 바로 반영합니다. 그동안 문항 수정은 잠시 멈춥니다.',
     });
     try {
       await postRestore(snapshotBefore);
@@ -18316,11 +18432,11 @@ function App(){
 
   const reextractSharedPassagesFromSession = useCallback(async () => {
     if (!session || usingMock) {
-      showToast('공통 지문을 다시 추출할 실제 세션이 없습니다');
+      showToast('공통 지문을 다시 추출할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
     if (!sessionReusableSourcePaths(session).length) {
-      showToast('현재 세션에 다시 읽을 수 있는 원본 파일 경로가 없습니다');
+      showToast('원본 파일을 찾을 수 없습니다. 파일을 다시 추가해 주세요', 'error');
       return;
     }
     if (
@@ -18329,7 +18445,7 @@ function App(){
       || sessionRecognitionInFlightRef.current
       || Date.now() < sessionRecognitionGuardUntilRef.current
     ) {
-      showToast('진행 중인 세션 작업이 끝난 뒤 다시 시도해 주세요');
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
       return;
     }
     sessionRecognitionInFlightRef.current = true;
@@ -18409,7 +18525,7 @@ function App(){
 
   const exportSessionImages = useCallback(async (requestedProblemIds = null) => {
     if (!session) {
-      showToast('다운로드할 세션이 없습니다');
+      showToast('다운로드할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
     const itemsForExport = reflowItemsForBoardOrder(items, DEFAULT_SLOT_HEIGHT_PAGES, boardColumns, layoutGapMode);
@@ -18433,7 +18549,7 @@ function App(){
       triggerServerFileDownload(result.downloadUrl);
       const missingCount = Array.isArray(result.missing) ? result.missing.length : 0;
       showToast(missingCount
-        ? `PNG 묶음을 준비했어요 · 누락 ${missingCount}개는 manifest에서 확인`
+        ? `PNG 묶음 다운로드 시작 · 이미지가 없는 문항 ${missingCount}개는 빠졌어요`
         : `PNG 묶음 다운로드 시작 · ${result.count || problemIds.length}개`);
     } catch (e) {
       showSimpleErrorToast(e, 'PNG 묶음 실패');
@@ -18447,7 +18563,7 @@ function App(){
 
   const downloadItemImage = useCallback(async (item) => {
     if (!session) {
-      showToast('다운로드할 세션이 없습니다');
+      showToast('다운로드할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
     if (!item?.id) {
@@ -18514,6 +18630,10 @@ function App(){
 
   const undoMutation = useCallback(async () => {
     if (reviewEditorActive || mutatingRef.current) return false;
+    if (hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
+      return false;
+    }
     const currentHistory = historyStackRef.current;
     if (currentHistory.length === 0) return;
     const snapshot = currentHistory[currentHistory.length - 1];
@@ -18543,7 +18663,7 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast, reviewEditorActive]);
+  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast, showToast, reviewEditorActive, hasRunningBackgroundJobs]);
 
   // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
   // browser's native undo still works for editable fields (file-name crumb).
@@ -18574,7 +18694,7 @@ function App(){
         if (!cancelled) setInitialSessionLoaded(true);
       } catch (e) {
         if (!cancelled) {
-          setInitialSessionError(simpleToastErrorMessage(e, '세션 로드 실패'));
+          setInitialSessionError(simpleToastErrorMessage(e, '작업을 불러오지 못했어요'));
           console.warn('[board] session load skipped:', e.message);
         }
       }
@@ -18585,6 +18705,12 @@ function App(){
   useEffect(() => {
     refreshSessionHistory();
   }, [refreshSessionHistory]);
+
+  // Check once shortly after launch so the ··· badge can show a new version; failures stay silent.
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void checkForUpdates({ silent: true }); }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [checkForUpdates]);
 
   // load user settings (Gemini key status) on mount
   useEffect(() => {
@@ -18649,7 +18775,7 @@ function App(){
 
   const enhanceImageSession = useCallback(async (problemIds, options = {}) => {
     if (!session) {
-      showToast('변경할 세션이 없습니다');
+      showToast('변경할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
     const mode = ['auto', 'preserve', 'ai'].includes(options?.mode) ? options.mode : 'auto';
@@ -18675,7 +18801,7 @@ function App(){
         : (ids.length === 1 ? '고화질 재구성 중' : `${ids.length}개 문항 고화질 처리 중`),
       hint: isPreserve
         ? '원본 글자 형태를 유지하며 로컬 2K 확대와 투명 배경 처리를 적용합니다.'
-        : '글자 보존형 또는 선택형 Nano Banana 1K 경로를 사용합니다.',
+        : '글자 보존형 또는 선택형 AI 재구성 방식을 사용합니다.',
     });
     try {
       const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
@@ -18735,7 +18861,7 @@ function App(){
       return false;
     }
     if (!session && items.length === 0 && pendingFiles.length === 0 && recentSessions.length === 0) {
-      showToast('이미 빈 세션입니다');
+      showToast('이미 비어 있습니다');
       return false;
     }
     if (!window.confirm('작업 목록을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 사라집니다. 이미 만든 EDB·PNG 출력 파일은 보관됩니다.')) return false;
@@ -18755,7 +18881,7 @@ function App(){
       setConfirmingRecognition(false);
       setPendingFilesTracked([]);
       setReviewFocus(null);
-      hideMockItems('초기화 완료 · 빈 세션');
+      hideMockItems('초기화 완료');
       clearOperationRecovery();
       return true;
     } catch (e) {
@@ -18775,15 +18901,34 @@ function App(){
     }
   }, [loading, downloadBusy, publishBusy, backgroundJobs, session, items, fileName, boardColumns, layoutGapMode, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, showToast]);
 
+  // Warn before the tab closes only while edits are unsaved or work is still running.
+  const leavingAppRef = useRef(false);
+  useEffect(() => {
+    if (!sessionEditState.dirty && !workInProgress) return undefined;
+    const warnBeforeLeaving = event => {
+      if (leavingAppRef.current) return;
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warnBeforeLeaving);
+    return () => window.removeEventListener('beforeunload', warnBeforeLeaving);
+  }, [sessionEditState.dirty, workInProgress]);
+
   const shutdownApp = useCallback(async () => {
-    if (!window.confirm('로컬 앱을 종료할까요? 브라우저 창은 직접 닫으면 됩니다.')) return;
+    const message = workInProgress
+      ? '진행 중인 작업이 있어요. 지금 종료하면 작업이 중단됩니다. 그래도 종료할까요?'
+      : sessionEditState.dirty
+        ? '저장하지 않은 수업 변경이 있어요. 종료하면 사라집니다. 그래도 종료할까요?'
+        : '앱을 종료할까요? 브라우저 창은 직접 닫아 주세요.';
+    if (!window.confirm(message)) return;
     try {
       await postShutdown();
+      leavingAppRef.current = true;
       showToast('앱을 종료합니다. 브라우저 창을 닫아도 됩니다.');
     } catch (e) {
       showSimpleErrorToast(e, '앱 종료 실패');
     }
-  }, [showSimpleErrorToast, showToast]);
+  }, [workInProgress, sessionEditState.dirty, showSimpleErrorToast, showToast]);
 
   const refreshSession = useCallback(async () => {
     if (refreshInFlightRef.current || restoreInFlightRef.current || loading || hasRunningBackgroundJobs || mutatingRef.current) {
@@ -18825,14 +18970,14 @@ function App(){
           setPublished(false);
           setView('board');
         }
-        showToast(usingMock ? '저장된 세션 없음 · 더미 유지' : '저장된 세션 없음 · 빈 세션');
+        showToast(usingMock ? '저장된 작업이 없습니다 · 예시 자료를 그대로 둡니다' : '저장된 작업이 없습니다 · 파일을 추가해 새로 시작해 주세요');
       }
       refreshSessionHistory();
       setInitialSessionError(null);
       setInitialSessionLoaded(true);
       clearOperationRecovery();
     } catch (e) {
-      if (!initialSessionLoaded) setInitialSessionError(simpleToastErrorMessage(e, '세션 로드 실패'));
+      if (!initialSessionLoaded) setInitialSessionError(simpleToastErrorMessage(e, '작업을 불러오지 못했어요'));
       showSimpleErrorToast(e, '새로고침 실패');
     } finally {
       refreshInFlightRef.current = false;
@@ -18902,10 +19047,18 @@ function App(){
   const triggerUpload = () => fileInputRef.current?.click();
 
   const handleFiles = (fileList) => {
-    const files = Array.from(fileList || []);
+    const incoming = Array.from(fileList || []);
+    // An unsupported file would fail the whole batch on upload, so leave it out here.
+    const files = incoming.filter(file => UPLOAD_FILE_EXTENSION_PATTERN.test(String(file?.name || '')));
+    const skipped = incoming.length - files.length;
+    if (fileInputRef.current) fileInputRef.current.value = '';
+    if (skipped) {
+      showToast(files.length
+        ? `지원하지 않는 파일 ${skipped}개는 빼고 담았어요. PDF, HWP, 이미지 파일만 넣을 수 있어요`
+        : 'PDF, HWP, 이미지 파일만 넣을 수 있어요', files.length ? 'info' : 'error');
+    }
     if (!files.length) return 0;
     const addition = appendUniquePendingFiles(pendingFilesRef.current, files);
-    if (fileInputRef.current) fileInputRef.current.value = '';
     if (!addition.addedFiles.length) {
       showToast('이미 대기열에 있는 파일입니다');
       return 0;
@@ -18944,7 +19097,7 @@ function App(){
       selectPendingFile(fileQueueKey(replacement));
       if (QUEUE_RECOVERY_KINDS.has(operationRecovery?.kind)) clearOperationRecovery();
       showToast('선택한 대기 파일을 교체했어요');
-    } catch (error) { showToast(error.message); }
+    } catch (error) { showToast(error.message, 'error'); }
   };
 
   const removePendingFile = useCallback((key) => {
@@ -19074,8 +19227,8 @@ function App(){
         if (!queueRequestIsCurrent(queueGeneration, fileKeys)) {
           settleBackgroundJob(job.id, {
             status: 'canceled',
-            label: 'AI recognition skipped',
-            hint: 'Upload queue changed before this result was reviewed.',
+            label: '인식 건너뜀',
+            hint: '인식 중 대기열이 바뀌어 이 결과는 반영하지 않았어요. 파일을 다시 인식해 주세요.',
           }, 2200);
           return;
         }
@@ -19232,7 +19385,7 @@ function App(){
       } else if (review.kind === 'queue-recognition') {
         if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || [])) {
           setRecognitionReview(null);
-          showToast('Upload queue changed. Please run recognition again.');
+          showToast('인식 중 대기열이 바뀌어 결과를 반영하지 않았어요. 파일을 다시 인식해 주세요.', 'error');
           return;
         }
         const incomingSession = review.incomingSession || review.session;
@@ -19284,7 +19437,7 @@ function App(){
         showToast([
           review.fallbackMessage,
           `AI 인식 적용 · ${summary.problemLabel}`,
-          'Ctrl+Z로 되돌리기',
+          `${PRIMARY_MODIFIER_LABEL}+Z로 되돌리기`,
         ].filter(Boolean).join(' · '), { duration: 4500 });
       }
       if (destinationView) requestViewChange(destinationView, { force: true });
@@ -19367,7 +19520,7 @@ function App(){
     const ids = listUnique((problemIds || []).map(String).filter(Boolean));
     if (!ids.length) return;
     if (!session) {
-      showToast('실제 세션에서만 자료 분류를 변경할 수 있어요');
+      showToast('분류를 바꿀 자료가 없어요. 먼저 파일을 추가해 주세요');
       return;
     }
     await mutateSession('classify', { problemIds: ids, classification });
@@ -19666,7 +19819,7 @@ function App(){
     }
     if (!session && usingMock && nextItems.length === 0) {
       setUsingMock(false);
-      setFileName('새 세션');
+      setFileName('새 수업');
     }
     setPublished(false);
     showActionToast(
@@ -19686,7 +19839,7 @@ function App(){
   };
   const addMockSample = () => {
     if (session) {
-      showToast('실제 세션에는 더미를 추가하지 않습니다');
+      showToast('실제 작업에는 예시 문항을 추가하지 않아요');
       return;
     }
     if (loading || pendingFiles.length > 0) {
@@ -19761,6 +19914,11 @@ function App(){
       }
       return true;
     }
+    if (hasRunningBackgroundJobs) {
+      // mutateSession would refuse anyway; stop before the optimistic update below.
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
+      return false;
+    }
     if (processingStep) {
       setItems(confirmationItems);
       setPublished(false);
@@ -19780,7 +19938,7 @@ function App(){
 
   const markClassinReviewComplete = useCallback(async () => {
     if (!session) {
-      showToast('저장할 제작 세션이 없습니다');
+      showToast('저장할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
     try {
@@ -19799,7 +19957,7 @@ function App(){
 
   const onPublish = async () => {
     if (!session || !Array.isArray(session.problems)) {
-      showToast('내보낼 자료가 없습니다. 먼저 파싱해 주세요.');
+      showToast('만들 자료가 없습니다. 먼저 파일을 추가해 주세요.');
       return;
     }
     if (hasRunningQueueRecognition || confirmingRecognition || queueRegistrationInFlightRef.current || pendingFiles.length) {
@@ -19815,7 +19973,7 @@ function App(){
       return;
     }
     if (normalizeBoardColumns(boardColumns) !== BOARD_COLUMN_MIN) {
-      showToast('기존 다중 칸 배치는 그대로 저장할 수 있습니다. 현재 EDB 제작은 1칸 배치만 지원하므로 이 자료의 제작은 실행하지 않았습니다.');
+      showToast('기존 다중 칸 배치는 그대로 저장할 수 있습니다. 현재 EDB 제작은 1칸 배치만 지원하므로 이 자료의 제작은 실행하지 않았습니다.', 'error');
       return;
     }
     clearOperationRecovery();
@@ -19853,7 +20011,8 @@ function App(){
       });
       setView('review');
       showToast(
-        `지문 묶음 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+        `지문 묶음 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`,
+        'error'
       );
       return;
     }
@@ -19871,7 +20030,8 @@ function App(){
       });
       setView('review');
       showToast(
-        `문항 영역이 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+        `문항 영역이 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`,
+        'error'
       );
       return;
     }
@@ -19885,14 +20045,18 @@ function App(){
       const firstIssue = placementOverlapIssues[0];
       setView('board');
       showToast(
-        `문항 배치가 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`
+        `문항 배치가 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`,
+        'error'
       );
       return;
     }
     const publishReviewWarning = publishReviewWarningMessage(sessionForPublish, publishReviewSummary);
     if (publishReviewWarning) {
       openFirstReviewTarget(sessionForPublish);
-      showToast('확인이 필요한 문항을 먼저 확인해 주세요', 'error');
+      const reviewCount = Number(publishReviewSummary?.actionableNeedsReviewCount) || 0;
+      showToast(reviewCount > 0
+        ? `확인이 필요한 문항 ${reviewCount}개가 남았어요. 확인을 마친 뒤 다시 제작해 주세요.`
+        : '확인이 필요한 지문이 남았어요. 확인을 마친 뒤 다시 제작해 주세요.', 'error');
       return;
     }
     publishInFlightRef.current = true;
@@ -19916,7 +20080,7 @@ function App(){
           session: sessionForPublish,
         })),
       });
-      const json = await readJsonResponse(resp, 'publish 실패');
+      const json = await readJsonResponse(resp, 'EDB 제작 실패');
       if (!resp.ok || !json.ok) {
         if (resp.status === 404 && /no session available/i.test(String(json?.error || ''))) {
           const missingSessionError = operationErrorFromResponse(
@@ -19932,7 +20096,7 @@ function App(){
           missingSessionError.hasLatestSessionState = true;
           missingSessionError.recoverySteps = [
             '빈 최신 상태를 불러와 새 원본부터 시작해 주세요.',
-            '현재 편집본이 필요하면 초기화하기 전에 버그 리포트로 오류를 보내 주세요.',
+            '현재 편집본이 필요하면 초기화하기 전에 문제 신고로 오류를 보내 주세요.',
           ];
           try {
             const latestState = await fetchLatestSessionState();
@@ -19964,7 +20128,8 @@ function App(){
           setView(blockedTarget.view);
           showToast(
             pageChromePreflightBlockToast(blockedPublish)
-              || `서버 사전점검에서 제작을 멈췄어요. ${blockedPublish.issueSummaryLabel || blockedPublish.message}`
+              || `제작 전 자동 점검에서 멈췄어요. ${blockedPublish.issueSummaryLabel || blockedPublish.message}`,
+            'error'
           );
           return;
         }
@@ -20035,6 +20200,7 @@ function App(){
         return;
       }
       clearOperationRecovery();
+      showToast(`EDB 파일을 만들었어요 · ${normalizedPublishSummary.edbFileName || publishLabel}. 브라우저의 다운로드 목록에서 확인해 주세요.`);
     } catch (e) {
       setDownloadBusy(false);
       activateOperationRecovery(e, '제작 실패', {
@@ -20243,7 +20409,7 @@ function App(){
       setItems([]);
       setActiveId(null);
       setUsingMock(false);
-      setFileName('새 세션');
+      setFileName('새 수업');
       setPublished(false);
       setRecognitionReview(null);
       setReviewFocus(null);
@@ -20757,6 +20923,13 @@ function App(){
           startedAt={loading.startedAt}
         />
       )}
+      {updateRestarting && (
+        <LoadingOverlay
+          label={`${updateRestarting.version} 업데이트를 설치하고 있어요`}
+          hint="새 창이 자동으로 열릴 때까지 앱을 다시 열지 말고 기다려 주세요."
+          startedAt={updateRestarting.startedAt}
+        />
+      )}
 
       <TweaksPanel title="Tweaks">
         <TweakSection label="테마" />
@@ -21005,7 +21178,7 @@ function ProblemGalleryApp({ onBack }){
     let mounted = true;
     galleryRequest('jobs').then(result => {
       if (mounted) { setJobs(result.jobs); setLoaded(true); }
-    }).catch(error => { if (mounted) setError(error.message); });
+    }).catch(error => { if (mounted) setError(userErrorText(error)); });
     return () => { mounted = false; pauseRef.current = true; };
   }, []);
 
@@ -21099,7 +21272,7 @@ function ProblemGalleryApp({ onBack }){
           upsertJob(result.job);
           work.push(result.job);
           setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)));
-        } catch (error) { failures.push(`${file.name}: ${error.message}`); }
+        } catch (error) { failures.push(`${file.name}: ${userErrorText(error)}`); }
       }
       for (let job of work) {
         while (job.processedPages < job.sourcePageCount && !pauseRef.current) {
@@ -21113,7 +21286,7 @@ function ProblemGalleryApp({ onBack }){
             job = result.job;
             upsertJob(job);
           } catch (error) {
-            failures.push(`${job.sourceName}: ${error.message}`);
+            failures.push(`${job.sourceName}: ${userErrorText(error)}`);
             // The server keeps completed batches even if this response failed.
             try { setJobs((await galleryRequest('jobs')).jobs); } catch (_) { /* keep visible results */ }
             break;
@@ -21142,7 +21315,7 @@ function ProblemGalleryApp({ onBack }){
       anchor.href = result.url; anchor.download = result.fileName || '문제_이미지.zip';
       document.body.appendChild(anchor); anchor.click(); anchor.remove();
       setStatus(`${result.count}개 문제 · ${label} PNG ${result.fileCount || result.count}개를 준비했습니다.`);
-    } catch (error) { setError(error.message); setStatus('저장하지 못했습니다. 추출된 문제는 보관되어 있어 다시 저장할 수 있어요.'); }
+    } catch (error) { setError(userErrorText(error)); setStatus('저장하지 못했습니다. 추출된 문제는 보관되어 있어 다시 저장할 수 있어요.'); }
     finally { downloadRef.current = false; setDownloading(false); }
   };
 
@@ -21166,7 +21339,7 @@ function ProblemGalleryApp({ onBack }){
       setStatus(`${pauseRef.current ? '인식을 중지했습니다. ' : ''}${completed}개 확인 · ${recognized}개 인식 · ${unconfirmed}개 번호 확인 필요`);
       if (errors) setError(`${errors}개 이미지를 읽지 못했습니다. 해당 카드를 다시 선택해 인식할 수 있습니다.`);
     } catch (error) {
-      setError(error.message); setStatus('완료된 인식 결과는 보관됩니다. 다시 시도할 수 있어요.');
+      setError(userErrorText(error)); setStatus('완료된 인식 결과는 보관됩니다. 다시 시도할 수 있어요.');
       try { setJobs((await galleryRequest('jobs')).jobs); } catch (_) { /* preserve current results */ }
     } finally {
       busyRef.current = false; setBusy(false); setRecognizing(false); setPaused(false);
@@ -21248,7 +21421,7 @@ function ProblemGalleryApp({ onBack }){
           <div className="gallery-intro"><div><h1 id="gallery-title">문제 갤러리 <span>{allProblems.length}</span></h1><p>번호·지문은 자동으로 인식합니다. 필요한 문제를 골라 저장하세요.</p></div><div className="gallery-density" role="group" aria-label="갤러리 카드 크기"><button type="button" aria-pressed={density === 'compact'} onClick={() => changeDensity('compact')}>작게</button><button type="button" aria-pressed={density === 'comfortable'} onClick={() => changeDensity('comfortable')}>보통</button></div></div>
           <GallerySaveOptions mode={saveMode} onChange={changeSaveMode} disabled={downloading} />
           <div className="gallery-status" role="status" aria-live="polite">{!loaded ? '저장된 결과를 불러오는 중…' : status || `${allProblems.length}개 문제 · ${reviewCount}개 확인 필요`}</div>
-          {error && <div className="gallery-error" role="alert"><span>{error}</span>{!loaded && <button type="button" className="btn" onClick={async () => { try { const result = await galleryRequest('jobs'); setJobs(result.jobs); setLoaded(true); setError(''); } catch (error) { setError(error.message); } }}>다시 불러오기</button>}</div>}
+          {error && <div className="gallery-error" role="alert"><span>{error}</span>{!loaded && <button type="button" className="btn" onClick={async () => { try { const result = await galleryRequest('jobs'); setJobs(result.jobs); setLoaded(true); setError(''); } catch (error) { setError(userErrorText(error)); } }}>다시 불러오기</button>}</div>}
           <div className="gallery-toolbar">
             <label className="gallery-search">{Icon.search}<input type="search" aria-label="문제 번호, 제목, 파일, 페이지 검색" placeholder="문제 번호, 제목, 파일, 페이지 검색" value={query} onChange={event => { setQuery(event.target.value); setPage(1); }} /></label>
             <button type="button" className="btn" disabled={busy || downloading || !recognitionTargets.length} onClick={() => recognizeLabels()} title={`${selected.size ? '선택한 카드' : '현재 검색 결과'} 중 미확인 ${recognitionTargets.length}개의 번호·지문을 다시 읽습니다. 이미지와 자른 영역은 유지됩니다.`}>{Icon.scan} 번호·지문 다시 인식</button>

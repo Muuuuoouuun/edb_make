@@ -1,5 +1,6 @@
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 import hashlib
 import fitz
 from PIL import Image
@@ -32,14 +33,14 @@ def test_same_basename_sources_keep_distinct_page_ids_and_pixels(tmp_path, inten
                        export_edb=True, input_intent=intent, content_target=target,
                        ai_fallback='off', record_mode='image-only', processing_step='raw')
     import json
-    session = json.loads((output/'ui_session.json').read_text())
+    session = json.loads((output/'ui_session.json').read_text(encoding='utf-8'))
     pages = session['pages'];problems=session['problems']
     assert len(pages)==2 and len({p['id'] for p in pages})==2
     assert len(problems)==expected and len({p['id'] for p in problems})==expected
     assert problems[0]['sourcePageId'] != problems[1]['sourcePageId']
     actual=[]
     for problem in problems:
-        path=Path(unquote(urlparse(problem['sourceImagePath']).path))
+        path=Path(url2pathname(urlparse(problem['sourceImagePath']).path))
         with Image.open(path) as image:actual.append(hashlib.sha256(image.tobytes()).hexdigest())
     assert actual[0]!=actual[1], 'one source page replaced the other source pixels'
     assert [hashlib.sha256(p.read_bytes()).hexdigest() for p in sources]==before

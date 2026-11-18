@@ -632,7 +632,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
-        self.assertIn('{updateInfo?.updateAvailable && <div className="update-install-card">', side_panel)
+        self.assertIn('{updateInfo?.updateAvailable && !updateAutomaticBlockedReason && <div className="update-install-card">', side_panel)
         self.assertIn("관리자 PIN 업데이트", side_panel)
         self.assertIn("관리자 PIN 확인 후 업데이트", side_panel)
         self.assertIn("const requestUpdateInstall = () =>", side_panel)
@@ -860,10 +860,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("다운로드 열기", side_panel)
         self.assertIn("const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || ''", side_panel)
         self.assertIn("updateStatus === 'invalid_feed'", side_panel)
-        self.assertIn("피드 오류", side_panel)
+        self.assertIn("확인 실패", side_panel)
         self.assertIn("isUpdateArchitectureMismatch(updateInfo)", side_panel)
-        self.assertIn("이 기기용 업데이트 파일 없음", side_panel)
-        self.assertIn("현재 아키텍처용 설치 파일을 선택해 주세요", source)
+        self.assertIn("이 컴퓨터용 업데이트 파일이 아직 없습니다", side_panel)
+        self.assertIn("이 컴퓨터용 설치파일이 아직 없습니다", source)
         self.assertIn("updateArchitectureSteps.map", side_panel)
         self.assertIn("unsupported_architecture", source)
         self.assertIn("update_architecture_mismatch", source)
@@ -879,7 +879,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
         self.assertIn("updateActionBusy||!updateDownloadUrl", compact_bundle)
         self.assertIn("invalid_feed", bundle)
-        self.assertIn("피드 오류", bundle)
+        self.assertIn("확인 실패", bundle)
         self.assertIn("fetch(refresh?'/api/app/update?refresh=1':'/api/app/update')", bundle)
         self.assertIn("fetch('/api/system/open-url'", bundle)
 

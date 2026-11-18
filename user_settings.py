@@ -13,6 +13,7 @@ import os
 import stat
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +81,16 @@ def save_user_settings(runtime_dir: Path, settings: dict[str, Any]) -> Path:
             _restrict_permissions(temp_path)
             # A same-directory replace is atomic on NTFS as well as POSIX,
             # preventing a crash or concurrent reader from observing half JSON.
-            os.replace(temp_path, path)
+            # Retry short Windows scanner/sync locks (same as app_server._replace_file_with_retry).
+            delays = (0.05, 0.1, 0.2, 0.4, 0.8)
+            for attempt in range(len(delays) + 1):
+                try:
+                    os.replace(temp_path, path)
+                    break
+                except OSError as exc:
+                    if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == len(delays):
+                        raise
+                    time.sleep(delays[attempt])
             return path
         except Exception:
             try:
