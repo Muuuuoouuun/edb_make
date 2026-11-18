@@ -107,6 +107,43 @@ class TestAppAutoUpdate(unittest.TestCase):
         self.assertNotIn("updatePinHash", status)
         self.assertNotIn(verifier, json.dumps(status))
 
+    def test_intel_and_apple_silicon_macs_pick_their_own_feed_entry(self) -> None:
+        config = {
+            "appId": "ClassInEDBMVP",
+            "appName": "ClassInEDBMVP",
+            "platform": "macos",
+            "version": "0.1.0",
+            "updateFeedUrl": "https://example.test/update.json",
+        }
+
+        def entry(arch: str) -> dict:
+            name = f"ClassInEDBMVP-macOS-{arch}.dmg"
+            return {
+                "version": "0.2.0",
+                "arch": arch,
+                "artifactType": "dmg",
+                "fileName": name,
+                "downloadUrl": f"https://example.test/{name}",
+                "sha256": "a" * 64,
+                "sizeBytes": 10,
+            }
+
+        feed = {
+            "appId": "ClassInEDBMVP",
+            "appName": "ClassInEDBMVP",
+            "platforms": {"macos": entry("arm64"), "macos-x64": entry("x64")},
+        }
+        for machine, arch in (("arm64", "arm64"), ("x86_64", "x64")):
+            with self.subTest(machine=machine):
+                app_server.clear_app_update_status_cache()
+                with patch.object(app_server, "load_app_update_config", return_value=config), \
+                        patch.object(app_server, "_fetch_update_feed", return_value=feed), \
+                        patch.object(app_server.platform, "machine", return_value=machine):
+                    status = app_server.build_app_update_status()
+
+                self.assertEqual("update_available", status["channelStatus"])
+                self.assertEqual(f"https://example.test/ClassInEDBMVP-macOS-{arch}.dmg", status["downloadUrl"])
+
     def test_download_verifies_size_and_sha256_before_promoting_file(self) -> None:
         body = b"verified installer bytes"
         status = update_status_for(body)

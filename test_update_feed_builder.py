@@ -87,6 +87,44 @@ class TestUpdateFeedBuilder(unittest.TestCase):
         self.assertIn("ClassInEDBMVP-macOS.dmg", checksum_text)
         self.assertIn("manifest.json", checksum_text)
 
+    def test_adds_intel_mac_entry_beside_apple_silicon(self) -> None:
+        with TemporaryDirectory() as raw_tmp:
+            tmpdir = Path(raw_tmp)
+            arm = tmpdir / "ClassInEDBMVP-macOS-arm64.dmg"
+            intel = tmpdir / "ClassInEDBMVP-macOS-x64.dmg"
+            arm.write_bytes(b"arm artifact")
+            intel.write_bytes(b"intel artifact")
+            output = tmpdir / "update.json"
+            manifest = tmpdir / "manifest.json"
+            checksums = tmpdir / "checksums.txt"
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(PROJECT_ROOT / "scripts" / "build_update_feed.py"),
+                    "--version", "0.2.15",
+                    "--macos-url", f"https://example.test/{arm.name}",
+                    "--macos-file", str(arm),
+                    "--macos-x64-url", f"https://example.test/{intel.name}",
+                    "--macos-x64-file", str(intel),
+                    "--manifest-output", str(manifest),
+                    "--checksums-output", str(checksums),
+                    "--output", str(output),
+                ],
+                cwd=PROJECT_ROOT,
+                check=True,
+            )
+            feed = json.loads(output.read_text(encoding="utf-8"))
+            manifest_data = json.loads(manifest.read_text(encoding="utf-8"))
+            checksum_text = checksums.read_text(encoding="utf-8")
+
+        self.assertEqual({"macos", "macos-x64"}, set(feed["platforms"]))
+        self.assertEqual("arm64", feed["platforms"]["macos"]["arch"])
+        self.assertEqual("x64", feed["platforms"]["macos-x64"]["arch"])
+        self.assertEqual(hashlib.sha256(b"intel artifact").hexdigest(), feed["platforms"]["macos-x64"]["sha256"])
+        self.assertEqual({"macos", "macos-x64"}, {row["platform"] for row in manifest_data["artifacts"]})
+        self.assertIn(intel.name, checksum_text)
+        self.assertIn(arm.name, checksum_text)
+
     def test_rejects_manifest_sha_mismatch_when_generating_manifest(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)

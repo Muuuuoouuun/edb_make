@@ -69,13 +69,17 @@ If the local server is already running, it only opens the browser instead of sta
 Windows packages must be built on Windows. macOS `.app` bundles must be built on macOS.
 
 The **Build Installers** GitHub Actions workflow builds both platforms from the
-selected Git ref. `macos_arch=arm64` uses the macOS 15 Apple Silicon runner;
-`macos_arch=x64` uses the macOS 15 Intel runner. Each package contains native
-dependencies for that architecture. The artifact metadata records the actual
-architecture and commit, so choose the matching Mac download.
+selected Git ref. `macos_arch=both` (the default) builds Apple Silicon on the
+macOS 15 runner and Intel on the macOS 15 Intel runner; `arm64` or `x64` builds
+one. Each package contains native dependencies for that architecture, and the
+job fails if the runner's architecture differs from the requested one.
+
+`update_channel=true` (the default) bakes this repository's GitHub Releases
+update URLs into the apps. They are derived from the version, never typed. The
+update feed is generated only when both Macs and Windows are built.
 
 For an internal build of a development branch, set `production_release=false`
-and leave download URLs empty. This retains the test and package validation
+and `update_channel=false`. This retains the test and package validation
 gates and uploads the Windows installer and Mac DMG/ZIP as workflow artifacts.
 Public releases still require the existing corpus, licensing, signing and
 notarization gates. Internal build artifacts are not a published update feed.
@@ -273,10 +277,10 @@ upgrade for installations with an empty feed are documented in
 
 The app supports both PIN-gated automatic replacement and a manual download fallback:
 1. The installed app keeps user settings and API keys under the user's app runtime folder.
-2. `칠판 설정` shows the current app version and an `업데이트 확인` button.
-3. If the configured update feed reports a newer version, an administrator can enter the numeric update PIN and press `업데이트 버전`.
+2. The top bar's `···` menu → `업데이트` shows the current app version and an `업데이트 확인` button.
+3. If the configured update feed reports a newer version, an administrator can enter the numeric update PIN and press `관리자 PIN 확인 후 업데이트`.
 4. The app downloads the platform installer, verifies the exact `sizeBytes` and `sha256`, exits, replaces the existing installation, and relaunches. Existing API keys and session data stay in the runtime folder.
-5. `다운로드 열기` remains available when a manual install is needed.
+5. `다운로드 페이지 열기` remains available when a manual install is needed.
 
 Automatic replacement is available only in a packaged macOS or Windows app. macOS accepts the packaged `.dmg` or `.zip`; Windows accepts the Inno Setup `.exe`. The macOS helper verifies the downloaded app bundle's code signature before replacing the current bundle. The old macOS bundle is moved to a temporary backup and restored if the replacement move fails. Five incorrect PIN attempts pause PIN checks for 60 seconds.
 

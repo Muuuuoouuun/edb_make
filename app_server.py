@@ -1326,11 +1326,14 @@ def _fetch_update_feed(feed_url: str) -> dict[str, Any]:
     return data
 
 
-def _select_platform_update(feed: dict[str, Any], platform_key: str) -> dict[str, Any]:
+def _select_platform_update(feed: dict[str, Any], platform_key: str, arch: str = "") -> dict[str, Any]:
     selected = dict(feed)
     platforms = feed.get("platforms")
     if isinstance(platforms, dict):
-        platform_payload = platforms.get(platform_key)
+        # One feed serves both Mac architectures: "macos-x64" beside the generic "macos".
+        platform_payload = platforms.get(f"{platform_key}-{arch}") if arch else None
+        if platform_payload is None:
+            platform_payload = platforms.get(platform_key)
         if platform_payload is None and platform_key == "macos":
             platform_payload = platforms.get("darwin")
         if platform_payload is None and platform_key == "windows":
@@ -1613,7 +1616,7 @@ def build_app_update_status() -> dict[str, Any]:
         return _remember_update_status(cache_key, status)
     try:
         feed = _fetch_update_feed(feed_url)
-        selected = _select_platform_update(feed, platform_key)
+        selected = _select_platform_update(feed, platform_key, current_arch)
     except Exception as exc:
         status["channelStatus"] = "error"
         status["error"] = str(exc)

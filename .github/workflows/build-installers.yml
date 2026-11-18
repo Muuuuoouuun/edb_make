@@ -8,17 +8,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, for example 0.1.1"
+        description: "Release version, higher than every installed copy (for example 0.2.15)"
         required: true
-        default: "0.2.4"
+        default: ""
       macos_arch:
-        description: "Native macOS package architecture"
+        description: "Native macOS package architecture (the update feed needs both)"
         required: true
         type: choice
         options:
+          - both
           - arm64
           - x64
-        default: arm64
+        default: both
       production_release:
         description: "Require private-corpus quality, signing, and notarization gates"
         required: true
@@ -34,26 +35,20 @@ on:
         required: true
         type: boolean
         default: false
-      update_feed_url:
-        description: "Public update feed URL used by installed apps"
-        required: false
-        default: ""
-      release_notes_url:
-        description: "Public release notes URL"
-        required: false
-        default: ""
-      manifest_url:
-        description: "Public release manifest URL"
-        required: false
-        default: ""
-      macos_download_url:
-        description: "Public macOS DMG download URL"
-        required: false
-        default: ""
-      windows_download_url:
-        description: "Public Windows Setup.exe download URL"
-        required: false
-        default: ""
+      update_channel:
+        description: "Point installed apps at this repository's GitHub Releases update feed"
+        required: true
+        type: boolean
+        default: true
+
+# Every update URL follows from the repository and version, so a build cannot carry a mismatched one.
+env:
+  UPDATE_FEED_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/latest/download/update.json', github.repository) || '' }}
+  RELEASE_NOTES_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/tag/v{1}', github.repository, inputs.version) || '' }}
+  MANIFEST_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/manifest.json', github.repository, inputs.version) || '' }}
+  MACOS_ARM64_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-macOS-arm64.dmg', github.repository, inputs.version) || '' }}
+  MACOS_X64_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-macOS-x64.dmg', github.repository, inputs.version) || '' }}
+  WINDOWS_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-Setup.exe', github.repository, inputs.version) || '' }}
 
 jobs:
   quality-gate:
@@ -91,11 +86,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_MODE: ${{ inputs.production_release && 'public' || 'internal-test' }}
           LICENSE_COMPLIANCE_APPROVED: ${{ inputs.license_compliance_approved }}
-          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
-          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
-          MANIFEST_URL: ${{ inputs.manifest_url }}
-          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
-          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
+          MACOS_DOWNLOAD_URL: ${{ env.MACOS_ARM64_DOWNLOAD_URL }}
         run: |
           license_args=()
           if [[ "$LICENSE_COMPLIANCE_APPROVED" == "true" ]]; then
@@ -283,13 +274,16 @@ jobs:
           PY
 
   macos:
-    name: macOS DMG
-    runs-on: ${{ inputs.macos_arch == 'x64' && 'macos-15-intel' || 'macos-15' }}
+    name: macOS DMG (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'x64' && 'macos-15-intel' || 'macos-15' }}
     needs: [quality-gate, private-quality-gate]
     if: ${{ always() && needs.quality-gate.result == 'success' && (!inputs.production_release || needs.private-quality-gate.result == 'success') }}
     timeout-minutes: 60
-    outputs:
-      artifact_arch: ${{ steps.package-metadata.outputs.arch }}
+    strategy:
+      matrix:
+        arch: ${{ fromJSON(inputs.macos_arch == 'both' && '["arm64","x64"]' || format('["{0}"]', inputs.macos_arch)) }}
+    env:
+      MACOS_DOWNLOAD_URL: ${{ inputs.update_channel && format('https://github.com/{0}/releases/download/v{1}/ClassInEDBMVP-macOS-{2}.dmg', github.repository, inputs.version, matrix.arch) || '' }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
@@ -401,9 +395,6 @@ jobs:
           APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
           RELEASE_VERSION: ${{ inputs.version }}
           PRODUCTION_RELEASE: ${{ inputs.production_release }}
-          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
-          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
-          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
           EDB_PACKAGE_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
         run: |
           NOTARY_KEY_PATH=""
@@ -436,9 +427,13 @@ jobs:
 
           ./package_macos_app.sh "${args[@]}"
 
-      - name: Record macOS artifact architecture
-        id: package-metadata
-        run: echo "arch=$(uname -m)" >> "$GITHUB_OUTPUT"
+      - name: Check the runner built the requested macOS architecture
+        env:
+          MATRIX_ARCH: ${{ matrix.arch }}
+        run: |
+          arch=$(uname -m)
+          expected=$([[ "$MATRIX_ARCH" == "x64" ]] && echo x86_64 || echo arm64)
+          [[ "$arch" == "$expected" ]] || { echo "Runner built $arch, expected $MATRIX_ARCH" >&2; exit 1; }
 
       - name: Verify DMG
         run: hdiutil verify dist/ClassInEDBMVP-macOS.dmg
@@ -456,16 +451,13 @@ jobs:
           .venv/bin/python scripts/smoke_packaged_app.py dist/ClassInEDBMVP.app/Contents/MacOS/ClassInEDBMVP
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
-          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
-          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
 
       - name: Verify actual PIN update from 0.2.8 on macOS
         if: inputs.verify_native_update
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-          MACOS_ARCH: ${{ inputs.macos_arch }}
+          MACOS_ARCH: ${{ matrix.arch }}
         run: |
           baseline_root="$RUNNER_TEMP/edb-update-baseline"
           if [[ "$MACOS_ARCH" == "x64" ]]; then
@@ -492,7 +484,7 @@ jobs:
         if: ${{ always() && inputs.verify_native_update }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: macos-update-diagnostics
+          name: macos-update-diagnostics-${{ matrix.arch }}
           path: |
             dist/update-smoke.json
             dist/update-smoke-logs
@@ -528,7 +520,7 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: macos-installer
+          name: macos-installer-${{ matrix.arch }}
           compression-level: 0
           retention-days: 14
           if-no-files-found: error
@@ -707,9 +699,6 @@ jobs:
           WINDOWS_SIGN_TIMESTAMP_URL: ${{ vars.WINDOWS_SIGN_TIMESTAMP_URL }}
           RELEASE_VERSION: ${{ inputs.version }}
           PRODUCTION_RELEASE: ${{ inputs.production_release }}
-          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
-          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
-          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
           EDB_PACKAGE_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
         run: |
           if ($env:PRODUCTION_RELEASE -eq "true" -and -not $env:EDB_PACKAGE_UPDATE_PIN) {
@@ -908,9 +897,6 @@ jobs:
           }
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
-          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
-          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
 
       - name: Audit target PIN and update channel configuration
         if: inputs.verify_native_update
@@ -1067,7 +1053,7 @@ jobs:
     runs-on: ubuntu-latest
     # Internal builds intentionally skip the transitive private-quality gate.
     # Override implicit success() while still requiring both verified installers.
-    if: ${{ !cancelled() && needs.macos.result == 'success' && needs.windows.result == 'success' && inputs.macos_download_url != '' && inputs.windows_download_url != '' }}
+    if: ${{ !cancelled() && needs.macos.result == 'success' && needs.windows.result == 'success' && inputs.update_channel && inputs.macos_arch == 'both' }}
     needs:
       - macos
       - windows
@@ -1088,18 +1074,16 @@ jobs:
       - name: Build update feed
         env:
           RELEASE_VERSION: ${{ inputs.version }}
-          UPDATE_FEED_URL: ${{ inputs.update_feed_url }}
-          RELEASE_NOTES_URL: ${{ inputs.release_notes_url }}
-          MANIFEST_URL: ${{ inputs.manifest_url }}
-          MACOS_DOWNLOAD_URL: ${{ inputs.macos_download_url }}
-          WINDOWS_DOWNLOAD_URL: ${{ inputs.windows_download_url }}
-          MACOS_ARTIFACT_ARCH: ${{ needs.macos.outputs.artifact_arch }}
           WINDOWS_ARTIFACT_ARCH: ${{ needs.windows.outputs.artifact_arch }}
         run: |
-          python scripts/build_release_evidence.py verify release-artifacts/macos-installer/macos-release-evidence.json \
-            --artifact-root release-artifacts/macos-installer \
-            --expected-version "$RELEASE_VERSION" \
-            --expected-git-commit "${{ github.sha }}"
+          for arch in arm64 x64; do
+            python scripts/build_release_evidence.py verify "release-artifacts/macos-installer-$arch/macos-release-evidence.json" \
+              --artifact-root "release-artifacts/macos-installer-$arch" \
+              --expected-version "$RELEASE_VERSION" \
+              --expected-git-commit "${{ github.sha }}"
+            # Release assets carry the architecture so both Macs fit in one release.
+            mv "release-artifacts/macos-installer-$arch/ClassInEDBMVP-macOS.dmg" "release-artifacts/ClassInEDBMVP-macOS-$arch.dmg"
+          done
           python scripts/build_release_evidence.py verify release-artifacts/windows-installer/windows-release-evidence.json \
             --artifact-root release-artifacts/windows-installer \
             --expected-version "$RELEASE_VERSION" \
@@ -1113,9 +1097,11 @@ jobs:
             --update-feed-url "$UPDATE_FEED_URL" \
             --release-notes-url "$RELEASE_NOTES_URL" \
             --manifest-url "$MANIFEST_URL" \
-            --macos-url "$MACOS_DOWNLOAD_URL" \
-            --macos-file release-artifacts/macos-installer/ClassInEDBMVP-macOS.dmg \
-            --macos-arch "$MACOS_ARTIFACT_ARCH" \
+            --macos-url "$MACOS_ARM64_DOWNLOAD_URL" \
+            --macos-file release-artifacts/ClassInEDBMVP-macOS-arm64.dmg \
+            --macos-arch arm64 \
+            --macos-x64-url "$MACOS_X64_DOWNLOAD_URL" \
+            --macos-x64-file release-artifacts/ClassInEDBMVP-macOS-x64.dmg \
             --windows-url "$WINDOWS_DOWNLOAD_URL" \
             --windows-file release-artifacts/windows-installer/ClassInEDBMVP-Setup.exe \
             --windows-arch "$WINDOWS_ARTIFACT_ARCH" \
