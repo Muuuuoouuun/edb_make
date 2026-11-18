@@ -522,6 +522,9 @@ jobs:
         with:
           name: macos-installer-${{ matrix.arch }}
           compression-level: 0
+          # Preserve the metadata manifest's generated hidden sentinel.
+          # The explicit paths exclude build workspaces and credentials.
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
           path: |
@@ -986,6 +989,9 @@ jobs:
         with:
           name: windows-installer
           compression-level: 0
+          # Preserve the metadata manifest's generated hidden sentinel.
+          # The explicit paths exclude build workspaces and credentials.
+          include-hidden-files: true
           retention-days: 14
           if-no-files-found: error
           path: |

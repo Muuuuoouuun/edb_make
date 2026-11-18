@@ -98,10 +98,21 @@ for (const intent of ['multi-problem', 'page-as-is']) {
         self.assertEqual(2, normalize_placement_extra_slots({"extraSlots": 2, "placementExtraSlots": 3}))
 
     def test_entry_preserves_legacy_positional_parameter_order(self):
-        parameters = list(inspect.signature(board.ProblemEntry).parameters)
-        y_index = parameters.index("placement_y_ratio")
-        self.assertEqual("placement_scale_ratio", parameters[y_index + 1])
-        self.assertEqual("placement_extra_slots", parameters[-1])
+        signature = inspect.signature(board.ProblemEntry)
+        parameters = [name for name, parameter in signature.parameters.items()
+                      if parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD]
+        self.assertEqual([
+            "problem_id", "title", "problem_number", "subject", "source_page_id", "source_path",
+            "prepared_page", "bounds", "crop_path", "board_render_path", "blocks",
+            "actual_height_pages", "overflow_allowed", "reading_heavy", "risk_flags",
+            "placement_x_ratio", "placement_y_ratio", "placement_scale_ratio",
+            "placement_gap_after_pages", "preserve_legacy_placement_scale", "processing_step",
+            "input_intent", "force_full_page_bounds", "fit_width_converted", "preserve_media_regions",
+            "preserve_media_mode", "crop_source_offset", "source_segments", "board_render_preprocessed",
+            "placement_extra_slots",
+        ], parameters)
+        for name in ("passage_role", "passage_range"):
+            self.assertIs(signature.parameters[name].kind, inspect.Parameter.KEYWORD_ONLY)
 
     def test_engine_extra_space_aliases_preserve_scaled_flow(self):
         template = LayoutTemplate(name="movement")

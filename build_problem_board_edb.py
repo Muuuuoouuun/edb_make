@@ -10,6 +10,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -34,7 +35,7 @@ from build_structured_page_json import (
     resolve_recognition_worker_count,
 )
 from assemble_page import extract_set_problem_range
-from segment import detect_pdf_visual_column_divider_x, draw_segment_debug
+from segment import _looks_like_pdf_page_header_text_line, detect_pdf_visual_column_divider_x, draw_segment_debug
 from edb_builder import (
     CANVAS_HEIGHT,
     CANVAS_WIDTH,
@@ -265,6 +266,10 @@ V2_ENCODED_IMAGE_MAX_WIDTH_PX = 4096
 V2_ENCODED_IMAGE_MAX_EDGE_PX = 4096
 V2_ENCODED_IMAGE_OVERSAMPLE = 2.5
 V2_ENCODED_IMAGE_MAX_PIXELS = 12_000_000
+# A stitched text bitmap can be taller than the ordinary tablet export tier
+# without containing more pixels. Bound even unusually narrow inputs by the
+# existing pixel budget at the normal minimum export width.
+V2_ENCODED_TEXT_MAX_HEIGHT_PX = V2_ENCODED_IMAGE_MAX_PIXELS // V2_ENCODED_IMAGE_MIN_WIDTH_PX
 DEFAULT_IMAGE_RECORD_JPEG_QUALITY = 92
 TEXT_PRIORITY_IMAGE_RECORD_JPEG_QUALITY = 95
 # Brightness above this value (0-255) is treated as a light background that
@@ -1614,6 +1619,8 @@ def _extract_problem_cutout(
     *,
     chalk_color: tuple[int, int, int] | None = None,
     text_priority: bool = False,
+    preserve_page_content: bool = False,
+    paper_reference_image: Image.Image | None = None,
 ) -> Image.Image:
     """Recolor problem ink as chalk on a transparent canvas.
 
@@ -1635,7 +1642,8 @@ def _extract_problem_cutout(
     cleaned, clean_stats = clean_problem_image_transparency(
         image,
         transparent_background=not has_existing_transparency,
-        remove_corner_page_artifacts=True,
+        remove_corner_page_artifacts=not preserve_page_content,
+        paper_reference_image=paper_reference_image,
     )
     if "A" in cleaned.getbands():
         alpha_mask = cleaned.getchannel("A")
@@ -1828,6 +1836,7 @@ def _load_board_export_image(
     text_priority: bool = False,
     trusted_preprocessed_render: bool = False,
     preserve_source_content: bool = False,
+    preserve_page_content: bool = False,
 ) -> Image.Image:
     chalk_color = _resolve_chalk_color(board_theme)
     rendered: Image.Image | None = None
@@ -1865,6 +1874,8 @@ def _load_board_export_image(
             _enhance_problem_crop(crop_image, text_priority=True),
             chalk_color=chalk_color,
             text_priority=True,
+            preserve_page_content=preserve_page_content,
+            paper_reference_image=crop_image,
         )
         if target_size is not None and cutout.size != target_size:
             cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
@@ -1883,7 +1894,7 @@ def _load_board_export_image(
             cleaned, _stats = clean_problem_image_transparency(
                 rendered,
                 transparent_background=rendered.getchannel("A").getextrema()[0] >= 245,
-                remove_corner_page_artifacts=True,
+                remove_corner_page_artifacts=not preserve_page_content,
             )
             return cleaned
         rendered_rgb = rendered.convert("RGB")
@@ -1892,11 +1903,13 @@ def _load_board_export_image(
             return _extract_problem_cutout(
                 rendered_rgb,
                 chalk_color=chalk_color,
+                preserve_page_content=preserve_page_content,
             )
 
     cutout = _extract_problem_cutout(
         _enhance_problem_crop(crop_image),
         chalk_color=chalk_color,
+        preserve_page_content=preserve_page_content,
     )
     if target_size is not None and cutout.size != target_size:
         cutout = cutout.resize(target_size, Image.Resampling.LANCZOS)
@@ -1945,6 +1958,29 @@ def _problem_prefers_text_preservation(
         return False
     hint = " ".join(str(value or "") for value in source_hints).lower()
     return "국어" in hint or "영어" in hint or "korean" in hint or "english" in hint
+
+
+def _validated_shared_passage_range(role: Any, value: Any) -> tuple[int, int] | None:
+    """Accept explicit shared-passage provenance, never a filename/title guess."""
+    if str(role or "").strip() != "passage_fragment":
+        return None
+    if isinstance(value, dict):
+        numbers = (value.get("start"), value.get("end"))
+    elif isinstance(value, (tuple, list)) and len(value) == 2:
+        numbers = tuple(value)
+    else:
+        return None
+    if any(isinstance(number, bool) for number in numbers):
+        return None
+    start, end = (_coerce_problem_number(number) for number in numbers)
+    return (start, end) if start is not None and end is not None and end > start else None
+
+
+def _explicit_shared_passage_prefers_text(subject: Any, role: Any, value: Any) -> bool:
+    # Shared reading can arrive from a neutral upload with subject unknown.
+    # Known graphical/math subjects retain their existing rendering policy.
+    return (str(subject or "").strip().lower() in TEXT_PRIORITY_SUBJECTS | UNKNOWN_SUBJECT_VALUES
+            and _validated_shared_passage_range(role, value) is not None)
 
 
 def _encode_image_bytes(image: Image.Image, quality: int = 92) -> tuple[bytes, str]:
@@ -2011,6 +2047,8 @@ class ProblemEntry:
     source_segments: list[dict[str, Any]] = field(default_factory=list)
     board_render_preprocessed: bool = False
     placement_extra_slots: int = 0
+    passage_role: str | None = field(default=None, kw_only=True)
+    passage_range: tuple[int, int] | None = field(default=None, kw_only=True)
 
 
 @dataclass(slots=True)
@@ -2040,6 +2078,7 @@ class _ProblemAssetTask:
     rendered_source_offset: dict[str, int] | None = None
     trim_to_content: bool = False
     source_image_path: str | None = None
+    preserve_page_content: bool = False
 
 
 @dataclass(slots=True)
@@ -2066,6 +2105,8 @@ class _ProblemEntryDraft:
     preserve_legacy_placement_scale: bool = False
     preserve_media_regions: list[dict[str, Any]] = field(default_factory=list)
     source_segments: list[dict[str, Any]] = field(default_factory=list)
+    passage_role: str | None = field(default=None, kw_only=True)
+    passage_range: tuple[int, int] | None = field(default=None, kw_only=True)
 
 
 @dataclass(slots=True)
@@ -2106,10 +2147,168 @@ def _resolve_problem_asset_worker_count(task_count: int) -> int:
     return max_workers
 
 
-def _resolve_image_record_worker_count(item_count: int) -> int:
+IMAGE_RECORD_WORKER_MEMORY_BUDGET_BYTES = 1536 * 1024 * 1024
+IMAGE_RECORD_WORKING_BYTES_PER_PIXEL = 96
+IMAGE_RECORD_NON_WORKER_RESERVE_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def _clean_inactive_cgroup_file_bytes(stats_text: str, usage: int, *, version: int) -> int:
+    """Credit only clean, unmapped, non-shmem inactive file cache.
+
+    Missing/invalid telemetry gets no credit. Never mix v1 hierarchical cache
+    with local dirty counters: that could count a child's dirty pages as free.
+    Active file cache and reclaimable kernel/slab memory remain uncredited.
+    """
+    try:
+        stats: dict[str, int] = {}
+        for line in stats_text.splitlines():
+            key, raw = line.split()
+            value = int(raw)
+            if key in stats or value < 0:
+                return 0
+            stats[key] = value
+        prefix = "total_" if version == 1 and any(key.startswith("total_") for key in stats) else ""
+        required = ("inactive_file", "dirty", "writeback") if version == 1 else ("inactive_file", "file_dirty", "file_writeback")
+        inactive, dirty, writeback = (stats[prefix + key] for key in required)
+        if inactive > usage:
+            return 0
+        mapped_key = "mapped_file" if version == 1 else "file_mapped"
+        mapped, shmem = stats[prefix + mapped_key], stats[prefix + "shmem"]
+        return max(0, inactive - dirty - writeback - mapped - shmem)
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
+def _image_record_cgroup_memory_paths() -> list[tuple[int, Path]]:
+    """Find this process's visible v1/v2 hierarchy, including ancestor limits."""
+    paths = {(2, Path("/sys/fs/cgroup")), (1, Path("/sys/fs/cgroup/memory"))}
+    try:
+        groups: dict[int, str] = {}
+        for line in Path("/proc/self/cgroup").read_text().splitlines():
+            _identifier, controllers, group = line.split(":", 2)
+            if not controllers:
+                groups[2] = group
+            elif "memory" in controllers.split(","):
+                groups[1] = group
+        for line in Path("/proc/self/mountinfo").read_text().splitlines():
+            fields, filesystem = line.split(" - ", 1)
+            left, right = fields.split(), filesystem.split()
+            version = 2 if right[0] == "cgroup2" else 1 if right[0] == "cgroup" and "memory" in right[2].split(",") else None
+            if version not in groups:
+                continue
+            decode = lambda value: re.sub(r"\\([0-7]{3})", lambda match: chr(int(match[1], 8)), value)
+            root, mount = Path(decode(left[3])), Path(decode(left[4]))
+            group = Path(groups[version])
+            if not mount.is_absolute() or not group.is_absolute() or ".." in group.parts:
+                continue
+            # A cgroup namespace can expose '/' while mountinfo shows the
+            # ancestor mount root (including '/..'). In that case the mount
+            # itself is the only visible, valid hierarchy root.
+            if group == Path("/"):
+                current = mount
+            elif ".." not in root.parts and group.is_relative_to(root):
+                current = mount / group.relative_to(root)
+            else:
+                current = mount / group.relative_to("/")
+            while current.is_relative_to(mount):
+                paths.add((version, current))
+                if current == mount:
+                    break
+                current = current.parent
+    except (IndexError, OSError, TypeError, ValueError):
+        pass
+    return sorted(paths, key=lambda item: (item[0], str(item[1])))
+
+
+def _linux_available_image_record_memory_bytes() -> int | None:
+    """Use the kernel's available-memory estimate, excluding pending writes."""
+    try:
+        values = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, raw = line.split(":", 1)
+            if key in {"MemAvailable", "MemTotal", "Dirty", "Writeback"}:
+                value, unit = raw.split()
+                if key in values or unit != "kB" or int(value) < 0:
+                    return None
+                values[key] = int(value) * 1024
+        available = values["MemAvailable"]
+        if available > values.get("MemTotal", available):
+            return None
+        return max(0, available - values["Dirty"] - values["Writeback"])
+    except (KeyError, OSError, TypeError, ValueError):
+        return None
+
+
+def _available_image_record_memory_bytes() -> int | None:
+    """Observe host/container headroom without assuming the host's full RAM."""
+    available: list[int] = []
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            class MemoryStatus(ctypes.Structure):
+                _fields_ = [("length", ctypes.c_ulong), ("load", ctypes.c_ulong)] + [
+                    (name, ctypes.c_ulonglong) for name in (
+                        "total_phys", "available_phys", "total_pagefile", "available_pagefile",
+                        "total_virtual", "available_virtual", "available_extended_virtual",
+                    )
+                ]
+
+            status = MemoryStatus()
+            status.length = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                available.append(int(status.available_phys))
+        except (AttributeError, OSError, ValueError):
+            pass
+    else:
+        host_available = _linux_available_image_record_memory_bytes()
+        if host_available is not None:
+            available.append(host_available)
+        else:
+            try:
+                pages, page_size = os.sysconf("SC_AVPHYS_PAGES"), os.sysconf("SC_PAGE_SIZE")
+                if pages >= 0 and page_size > 0:
+                    available.append(int(pages * page_size))
+            except (AttributeError, OSError, ValueError):
+                pass
+    for version, directory in _image_record_cgroup_memory_paths():
+        limit_name, usage_name = (("memory.max", "memory.current") if version == 2 else ("memory.limit_in_bytes", "memory.usage_in_bytes"))
+        try:
+            limit = int((directory / limit_name).read_text().strip())
+            usage = int((directory / usage_name).read_text().strip())
+            if 0 <= limit < 2**60 and usage >= 0:
+                reclaimable = 0
+                try:
+                    reclaimable = _clean_inactive_cgroup_file_bytes((directory / "memory.stat").read_text(), usage, version=version)
+                except OSError:
+                    pass
+                # Credit cache only against usage inside this same limit.
+                # Host availability and every visible ancestor remain caps.
+                available.append(max(0, limit - usage + reclaimable))
+        except (OSError, ValueError):
+            pass
+    return min(available) if available else None
+
+
+def _resolve_image_record_worker_count(item_count: int, *, source_pixels: int = 0) -> int:
     if item_count <= 1:
         return 1
     max_workers = max(1, min(4, item_count, os.cpu_count() or 2))
+    available: int | None = None
+    budget = IMAGE_RECORD_WORKER_MEMORY_BUDGET_BYTES
+    worker_bytes = 0
+    if source_pixels > 0:
+        available = _available_image_record_memory_bytes()
+        if available is not None:
+            # Resident main/UI memory is already deducted from availability.
+            # Spend at most half the remaining headroom and leave a separate
+            # 2GiB reserve for future UI, encoding and other application growth.
+            budget = min(
+                budget, available // 2,
+                max(0, available - IMAGE_RECORD_NON_WORKER_RESERVE_BYTES),
+            )
+        worker_bytes = max(1, source_pixels * IMAGE_RECORD_WORKING_BYTES_PER_PIXEL)
+        max_workers = min(max_workers, max(1, budget // worker_bytes))
     raw_worker_count = os.environ.get("EDB_IMAGE_RECORD_WORKERS", "").strip()
     if raw_worker_count:
         try:
@@ -2117,8 +2316,16 @@ def _resolve_image_record_worker_count(item_count: int) -> int:
         except ValueError:
             requested_workers = max_workers
         if requested_workers <= 0:
-            return 1
-        return max(1, min(max_workers, requested_workers))
+            requested_workers = 1
+        max_workers = max(1, min(max_workers, requested_workers))
+    if source_pixels > 0:
+        print(
+            f"[image-record] workers={max_workers} records={item_count} source_pixels_max={source_pixels} "
+            f"available_bytes={available if available is not None else 'unknown'} "
+            f"budget_bytes={budget} per_worker_bytes={worker_bytes}",
+            file=sys.stderr,
+            flush=True,
+        )
     return max_workers
 
 
@@ -2396,18 +2603,14 @@ def _stage2_prefers_chalk_math_media(
 
 
 def _build_problem_board_asset(crop: Image.Image, task: _ProblemAssetTask) -> Image.Image:
-    enhanced_crop = _enhance_problem_crop(crop, text_priority=task.text_priority)
-    if task.text_priority:
-        cutout_image = _extract_problem_cutout(
-            enhanced_crop,
-            chalk_color=task.chalk_color,
-            text_priority=True,
-        )
-    else:
-        cutout_image = _extract_problem_cutout(
-            enhanced_crop,
-            chalk_color=task.chalk_color,
-        )
+    # Seed the same pure cutout cache consumed by a later session publish.
+    # Media restoration remains outside this cache, so changing a figure's
+    # preservation policy cannot reuse a colored patch as the chalk base.
+    cutout_image = _cached_chalk_cutout(
+        task.crop_path, crop, chalk_color=task.chalk_color,
+        text_priority=task.text_priority,
+        preserve_page_content=task.preserve_page_content,
+    )
     # Monochrome math line art stays chalk. Substantial color media is restored
     # last from the immutable source, including for math documents.
     regions = stage2_media_regions(
@@ -2798,6 +3001,7 @@ def build_pages(
     ocr_semaphore: threading.BoundedSemaphore | None = None,
     global_ocr_worker_limit: int | None = None,
     timings: dict[str, int] | None = None,
+    page_id_namespace: str | None = None,
 ) -> tuple[list[PreparedPage], list[PageModel]]:
     render_started_at = time.perf_counter()
     prepared_pages = prepare_source_pages(
@@ -2808,6 +3012,12 @@ def build_pages(
         crop_margins=crop_margins,
         max_dimension=max_dimension,
     )
+    if page_id_namespace:
+        # Original filenames are not globally unique in a multi-file import.
+        # Namespace before building blocks/problems so every reference agrees.
+        for prepared_page in prepared_pages:
+            prepared_page.page_id = f"{page_id_namespace}-{prepared_page.page_id}"
+            prepared_page.metadata["page_id_namespace"] = page_id_namespace
     _record_ms(timings, "render", render_started_at)
     if _normalize_input_intent(input_intent) == "page-as-is":
         prepared_pages = _tile_page_as_is_prepared_pages(
@@ -4271,6 +4481,31 @@ def _seed_cross_page_passage_group(
     return group
 
 
+def _passage_document_identity(page: PageModel) -> str | None:
+    """Identify an original document, including conservative legacy PNG pages."""
+    original = str(page.metadata.get("original_source_path") or "").strip()
+    if original and Path(original).suffix.lower() in {".pdf", ".hwp", ".hwpx"}:
+        # An explicit original document is stronger than a possibly stale
+        # conversion/cache pointer. Conflicting originals must stay separate.
+        return str(Path(original).expanduser().resolve())
+    # HWP normalized caches may label each rendered PNG as original_source_path.
+    # Prefer explicit document provenance before that generic image path.
+    for key in ("source_hwp_path", "source_pdf_path", "original_source_path"):
+        value = str(page.metadata.get(key) or "").strip()
+        if value:
+            return str(Path(value).expanduser().resolve())
+    source = Path(str(page.source_path or ""))
+    if source.suffix.lower() in {".pdf", ".hwp", ".hwpx"}:
+        return str(source.expanduser().resolve())
+    match = re.match(r"^(.*?)(?:-)?page-[0-9]+$", str(page.page_id or ""))
+    if (match and source.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            and source.stem.replace("_", "-") == str(page.page_id).replace("_", "-")):
+        # Legacy normalized pages have a common directory and stable document
+        # prefix. Identical basenames in different directories stay distinct.
+        return f"legacy-pages:{source.expanduser().resolve().parent}:{match.group(1)}"
+    return None
+
+
 def _infer_pdf_cross_page_passage_continuation(
     pages: Sequence[PageModel],
     page_index: int,
@@ -4290,7 +4525,15 @@ def _infer_pdf_cross_page_passage_continuation(
         return None
     page = pages[page_index]
     previous_page = pages[page_index - 1]
-    if page.subject not in {Subject.KOREAN, Subject.ENGLISH}:
+    if page.subject not in {Subject.KOREAN, Subject.ENGLISH, Subject.UNKNOWN}:
+        return None
+    source_identity = _passage_document_identity(page)
+    previous_identity = _passage_document_identity(previous_page)
+    if source_identity is not None and previous_identity is not None and source_identity != previous_identity:
+        return None
+    if page.subject == Subject.UNKNOWN and (source_identity is None or source_identity != previous_identity):
+        # The UI deliberately sends unknown subject. A valid active range and
+        # proven original-document continuity replace a guessed subject label.
         return None
     if str(page.metadata.get("source_type") or "") != "pdf":
         return None
@@ -4358,6 +4601,11 @@ def _infer_pdf_cross_page_passage_continuation(
             if not isinstance(raw_region, dict):
                 continue
             if _coerce_int(raw_region.get("before_problem_number")) != int(selected_group["start"]):
+                continue
+            if page.subject == Subject.UNKNOWN and (
+                (_coerce_int(raw_region.get("line_count")) or 0) < 1
+                or (_coerce_int(raw_region.get("char_count")) or 0) < 12
+            ):
                 continue
             raw_bbox = raw_region.get("bbox")
             if not isinstance(raw_bbox, dict):
@@ -4780,10 +5028,34 @@ def _demote_nested_passage_materials(
 
 
 def _annotate_cross_page_passage_groups(pages: Sequence[PageModel]) -> None:
-    _annotate_hwp_preview_passage_ranges(pages)
-    _annotate_marker_continuation_pages_to_following_groups(pages)
+    # Both pre-annotators look ahead through pages. Partition by proven
+    # document identity first; clearing active_groups later cannot undo a
+    # passage_role already copied from another PDF/HWP's question numbers.
+    document_runs: list[list[PageModel]] = []
+    for page in pages:
+        identity = _passage_document_identity(page)
+        previous_identity = _passage_document_identity(document_runs[-1][-1]) if document_runs else None
+        boundary = bool(document_runs) and (
+            (identity != previous_identity and (identity is not None or previous_identity is not None))
+            or (identity is None and page.subject == Subject.UNKNOWN)
+        )
+        if not document_runs or boundary:
+            document_runs.append([])
+        document_runs[-1].append(page)
+    for run in document_runs:
+        _annotate_hwp_preview_passage_ranges(run)
+        _annotate_marker_continuation_pages_to_following_groups(run)
     active_groups: dict[str, dict[str, Any]] = {}
     for page_index, page in enumerate(pages):
+        if page_index > 0:
+            identity = _passage_document_identity(page)
+            previous_identity = _passage_document_identity(pages[page_index - 1])
+            if identity != previous_identity and (identity is not None or previous_identity is not None):
+                active_groups.clear()
+            elif identity is None and page.subject == Subject.UNKNOWN:
+                # Identity-less pages must not inherit another document's
+                # passage merely because its question numbers happen to match.
+                active_groups.clear()
         _demote_nested_passage_materials(page, active_groups)
         _infer_pdf_cross_page_passage_continuation(pages, page_index, active_groups)
         ordered_problems = sorted(
@@ -5029,10 +5301,7 @@ def _materialize_pdf_pre_question_passage_continuations(
 
 def _collect_problem_risk_flags(problem: ProblemUnit) -> list[str]:
     flags: list[str] = []
-    if (
-        _problem_passage_continues_across_pages(problem.metadata)
-        and not bool(problem.metadata.get("passage_fragments_merged"))
-    ):
+    if _problem_needs_cross_page_passage_merge_review(problem.metadata):
         flags.append(PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG)
     if problem.metadata.get("fallback_grouping"):
         flags.append("fallback_grouping")
@@ -5064,6 +5333,32 @@ def _problem_passage_continues_across_pages(metadata: dict[str, Any] | None) -> 
     if not isinstance(source_page_ids, list):
         return False
     return len({str(page_id) for page_id in source_page_ids if str(page_id)}) > 1
+
+
+def _problem_needs_cross_page_passage_merge_review(
+    metadata: dict[str, Any], source_segments: list[dict[str, Any]] | None = None,
+) -> bool:
+    if bool(metadata.get("passage_fragments_merged")):
+        return False
+    if metadata.get("passage_role") != "passage_fragment":
+        # Child-question/legacy reviews may also concern unmatched passage
+        # material; this correction is limited to a known exported body.
+        return _problem_passage_continues_across_pages(metadata)
+    # Group membership also includes question-only pages. Only the printed
+    # passage body's own pages can establish a cross-page body merge risk.
+    if source_segments and metadata.get("passage_role") == "passage_fragment":
+        body_pages = {str(segment.get("sourcePageId") or segment.get("source_page_id") or "")
+                      for segment in source_segments} - {""}
+        if len(body_pages) > 1:
+            return True
+    explicit = metadata.get("passage_has_cross_page_fragments")
+    if isinstance(explicit, bool):
+        return explicit
+    fragment_pages = _metadata_string_list(metadata, "passage_fragment_source_page_ids")
+    if fragment_pages:
+        return len(set(fragment_pages)) > 1
+    # Keep legacy/unknown-body reviews until their original pages are known.
+    return _problem_passage_continues_across_pages(metadata)
 
 
 def _flatten_passage_segment_on_white(image: Image.Image) -> Image.Image:
@@ -5231,6 +5526,62 @@ def _has_substantial_content_below_footer_rule(
     )
 
 
+def _passage_band_has_substantive_ink(image: Image.Image, *, top: int, bottom: int) -> bool:
+    """Protect glyphs around a rule; only proven full-height edge guides are exempt.
+
+    Pixels alone cannot prove that text above a rule is a page header rather
+    than an underlined passage. Uncertain labels therefore remain intact.
+    """
+    top = max(0, min(image.height, int(top)))
+    bottom = max(top, min(image.height, int(bottom)))
+    if top >= bottom or image.width <= 0:
+        return False
+    band = (image.convert("RGBA") if top == 0 and bottom == image.height
+            else image.crop((0, top, image.width, bottom)).convert("RGBA"))
+    width, height = band.size
+    transparent = band.getchannel("A").getextrema()[0] < 245
+    guide_columns: set[int] = set()
+    if image.height >= 48:
+        # A short stroke/bracket in the inspected band is not a page guide.
+        # Exempt only the literal outer three columns when their visible pixel
+        # is identical on EVERY row of the complete original segment. A gap,
+        # an adjacent dot, or a changed color keeps uncertain ink protected.
+        guide_source = image if image.mode in {"RGB", "RGBA"} else image.convert("RGBA")
+        source_pixels = guide_source.load()
+        for x in set(range(min(3, width))) | set(range(max(0, width - 3), width)):
+            first = source_pixels[x, 0]
+            red, green, blue = first[:3]
+            alpha = first[3] if len(first) == 4 else 255
+            visible = (alpha > 0 if transparent else
+                       0.299 * red + 0.587 * green + 0.114 * blue <= 246
+                       or max(red, green, blue) - min(red, green, blue) >= 24)
+            if visible and all(source_pixels[x, y] == first for y in range(1, image.height)):
+                guide_columns.add(x)
+    if np is not None:
+        pixels = np.asarray(band, dtype=np.uint8)
+        alpha = pixels[..., 3]
+        rgb = pixels[..., :3].astype(np.float32)
+        luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+        foreground = (alpha > 0 if transparent
+                      else (luminance <= 246.0) | ((rgb.max(axis=2) - rgb.min(axis=2)) >= 24.0))
+        if guide_columns:
+            foreground[:, sorted(guide_columns)] = False
+        return bool(foreground.any())
+    # Stream the fallback scan. A W×H Python bool/reference matrix would add
+    # roughly eight bytes per pixel on top of the PIL raster.
+    pixels = band.load()
+    for y in range(height):
+        for x in range(width):
+            if x in guide_columns:
+                continue
+            red, green, blue, alpha = pixels[x, y]
+            if (alpha > 0 if transparent else
+                    0.299 * red + 0.587 * green + 0.114 * blue <= 246
+                    or max(red, green, blue) - min(red, green, blue) >= 24):
+                return True
+    return False
+
+
 def _trim_passage_segment_for_join(
     image: Image.Image,
     *,
@@ -5238,11 +5589,11 @@ def _trim_passage_segment_for_join(
     trim_bottom: bool,
     crop_box_output: list[tuple[int, int, int, int]] | None = None,
 ) -> Image.Image:
-    """Remove page footer chrome and excess whitespace at a passage join.
+    """Remove bare separator chrome and excess whitespace at a passage join.
 
     A page footer is recognized conservatively: a near-full-width rule in the
-    lower quarter plus a long blank run before it. This removes page labels
-    such as ``고2`` without treating normal paragraph spacing as chrome.
+    lower quarter plus a long blank run before it. Uncertain labels and glyphs
+    near either end remain intact; an underline must never delete its text.
     """
     if image.width <= 0 or image.height <= 0:
         if crop_box_output is not None:
@@ -5287,17 +5638,22 @@ def _trim_passage_segment_for_join(
                 and rule_width >= int(round(image.width * 0.93))
             )
             if (
-                header_span >= int(round(image.width * 0.55))
-                or cropped_page_header_rule
+                (header_span >= int(round(image.width * 0.55)) or cropped_page_header_rule)
+                and not _passage_band_has_substantive_ink(image, top=0, bottom=first_rule)
             ):
-                top = min(
+                candidate_top = min(
                     image.height - 1,
                     rule_end + PASSAGE_JOIN_EDGE_PADDING_PX,
                 )
+                top = (rule_end if _passage_band_has_substantive_ink(
+                    image, top=rule_end, bottom=candidate_top,
+                ) else candidate_top)
         if top == 0:
             first_ink = next((index for index, value in enumerate(row_counts) if value > 3), 0)
             if 0 < first_ink <= int(round(image.height * 0.18)):
-                top = max(0, first_ink - PASSAGE_JOIN_EDGE_PADDING_PX)
+                candidate_top = max(0, first_ink - PASSAGE_JOIN_EDGE_PADDING_PX)
+                if not _passage_band_has_substantive_ink(image, top=0, bottom=candidate_top):
+                    top = candidate_top
 
     if trim_bottom:
         lower_start = int(round(image.height * 0.65))
@@ -5331,11 +5687,15 @@ def _trim_passage_segment_for_join(
             footer_rule_start = -1
             footer_rule_end = -1
         if footer_rule_start >= 0:
-            if not _has_substantial_content_below_footer_rule(
+            if (not _has_substantial_content_below_footer_rule(
                 row_counts,
                 rule_end=footer_rule_end,
                 image_width=image.width,
-            ):
+            ) and not _passage_band_has_substantive_ink(
+                image, top=blank_start + PASSAGE_JOIN_EDGE_PADDING_PX, bottom=footer_rule_start,
+            ) and not _passage_band_has_substantive_ink(
+                image, top=footer_rule_end, bottom=image.height,
+            )):
                 candidate_bottom = min(
                     image.height,
                     blank_start + PASSAGE_JOIN_EDGE_PADDING_PX,
@@ -5357,12 +5717,16 @@ def _trim_passage_segment_for_join(
             content_top = meaningful_rows[0]
             excess_top = content_top - top
             if excess_top >= PASSAGE_JOIN_EXCESS_BLANK_MIN_PX:
-                top = max(top, content_top - PASSAGE_JOIN_CONTENT_PADDING_PX)
+                candidate_top = max(top, content_top - PASSAGE_JOIN_CONTENT_PADDING_PX)
+                if not _passage_band_has_substantive_ink(image, top=top, bottom=candidate_top):
+                    top = candidate_top
         if trim_bottom:
             content_bottom = meaningful_rows[-1] + 1
             excess_bottom = bottom - content_bottom
             if excess_bottom >= PASSAGE_JOIN_EXCESS_BLANK_MIN_PX:
-                bottom = min(bottom, content_bottom + PASSAGE_JOIN_CONTENT_PADDING_PX)
+                candidate_bottom = min(bottom, content_bottom + PASSAGE_JOIN_CONTENT_PADDING_PX)
+                if not _passage_band_has_substantive_ink(image, top=candidate_bottom, bottom=bottom):
+                    bottom = candidate_bottom
 
     if top <= 0 and bottom >= image.height:
         if crop_box_output is not None:
@@ -6346,6 +6710,28 @@ def build_problem_entries(
     _annotate_cross_page_passage_groups(pages)
     _materialize_pdf_pre_question_passage_continuations(pages, prepared_by_page_id)
 
+    # Keep a header-only fragment long enough to seed a real continuation on
+    # the following page, then resolve it using the complete document group.
+    # Older/raster/OCR fragment types lack this explicit negative evidence and
+    # retain their existing handling; vector/raster bodies detected by the PDF
+    # segmenter explicitly mark visible body content as present.
+    body_evidence_by_group: dict[str, bool] = {}
+    for candidate_page in pages:
+        candidates_by_id = {block.block_id: block for block in candidate_page.blocks}
+        for candidate in candidate_page.problems:
+            if not _problem_is_passage_fragment_unit(candidate):
+                continue
+            group_id = str(candidate.metadata.get("passage_group_id") or candidate.unit_id)
+            candidate_blocks = [
+                candidates_by_id[block_id] for block_id in _iter_problem_block_ids_raw(candidate)
+                if block_id in candidates_by_id
+            ]
+            has_body = not candidate_blocks or any(
+                block.metadata.get("passage_has_visible_body") is not False
+                for block in candidate_blocks
+            )
+            body_evidence_by_group[group_id] = body_evidence_by_group.get(group_id, False) or has_body
+
     for page in pages:
         prepared_page = prepared_by_page_id.get(page.page_id)
         if prepared_page is None:
@@ -6393,9 +6779,17 @@ def build_problem_entries(
             all_assigned_ids.update(_iter_problem_block_ids_raw(prob))
 
         for problem in ordered_problems:
+            if (_problem_is_passage_fragment_unit(problem)
+                    and not body_evidence_by_group.get(str(problem.metadata.get("passage_group_id") or problem.unit_id), True)):
+                continue
             if not _problem_matches_content_target(problem, resolved_content_target):
                 continue
             is_shared_passage = _problem_is_passage_fragment_unit(problem)
+            shared_passage_role = problem.metadata.get("passage_role") or problem.metadata.get("passageRole")
+            shared_passage_range = _validated_shared_passage_range(
+                shared_passage_role,
+                problem.metadata.get("passage_range") or problem.metadata.get("passageRange"),
+            )
             trusted_pdf_marker_problem = False
             passage_fragment_problem = is_shared_passage
             next_problem = next_problem_for_crop.get(problem.unit_id)
@@ -6638,6 +7032,8 @@ def build_problem_entries(
                         else []
                     ),
                     source_segments=passage_source_segments,
+                    passage_role="passage_fragment" if shared_passage_range else None,
+                    passage_range=shared_passage_range,
                     asset_task=None
                     if reuse_full_page_asset
                     else _ProblemAssetTask(
@@ -6659,10 +7055,13 @@ def build_problem_entries(
                             if passage_fragment_problem
                             else 0
                         ),
-                        text_priority=_problem_prefers_text_preservation(
-                            problem.subject,
-                            prepared_page.source_path,
-                            problem_title,
+                        text_priority=(
+                            _problem_prefers_text_preservation(
+                                problem.subject, prepared_page.source_path, problem_title,
+                            )
+                            or _explicit_shared_passage_prefers_text(
+                                problem.subject, shared_passage_role, shared_passage_range,
+                            )
                         ),
                         pad_edges=not preserve_page_as_is and not preserve_source_pixels,
                         subject=problem.subject,
@@ -6683,6 +7082,7 @@ def build_problem_entries(
                         detect_color_media=_problem_allows_selective_media_preservation(problem),
                         preserve_media_mode=preserve_media_mode,
                         render_board_asset=render_board_assets,
+                        preserve_page_content=preserve_page_as_is and not shared_passage_range,
                         trim_to_content=(
                             not preserve_page_as_is
                             and not passage_fragment_problem
@@ -6751,6 +7151,8 @@ def build_problem_entries(
                 crop_source_offset=(draft.asset_task.rendered_source_offset if draft.asset_task and not draft.source_segments else None),
                 source_segments=list(draft.source_segments),
                 board_render_preprocessed=draft.asset_task is not None,
+                passage_role=draft.passage_role,
+                passage_range=draft.passage_range,
             )
         )
     _record_ms(timings, "finish", finish_started_at)
@@ -8158,6 +8560,22 @@ def _problem_payload_image_path(problem: dict[str, Any]) -> Path | None:
     )
 
 
+def _problem_payload_preserves_full_page(problem: dict[str, Any]) -> bool:
+    input_intent = _normalize_input_intent(
+        str(problem.get("inputIntent") or problem.get("input_intent") or "")
+    )
+    full_page_bounds = problem.get(
+        "forceFullPageBounds", problem.get("force_full_page_bounds")
+    )
+    placement_mode = problem.get("placementMode", problem.get("placement_mode"))
+    return (
+        input_intent == "page-as-is"
+        and full_page_bounds is True
+        and placement_mode in (None, "", "continuous-page-as-is")
+        and not problem_payload_fit_width_converted(problem)
+    )
+
+
 def _problem_payload_uses_text_edge_guard(problem: dict[str, Any]) -> bool:
     input_intent = _normalize_input_intent(
         str(problem.get("inputIntent") or problem.get("input_intent") or "")
@@ -8566,6 +8984,11 @@ def _classin_page_chrome_artifact_issues(problems: Sequence[dict[str, Any]]) -> 
             continue
         step = _problem_payload_processing_step(problem)
         if step not in {PROCESSING_STEP_CHALK, PROCESSING_STEP_RECONSTRUCT}:
+            continue
+        if step == PROCESSING_STEP_CHALK and _problem_payload_preserves_full_page(problem):
+            # Whole-page insertion deliberately retains the source's page
+            # borders, footer and page number. Scanning these preserved pixels
+            # for crop artifacts cannot provide an actionable finding.
             continue
         image_path = _problem_payload_image_path(problem)
         if image_path is None or not image_path.is_file():
@@ -9517,6 +9940,7 @@ def _entry_is_whole_page(entry: "ProblemEntry") -> bool:
         input_intent=entry.input_intent,
         force_full_page_bounds=entry.force_full_page_bounds,
         fit_width_converted=entry.fit_width_converted,
+        passage_role=getattr(entry, "passage_role", None),
     )
 
 
@@ -9665,12 +10089,14 @@ def build_ui_session(
     pages: list[PageModel] | None = None,
     template: LayoutTemplate | None = None,
     input_intent: str = "auto",
+    content_target: str = "all",
     input_notes: str | None = None,
     board_theme: str = DEFAULT_BOARD_THEME,
     crop_format: str = DEFAULT_CROP_FORMAT,
 ) -> dict[str, Any]:
     rendered_page_paths = [Path(page.source_path).resolve() for page in prepared_pages]
     resolved_input_intent = _normalize_input_intent(input_intent)
+    resolved_content_target = _normalize_content_target(content_target)
     placement_problem_ids_by_page: dict[str, list[str]] = {}
     for placement in placements:
         source_page_id = str(placement.get("source_page_id") or "")
@@ -9738,10 +10164,7 @@ def build_ui_session(
         problem_input_intent = _normalize_input_intent(
             str(problem_metadata.get("input_intent") or problem_metadata.get("inputIntent") or resolved_input_intent)
         )
-        if (
-            _problem_passage_continues_across_pages(problem_metadata)
-            and not bool(problem_metadata.get("passage_fragments_merged"))
-        ):
+        if _problem_needs_cross_page_passage_merge_review(problem_metadata, source_segments):
             problem_flags.append(PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG)
         problem_flags = list(dict.fromkeys(str(reason) for reason in problem_flags if reason))
         passage_payload = _problem_passage_payload(problem_metadata)
@@ -9868,7 +10291,71 @@ def build_ui_session(
         page_metadata = dict(page_model.metadata) if page_model is not None else dict(prepared_page.metadata)
         problem_ids = problems_by_page.get(prepared_page.page_id, [])
         risk_flags = page_risk_flags.get(prepared_page.page_id, [])
-        review_status = "failed" if not problem_ids else "check_needed" if risk_flags else "normal"
+        intentionally_excluded = False
+        if (not problem_ids and resolved_content_target == "shared-passages"
+                and page_model is not None and not risk_flags
+                and page_quality["parseConfidence"] >= 0.8):
+            blocks_by_id = {block.block_id: block for block in page_model.blocks}
+            question_units = []
+            unmatched_shared_body = False
+            uncertain_unit = False
+            assigned_block_ids = {block_id for unit in page_model.problems
+                                  for block_id in _iter_problem_block_ids_raw(unit)}
+            for block in page_model.blocks:
+                if block.block_id in assigned_block_ids:
+                    continue
+                explicit_shared = (block.metadata.get("passage_role") == "passage_fragment"
+                                   or block.metadata.get("passage_has_visible_body") is True
+                                   or _passage_range_tuple(block.metadata) is not None)
+                normalized_text = re.sub(r"\s+", "", str(block.text or "")).lower()
+                known_footer = (_is_page_footer_chrome_block(page_model, block)
+                                and (re.fullmatch(r"\d+(?:[/／]\d+)?", normalized_text) is not None
+                                     or any(marker.lower() in normalized_text for marker in PAGE_FOOTER_CHROME_TEXT_MARKERS)))
+                known_header = (bool(normalized_text)
+                                and _looks_like_pdf_page_header_text_line(block.text, block.bbox, page_model.height_px))
+                harmless_chrome = (not explicit_shared
+                                   and not block.metadata.get("risk_flags") and not block.metadata.get("review_flags")
+                                   and (block.block_type == BlockType.DECORATION or known_footer or known_header))
+                if not harmless_chrome:
+                    uncertain_unit = True
+            for unit in page_model.problems:
+                unit_block_ids = _iter_problem_block_ids_raw(unit)
+                if any(block_id not in blocks_by_id for block_id in unit_block_ids):
+                    uncertain_unit = True
+                own_blocks = [blocks_by_id[block_id] for block_id in _iter_problem_block_ids_raw(unit)
+                              if block_id in blocks_by_id]
+                if _problem_is_passage_fragment_unit(unit):
+                    # A header seed with explicit no-body evidence may be
+                    # excluded; an unexported real/unknown body still fails.
+                    unmatched_shared_body |= not own_blocks or any(
+                        block.metadata.get("passage_has_visible_body") is not False for block in own_blocks
+                    )
+                    continue
+                text_blocks = [block for block in own_blocks if str(block.text or "").strip()]
+                unit_risk_flags = _collect_problem_risk_flags(unit)
+                if (unit.metadata.get("passage_role") == "child_question"
+                        and _passage_range_tuple(unit.metadata)
+                        and not any(unit.metadata.get(key) for key in ("review_flags", "risk_flags", "ai_problem_unit"))):
+                    # The shared-only target omits these child questions.
+                    # Their automatically generated cross-page merge reminder
+                    # is not a recognition failure on the excluded page.
+                    unit_risk_flags = [flag for flag in unit_risk_flags
+                                       if flag != PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG]
+                confident_question = (
+                    _problem_has_number(unit) and bool(text_blocks)
+                    and not unit_risk_flags
+                    and all(block.confidence is not None and block.confidence >= 0.8 for block in text_blocks)
+                    and all(block.bbox.width > 0 and block.bbox.height > 0 for block in own_blocks)
+                    and not any(block.metadata.get("risk_flags") or block.metadata.get("review_flags")
+                                or block.metadata.get("ocr_empty_text") or block.metadata.get("marker_conflict")
+                                for block in own_blocks)
+                )
+                if confident_question:
+                    question_units.append(unit)
+                else:
+                    uncertain_unit = True
+            intentionally_excluded = bool(question_units) and not uncertain_unit and not unmatched_shared_body
+        review_status = ("normal" if intentionally_excluded else "failed") if not problem_ids else "check_needed" if risk_flags else "normal"
         pages_payload.append(
             {
                 "id": prepared_page.page_id,
@@ -9880,6 +10367,8 @@ def build_ui_session(
                 "problemIds": problem_ids,
                 "riskFlags": risk_flags,
                 "reviewStatus": review_status,
+                "intentionallyExcluded": intentionally_excluded,
+                "exclusionReason": "shared_passages_only" if intentionally_excluded else None,
                 "sourceType": page_metadata.get("source_type"),
                 "source_type": page_metadata.get("source_type"),
                 "pageAsIsFastPath": bool(page_metadata.get("page_as_is_fast_path")),
@@ -9934,6 +10423,8 @@ def build_ui_session(
         "output_dir": str(output_dir.resolve()),
         "source_mode": "batch" if len(source_paths) > 1 else "single",
         "input_intent": resolved_input_intent,
+        "content_target": resolved_content_target,
+        "contentTarget": resolved_content_target,
         "input_notes": (input_notes or "").strip(),
         "input_file_count": len(source_paths),
         "input_files": [str(Path(path).resolve()) for path in source_paths],
@@ -10918,18 +11409,34 @@ def _resize_to_target_width(image: Image.Image, target_width_px: int) -> Image.I
 def _v2_encoded_image_size(
     source_size: tuple[int, int],
     display_size: tuple[float, float],
+    *,
+    preserve_tall_text: bool = False,
 ) -> tuple[int, int]:
     """Choose bitmap pixels independently from ClassIn's logical display hints.
 
     ClassIn v2 samples use a ~301px logical base width, but encoding the source
     bitmap at that width destroys small Korean/English glyph detail. Keep the
     display geometry unchanged while storing an oversampled bitmap.
+
+    The tall-text exception retains bounded PNG/source pixels. Binary readback
+    alone does not verify ClassIn GUI compatibility on older tablet hardware.
     """
     source_width, source_height = source_size
     display_width, _display_height = display_size
     if source_width <= 0 or source_height <= 0:
         return 1, 1
     source_pixels = source_width * source_height
+    if (
+        preserve_tall_text
+        and source_width <= V2_ENCODED_IMAGE_MAX_WIDTH_PX
+        and V2_ENCODED_IMAGE_MAX_EDGE_PX < source_height <= V2_ENCODED_TEXT_MAX_HEIGHT_PX
+        and source_pixels <= V2_ENCODED_IMAGE_MAX_PIXELS
+    ):
+        # The 4096 edge tier is a responsiveness policy, not an EDB field
+        # limit. Resampling a bounded stitched passage can erase punctuation.
+        # Reuse its exact pixels without changing the logical display hints,
+        # increasing the pixel budget, or upscaling narrow text to 1024px.
+        return source_width, source_height
     source_is_export_safe = (
         source_width >= V2_ENCODED_IMAGE_MIN_WIDTH_PX
         and source_width <= V2_ENCODED_IMAGE_MAX_WIDTH_PX
@@ -10990,7 +11497,7 @@ def _v1_default_display_width_px(template: LayoutTemplate) -> float:
 
 CHALK_CUTOUT_CACHE_DIRNAME = ".chalk_cutout_cache"
 # Bump when the cutout pipeline changes in a way the code hash below misses.
-CHALK_CUTOUT_CACHE_VERSION = "1"
+CHALK_CUTOUT_CACHE_VERSION = "2"
 CHALK_CUTOUT_CACHE_MAX_FILES = 1500
 _CHALK_CUTOUT_CACHE_SALT: str | None = None
 
@@ -11000,11 +11507,13 @@ def _chalk_cutout_cache_salt() -> str:
     global _CHALK_CUTOUT_CACHE_SALT
     if _CHALK_CUTOUT_CACHE_SALT is None:
         import sys
+        import image_reconstruction_backend as transparency_backend
 
         parts = [CHALK_CUTOUT_CACHE_VERSION, str(getattr(Image, "__version__", "")), str(getattr(np, "__version__", ""))]
         try:
-            parts.append(hashlib.sha256(Path(__file__).read_bytes()).hexdigest())
-        except OSError:
+            for module_path in (__file__, transparency_backend.__file__):
+                parts.append(hashlib.sha256(Path(module_path).read_bytes()).hexdigest())
+        except (OSError, TypeError):
             # Frozen builds may not ship readable sources: every new build
             # still changes the executable itself.
             try:
@@ -11038,6 +11547,7 @@ def _cached_chalk_cutout(
     *,
     chalk_color: tuple[int, int, int],
     text_priority: bool,
+    preserve_page_content: bool = False,
 ) -> Image.Image:
     """Chalk cutout of ``crop_image``, reused across exports of the same crop.
 
@@ -11045,17 +11555,26 @@ def _cached_chalk_cutout(
     chalk tone, the text-priority path, the library versions and this
     module's code. Any cache failure falls back to building the cutout.
     """
+    # Whole-page chalk preservation applies regardless of detected subject.
+    # Normalize before hashing so initial assets and later publishes agree.
+    text_priority = text_priority or preserve_page_content
     def build() -> Image.Image:
+        # This original paper reference is the same crop whose bytes are
+        # hashed below; no external reference can bypass the cache identity.
         return _extract_problem_cutout(
             _enhance_problem_crop(crop_image, text_priority=text_priority),
             chalk_color=chalk_color,
             text_priority=text_priority,
+            preserve_page_content=preserve_page_content,
+            paper_reference_image=crop_image,
         )
 
     try:
+        if not Path(crop_path).is_file():
+            return build()
         digest = hashlib.sha256()
         digest.update(_chalk_cutout_cache_salt().encode("ascii"))
-        digest.update(repr((tuple(int(c) for c in chalk_color), bool(text_priority), crop_image.mode, crop_image.size)).encode("ascii"))
+        digest.update(repr((tuple(int(c) for c in chalk_color), bool(text_priority), bool(preserve_page_content), crop_image.mode, crop_image.size)).encode("ascii"))
         digest.update(crop_image.tobytes())
         cache_path = Path(crop_path).parent / CHALK_CUTOUT_CACHE_DIRNAME / f"{digest.hexdigest()[:40]}.png"
     except OSError:
@@ -11102,10 +11621,19 @@ def _build_image_only_record_image(
     processing_step = _normalize_processing_step(
         entry.processing_step or placement.metadata.get("processing_step")
     )
+    preserve_page_content = _entry_is_whole_page(entry)
     text_priority = _problem_prefers_text_preservation(
         entry.subject,
         entry.source_path,
         entry.title,
+    ) or (
+        processing_step != PROCESSING_STEP_RECONSTRUCT
+        and _explicit_shared_passage_prefers_text(entry.subject, entry.passage_role, entry.passage_range)
+    ) or (processing_step == PROCESSING_STEP_CHALK and preserve_page_content)
+    preserve_tall_text = (
+        text_priority
+        and processing_step != PROCESSING_STEP_RECONSTRUCT
+        and len(entry.source_segments) > 1
     )
     chalk_color = _resolve_chalk_color(board_theme)
     chalk_math_media = _stage2_prefers_chalk_math_media(
@@ -11147,6 +11675,7 @@ def _build_image_only_record_image(
                 encoded_width, encoded_height = _v2_encoded_image_size(
                     (source_width, source_height),
                     (display_width, display_height),
+                    preserve_tall_text=preserve_tall_text,
                 )
             return _ImageOnlyRecordImage(
                 crop_path=crop_path,
@@ -11186,7 +11715,7 @@ def _build_image_only_record_image(
     elif (
         dark_board
         and processing_step == PROCESSING_STEP_CHALK
-        and (chalk_math_media or entry.preserve_media_mode == "off")
+        and (chalk_math_media or entry.preserve_media_mode == "off" or preserve_page_content)
         and not entry.board_render_preprocessed
     ):
         # Older sessions may already contain a Stage-2 board render whose
@@ -11199,6 +11728,7 @@ def _build_image_only_record_image(
             crop_image,
             chalk_color=chalk_color,
             text_priority=text_priority,
+            preserve_page_content=preserve_page_content,
         )
         if crop_format == CROP_FORMAT_V1 and board_image.size != crop_image.size:
             board_image = board_image.resize(crop_image.size, Image.Resampling.LANCZOS)
@@ -11211,6 +11741,7 @@ def _build_image_only_record_image(
             text_priority=text_priority,
             trusted_preprocessed_render=entry.board_render_preprocessed,
             preserve_source_content=processing_step != PROCESSING_STEP_RECONSTRUCT,
+            preserve_page_content=preserve_page_content,
         )
     else:
         board_image = crop_image
@@ -11230,7 +11761,10 @@ def _build_image_only_record_image(
         )
         display_width = base_display_width * scale_ratio
         display_height = base_display_height * scale_ratio
-        encoded_size = _v2_encoded_image_size(board_image.size, (display_width, display_height))
+        encoded_size = _v2_encoded_image_size(
+            board_image.size, (display_width, display_height),
+            preserve_tall_text=preserve_tall_text,
+        )
         if board_image.size != encoded_size:
             board_image = board_image.resize(encoded_size, Image.Resampling.LANCZOS)
     elif target_image_width_px > 0:
@@ -11333,7 +11867,18 @@ def _build_image_only_record_images(
             generate_record=generate_records,
         )
 
-    worker_count = _resolve_image_record_worker_count(len(placements))
+    largest_source_pixels = 0
+    if generate_records:
+        for placement in placements:
+            try:
+                # Read image headers only. Planning must remain allocation-free
+                # and an export must not decode all source pages up front.
+                with Image.open(placement.metadata["crop_path"]) as source:
+                    largest_source_pixels = max(largest_source_pixels, source.width * source.height)
+            except (OSError, KeyError, TypeError, ValueError):
+                # Let the normal builder report the original source error.
+                pass
+    worker_count = _resolve_image_record_worker_count(len(placements), source_pixels=largest_source_pixels)
     if worker_count <= 1:
         return [_build(placement) for placement in placements]
     with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -12314,7 +12859,15 @@ def run_problem_export(
     )
     shared_ocr_semaphore = threading.BoundedSemaphore(global_ocr_worker_limit)
 
+    stem_counts: dict[str, int] = {}
+    for source_path in source_paths:
+        stem = source_path.stem.casefold()
+        stem_counts[stem] = stem_counts.get(stem, 0) + 1
+
     def _build_source_pages(source_path: Path) -> tuple[list[PreparedPage], list[PageModel]]:
+        namespace = None
+        if stem_counts[source_path.stem.casefold()] > 1:
+            namespace = hashlib.sha256(str(source_path.resolve()).encode("utf-8")).hexdigest()[:16]
         return build_pages(
             source_path,
             subject=subject,
@@ -12329,6 +12882,7 @@ def run_problem_export(
             input_intent=resolved_input_intent,
             ocr_semaphore=shared_ocr_semaphore,
             global_ocr_worker_limit=global_ocr_worker_limit,
+            **({"page_id_namespace": namespace} if namespace else {}),
         )
 
     source_worker_count = resolve_source_build_worker_count(
@@ -12504,6 +13058,7 @@ def run_problem_export(
         pages=pages,
         template=template,
         input_intent=resolved_input_intent,
+        content_target=resolved_content_target,
         input_notes=input_notes,
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
@@ -12893,6 +13448,7 @@ def main() -> int:
         pages=pages,
         template=template,
         input_intent=resolved_input_intent,
+        content_target="shared-passages" if args.passages_only else "all",
         board_theme=resolved_board_theme,
         crop_format=resolved_crop_format,
     )

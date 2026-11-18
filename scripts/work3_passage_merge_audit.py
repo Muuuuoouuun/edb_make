@@ -3,14 +3,17 @@
 
 This is a Work 3 experiment.  It does not change the production export path.
 The synthetic fixture places a uniquely coloured body marker on each source
-page and separate coloured page-chrome rules around the joins.  The audit can
-therefore detect loss, duplication, reordering, failed chrome removal, an
-incorrect stitch height, and record-gap overlap without OCR.
+page, separate coloured bare guide rules, and ambiguous header/footer labels.
+Source originals define the required glyph pixels: uncertain labels must
+survive, while a separate bare-guide fixture must still lose its separators.
+The audit detects loss, duplication, reordering, an incorrect stitch height,
+and record-gap overlap without OCR.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -18,7 +21,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFont
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -47,6 +50,8 @@ STRICT_BODY_MARKERS = (
 )
 HEADER_CHROME = (202, 45, 184)
 FOOTER_CHROME = (230, 136, 24)
+HEADER_LABEL = (121, 47, 139)
+FOOTER_LABEL = (146, 78, 19)
 FULL_WIDTH_DISPLAY_PX = CANVAS_HEIGHT - 84.0 - 54.0
 
 
@@ -79,29 +84,31 @@ def _font(size: int) -> ImageFont.ImageFont:
             return ImageFont.truetype(candidate, size=size)
         except OSError:
             continue
-    return ImageFont.load_default()
+    return ImageFont.load_default(size=size)
 
 
 def _safe_name(value: str) -> str:
     return "".join(char if char.isalnum() or char in {"-", "_"} else "_" for char in value)
 
 
+def _exact_color_mask(image: Image.Image, color: tuple[int, int, int]) -> Image.Image:
+    rgb = image.convert("RGB")
+    channels = ImageChops.difference(rgb, Image.new("RGB", rgb.size, color)).split()
+    difference = ImageChops.lighter(ImageChops.lighter(channels[0], channels[1]), channels[2])
+    return difference.point([255] + [0] * 255)
+
+
 def _count_color(image: Image.Image, color: tuple[int, int, int]) -> int:
-    return sum(1 for pixel in image.convert("RGB").get_flattened_data() if pixel == color)
+    return _exact_color_mask(image, color).histogram()[255]
 
 
 def _color_centroid_y(image: Image.Image, color: tuple[int, int, int]) -> float | None:
-    rows: list[int] = []
-    rgb = image.convert("RGB")
-    pixels = rgb.load()
-    for y in range(rgb.height):
-        if any(pixels[x, y] == color for x in range(rgb.width)):
-            rows.append(y)
+    rows = [y for y, present in enumerate(_exact_color_mask(image, color).getprojection()[1]) if present]
     return sum(rows) / len(rows) if rows else None
 
 
 def build_synthetic_fragments(output_dir: Path) -> list[FragmentSpec]:
-    """Create three page fragments with body and removable chrome signals."""
+    """Create body markers and ambiguous labels beside separate guide rules."""
 
     output_dir.mkdir(parents=True, exist_ok=True)
     fragments: list[FragmentSpec] = []
@@ -113,7 +120,7 @@ def build_synthetic_fragments(output_dir: Path) -> list[FragmentSpec]:
         draw = ImageDraw.Draw(image)
 
         if index > 1:
-            draw.text((28, 10), f"PAGE {index} HEADER", fill=HEADER_CHROME, font=small_font)
+            draw.text((28, 10), f"PAGE {index} HEADER", fill=HEADER_LABEL, font=small_font)
             draw.rectangle((18, 38, width - 18, 44), fill=HEADER_CHROME)
 
         body_top = 108 if index > 1 else 72
@@ -136,7 +143,7 @@ def build_synthetic_fragments(output_dir: Path) -> list[FragmentSpec]:
 
         if index < len(BODY_MARKERS):
             draw.rectangle((18, 690, width - 18, 696), fill=FOOTER_CHROME)
-            draw.text((width // 2 - 34, 714), f"- {index} -", fill=FOOTER_CHROME, font=small_font)
+            draw.text((width // 2 - 34, 714), f"- {index} -", fill=FOOTER_LABEL, font=small_font)
 
         path = output_dir / f"fragment-page-{index}.png"
         image.save(path)
@@ -240,15 +247,8 @@ def _strict_matrix_images(
                 ),
                 fill=FOOTER_CHROME,
             )
-            draw.rectangle(
-                (
-                    width // 2 - max(6, round(18 * scale)),
-                    min(height - 8, footer_y + max(8, round(18 * scale))),
-                    width // 2 + max(6, round(18 * scale)),
-                    min(height - 4, footer_y + max(12, round(28 * scale))),
-                ),
-                fill=FOOTER_CHROME,
-            )
+            # No label follows this separator: this matrix specifically tests
+            # bare guide cleanup, independently from ambiguous glyph retention.
         images.append(image)
         specs.append(
             FragmentSpec(
@@ -267,7 +267,10 @@ def run_strict_audit_matrix() -> dict[str, Any]:
         for width in (360, 720, 1440):
             images, specs = _strict_matrix_images(fragment_count, width)
             stitched, prepared = _stitch_images(images)
-            audit = audit_stitched_image(specs, stitched, prepared)
+            audit = audit_stitched_image(
+                specs, stitched, prepared, source_images=images,
+                require_bare_guide_cleanup=True,
+            )
             cases.append(
                 {
                     "name": f"{fragment_count}-page-{width}px",
@@ -275,6 +278,7 @@ def run_strict_audit_matrix() -> dict[str, Any]:
                     "width_px": width,
                     "completeness_score": audit["completeness_score"],
                     "pass": audit["pass"],
+                    "checks": audit["checks"],
                 }
             )
 
@@ -325,23 +329,50 @@ def run_strict_audit_matrix() -> dict[str, Any]:
     }
 
 
+def _required_source_ink_signature(image: Image.Image) -> tuple[int, str]:
+    """Hash every required source pixel in position, preserving internal spacing.
+
+    The fixture's two exact separator colours alone are optional. All other
+    non-white pixels, including antialiased text and ambiguous labels, remain
+    required. Only blank outer rows may disappear during join preparation.
+    """
+    rgb = image.convert("RGB")
+    required = rgb.copy()
+    for color in (HEADER_CHROME, FOOTER_CHROME):
+        required.paste("white", mask=_exact_color_mask(rgb, color))
+    bounds = ImageChops.difference(required, Image.new("RGB", required.size, "white")).getbbox()
+    if bounds is None:
+        return (0, hashlib.sha256(b"").hexdigest())
+    required = required.crop((0, bounds[1], required.width, bounds[3]))
+    return (required.height, hashlib.sha256(required.tobytes()).hexdigest())
+
+
 def audit_stitched_image(
     fragments: Sequence[FragmentSpec],
     stitched: Image.Image,
     prepared: Sequence[Image.Image],
+    *,
+    source_images: Sequence[Image.Image],
+    require_bare_guide_cleanup: bool = False,
 ) -> dict[str, Any]:
     expected_height = sum(image.height for image in prepared)
     expected_height += PASSAGE_FRAGMENT_STITCH_GAP_PX * max(0, len(prepared) - 1)
     segment_matches: list[bool] = []
+    required_source_matches: list[bool] = []
     cursor = 0
-    for image in prepared:
+    for index, image in enumerate(prepared):
         candidate = stitched.crop((0, cursor, image.width, cursor + image.height))
         segment_matches.append(candidate.tobytes() == image.tobytes())
+        required_source_matches.append(
+            index < len(source_images)
+            and candidate.width == source_images[index].width
+            and _required_source_ink_signature(candidate) == _required_source_ink_signature(source_images[index])
+        )
         cursor += image.height + PASSAGE_FRAGMENT_STITCH_GAP_PX
 
     expected_body_counts = {
         fragment.fragment_id: _count_color(image, fragment.body_marker)
-        for fragment, image in zip(fragments, prepared)
+        for fragment, image in zip(fragments, source_images)
     }
     actual_body_counts = {
         fragment.fragment_id: _count_color(stitched, fragment.body_marker)
@@ -363,16 +394,28 @@ def audit_stitched_image(
         "header": _count_color(stitched, HEADER_CHROME),
         "footer": _count_color(stitched, FOOTER_CHROME),
     }
+    label_expected = {
+        name: sum(_count_color(image, color) for image in source_images)
+        for name, color in (("header", HEADER_LABEL), ("footer", FOOTER_LABEL))
+    }
+    label_actual = {
+        name: _count_color(stitched, color)
+        for name, color in (("header", HEADER_LABEL), ("footer", FOOTER_LABEL))
+    }
     no_loss_or_duplication = all(value == 1.0 for value in body_recall.values())
     checks = {
         "fragment_count": len(prepared) == len(fragments),
+        "original_source_count": len(source_images) == len(fragments),
         "source_order": order_ok,
         "segment_pixel_identity": all(segment_matches),
+        "original_required_ink_identity": all(required_source_matches),
         "no_body_loss_or_duplication": no_loss_or_duplication,
-        "page_chrome_removed": sum(chrome_counts.values()) == 0,
+        "ambiguous_glyphs_preserved": label_actual == label_expected,
         "configured_join_gap": 8 <= PASSAGE_FRAGMENT_STITCH_GAP_PX <= 20,
         "stitched_height_formula": stitched.height == expected_height,
     }
+    if require_bare_guide_cleanup:
+        checks["bare_guides_removed"] = sum(chrome_counts.values()) == 0
     return {
         "expected_fragment_ids": [fragment.fragment_id for fragment in fragments],
         "expected_source_pages": [fragment.page_number for fragment in fragments],
@@ -384,6 +427,11 @@ def audit_stitched_image(
         "body_marker_recall": body_recall,
         "body_marker_centroid_y": centroids,
         "remaining_page_chrome_pixels": chrome_counts,
+        "bare_guide_cleanup_required": require_bare_guide_cleanup,
+        "ambiguous_label_expected_pixels": label_expected,
+        "ambiguous_label_actual_pixels": label_actual,
+        "original_required_ink_matches": required_source_matches,
+        "required_ink_reference": "original-source-images-not-prepared-fragments",
         "checks": checks,
         "completeness_score": round(100.0 * sum(checks.values()) / len(checks), 1),
         "pass": all(checks.values()),
@@ -887,7 +935,11 @@ def run_synthetic_audit(
     fragments = build_synthetic_fragments(fragment_dir)
     merged_path = output_dir / "merged-current.png"
     stitched, prepared = stitch_fragments(fragments, merged_path)
-    audit = audit_stitched_image(fragments, stitched, prepared)
+    source_images: list[Image.Image] = []
+    for fragment in fragments:
+        with Image.open(fragment.path) as source:
+            source_images.append(source.convert("RGB"))
+    audit = audit_stitched_image(fragments, stitched, prepared, source_images=source_images)
     layouts = compare_layouts(
         prepared,
         display_width_px=display_width_px,
@@ -900,9 +952,9 @@ def run_synthetic_audit(
         max_record_height_pages=max_record_height_pages,
     )
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "experiment": "work3-cross-page-passage-merge-audit",
-        "fixture": "three-page-synthetic-passage-with-page-chrome",
+        "fixture": "three-page-synthetic-passage-with-ambiguous-labels-and-separate-bare-guide-matrix",
         "display_width_px": round(display_width_px, 1),
         "max_record_height_pages": max_record_height_pages,
         "merge_audit": audit,

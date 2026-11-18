@@ -51,12 +51,18 @@ class TestUiHomeRedesign(unittest.TestCase):
         assert.ok(text(steps).includes('한 행에 한 문제씩'));
         const methods = withClass(tree, 'home-method-cards')[0];
         assert.equal(methods.type, 'ul');
-        assert.equal(withClass(methods, 'home-method-card').length, 3);
+        assert.equal(withClass(methods, 'home-method-card').length, 4);
         assert.ok(text(methods).includes('sparkle'));
         assert.ok(text(methods).includes('fileText'));
         const scissors = nodes(methods).find(node => node.props?.children?.includes('pen'));
         assert.ok(text(methods).includes('pen'));
-        assert.equal(nodes(methods).filter(node => node.type === 'button').length, 3, 'method selection is explicit before upload');
+        assert.equal(nodes(methods).filter(node => node.type === 'button').length, 4, 'method selection is explicit before upload');
+        const choices = [];
+        const selectable = render({ splitMode: 'passage-only', setSplitMode: mode => choices.push(mode) });
+        const shared = withClass(selectable, 'home-method-card').find(node => text(node).includes('공통 지문만 추출'));
+        assert.equal(shared.props['aria-pressed'], true);
+        shared.props.onClick();
+        assert.deepEqual(choices, ['passage-only']);
         assert.deepEqual(calls, { upload: 0, sample: 0, restore: [], dropped: [] });
         """)
 

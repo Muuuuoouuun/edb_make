@@ -1,0 +1,369 @@
+{
+  "schema_version": 1,
+  "policy_id": "shared-fullpage-five-axis-v1",
+  "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+  "scope": "Shared printed passages used by multiple questions; listening directives and standalone reading questions excluded. Full-page includes all original content.",
+  "copyright": "Original papers and rendered full-page images are external evaluation inputs and are not distributed in this repository.",
+  "documents": [
+    {
+      "id": "kr-march-g10",
+      "language": "korean",
+      "cohort": "development",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260324/go1/kor_mun_16FRAZ68.pdf",
+      "sha256": "9da0e8ede1f16728a92727b0553449ae1b70357715e51d60f5987b091cf089ad",
+      "page_count": 16,
+      "expected_shared_ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          6
+        ],
+        [
+          11,
+          14
+        ],
+        [
+          15,
+          17
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          28,
+          30
+        ],
+        [
+          31,
+          35
+        ],
+        [
+          36,
+          39
+        ],
+        [
+          40,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "en-march-g10",
+      "language": "english",
+      "cohort": "development",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260324/go1/eng_mun_7JJDC391.pdf",
+      "sha256": "38c0d5e48106f5a111b7ffe0a0dd298a8d5a193b7673f122a1fe0592abda5397",
+      "page_count": 8,
+      "expected_shared_ranges": [
+        [
+          41,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "kr-june-g11",
+      "language": "korean",
+      "cohort": "holdout",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260604/go2/kor_mun_KM362181.pdf",
+      "sha256": "458b8502dfeb0697c5229f317ff4df9f81e66c11c0046750020c04ed29b74152",
+      "page_count": 16,
+      "expected_shared_ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          6
+        ],
+        [
+          11,
+          15
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          20,
+          23
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          28,
+          30
+        ],
+        [
+          31,
+          34
+        ],
+        [
+          35,
+          38
+        ],
+        [
+          39,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "en-june-g11",
+      "language": "english",
+      "cohort": "holdout",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260604/go2/eng_1_mun_XR3H2NW8.pdf",
+      "sha256": "b0ce005a1cb79f6e784281897623c0e8fc56097bc7aa7f8b3f3e753a1ce27f46",
+      "page_count": 8,
+      "expected_shared_ranges": [
+        [
+          41,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "kr-202603242",
+      "language": "korean",
+      "cohort": "development",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260324/go2/kor_main_mun_3STCZ2HV.pdf",
+      "sha256": "ea1c5f215237ee95ed26483543f5e6837a7486b09c6bb5e2b9cbac1a96d07a4d",
+      "page_count": 16,
+      "expected_shared_ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          6
+        ],
+        [
+          11,
+          13
+        ],
+        [
+          14,
+          17
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          28,
+          30
+        ],
+        [
+          31,
+          33
+        ],
+        [
+          34,
+          38
+        ],
+        [
+          39,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "en-202603242",
+      "language": "english",
+      "cohort": "development",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260324/go2/eng_mun_4H82B148.zip",
+      "sha256": "b3162fec34ed09dc028cb0defc6f31ec631848ed30f61341cd349f8e472b3662",
+      "page_count": 8,
+      "expected_shared_ranges": [
+        [
+          41,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "kr-202606041",
+      "language": "korean",
+      "cohort": "development",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260604/go1/kor_main_mun_PQV73MLT.pdf",
+      "sha256": "81232d51d888a76baf32194a78e546db4c8708be2d20bdac1019012bc29f1458",
+      "page_count": 16,
+      "expected_shared_ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          6
+        ],
+        [
+          11,
+          15
+        ],
+        [
+          16,
+          19
+        ],
+        [
+          20,
+          23
+        ],
+        [
+          24,
+          27
+        ],
+        [
+          28,
+          30
+        ],
+        [
+          31,
+          34
+        ],
+        [
+          35,
+          38
+        ],
+        [
+          39,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "en-202606041-1",
+      "language": "english",
+      "cohort": "development",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20260604/go1/eng_mun_HXSO1I3Y.zip",
+      "sha256": "0ee4701af2d11eff464eb1ccaa4bc04bb741c81c8c451ffac3a25f054e90c588",
+      "page_count": 8,
+      "expected_shared_ranges": [
+        [
+          41,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "kr-202509032",
+      "language": "korean",
+      "cohort": "holdout",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20250903/go2/kor_main_mun_ZKNW6ZSE_1.pdf",
+      "sha256": "1db333c3d907095e5a1a55c8edc04dcfd11203f0626c65b0354ec5b442d8c92e",
+      "page_count": 16,
+      "expected_shared_ranges": [
+        [
+          1,
+          3
+        ],
+        [
+          4,
+          7
+        ],
+        [
+          8,
+          10
+        ],
+        [
+          12,
+          13
+        ],
+        [
+          16,
+          21
+        ],
+        [
+          22,
+          26
+        ],
+        [
+          27,
+          30
+        ],
+        [
+          31,
+          33
+        ],
+        [
+          34,
+          37
+        ],
+        [
+          38,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    },
+    {
+      "id": "en-202509032-2",
+      "language": "english",
+      "cohort": "holdout",
+      "url": "https://wdown.ebsi.co.kr/W61001/01exam/20250903/go2/eng_mun_9745W339_1.zip",
+      "sha256": "adba3cf2fcf6551eab6a49d27310bd143c50082043dcc24250057b9a89b97049",
+      "page_count": 8,
+      "expected_shared_ranges": [
+        [
+          41,
+          42
+        ],
+        [
+          43,
+          45
+        ]
+      ]
+    }
+  ]
+}

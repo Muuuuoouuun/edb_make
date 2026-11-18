@@ -10084,7 +10084,7 @@ function HomeDashboard({
         <div className="home-methods" aria-labelledby="home-methods-title">
           <h3 id="home-methods-title">어떻게 넣을까요?</h3>
           <ul className="home-method-cards">
-            {[['recognize','문항 AI 인식','문제별로 자동 분리','sparkle'],['register','페이지 전체 넣기','한 페이지를 그대로','fileText'],['manual-split','수동 자르기','필요한 영역만 직접','pen']].map(([mode,label,hint,icon]) =>
+            {[['recognize','문항 AI 인식','문제별로 자동 분리','sparkle'],['register','페이지 전체 넣기','쪽번호까지 원본 유지','fileText'],['passage-only','공통 지문만 추출','공유 본문만 · 문제·선지 제외','fileText'],['manual-split','수동 자르기','필요한 영역만 직접','pen']].map(([mode,label,hint,icon]) =>
               <li key={mode}><button className="home-method-card" type="button" aria-pressed={splitMode === mode} onClick={() => setSplitMode?.(mode)}>
                 <span className="home-method-icon" aria-hidden="true">{Icon[icon]}</span><strong>{label}</strong><span>{hint}</span>
               </button></li>)}
@@ -10720,7 +10720,7 @@ function SidePanel({
   onEditOriginal, onDownloadItemImage, onRemoveItem,
   pendingFileCount, pendingImageOnly, splitMode, setSplitMode,
   keepAttachedFigures = false, setKeepAttachedFigures,
-  trimPageWhitespace = true, setTrimPageWhitespace,
+  trimPageWhitespace = false, setTrimPageWhitespace,
   onSplitItem, splitActiveId = null,
   focusMode = false, onToggleFocusPanel, emptyHome = false, homeUpdateOpen = false, onCloseHomeUpdate,
 }){
@@ -14404,6 +14404,12 @@ const SPLIT_MODE_OPTIONS = [
     icon: 'pagePng',
   },
   {
+    value: 'passage-only',
+    label: '공통 지문만 추출',
+    description: '여러 문항이 공유하는 본문만 추출 · 문제·선지 제외',
+    icon: 'fileText',
+  },
+  {
     value: 'manual-split',
     label: '수동 자르기',
     description: '원본 위에 영역을 그려 자른 뒤 칠판으로',
@@ -17334,9 +17340,9 @@ function App(){
   const [aiEnabled, setAiEnabled] = useState(true);
   const [aiToggleBusy, setAiToggleBusy] = useState(false);
   const [keepAttachedFigures, setKeepAttachedFigures] = useStoredPreference('edb-keep-attached-figures-background-v2', false, isStoredBoolean);
-  const [trimPageWhitespace, setTrimPageWhitespace] = useStoredPreference(TRIM_PAGE_WHITESPACE_KEY, true, isStoredBoolean);
+  const [trimPageWhitespace, setTrimPageWhitespace] = useStoredPreference(TRIM_PAGE_WHITESPACE_KEY, false, isStoredBoolean);
   const [splitMode, setSplitModeState] = useState(readStoredSplitMode);
-  const inputIntent = normalizeSplitMode(splitMode) === 'recognize' ? 'multi-problem' : 'page-as-is';
+  const inputIntent = ['recognize', 'passage-only'].includes(normalizeSplitMode(splitMode)) ? 'multi-problem' : 'page-as-is';
   const setSplitMode = useCallback((value) => {
     const next = normalizeSplitMode(value);
     setSplitModeState(next);

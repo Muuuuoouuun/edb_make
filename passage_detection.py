@@ -53,6 +53,14 @@ _KOREAN_LISTENING_SHARED_RE = re.compile(
     r"(?:\ubb3c\uc74c|\ubb38\ud56d|\ubb38\uc81c).{0,16}\ub2f5",
     re.IGNORECASE,
 )
+_ENGLISH_LISTENING_TASK_RE = re.compile(r"\b(?:listen(?:ing)?|hear)\b", re.IGNORECASE)
+_PRINTED_READING_MATERIAL_RE = re.compile(
+    rf"(?:{_KOREAN_MATERIAL_NOUNS})\s*(?:을|를).{{0,8}}(?:읽|보|살펴|참고)|"
+    r"(?:read(?:\s+and\s+listen(?:\s+to)?)?|refer\s+to|look\s+at)\s+(?:the\s+)?(?:following\s+)?"
+    r"(?:passage|text|article|conversation|dialogue|speech|chart|graph|following)",
+    re.IGNORECASE,
+)
+
 _KOREAN_INDEPENDENT_GROUP_TASK_RE = re.compile(
     r"(?:"
     r"\ube48\uce78.{0,24}\ub4e4\uc5b4\uac08|"
@@ -81,8 +89,10 @@ def shared_passage_cue_language(value: Any) -> str | None:
     text = normalize_passage_header_text(value)
     if not text:
         return None
-    if _KOREAN_LISTENING_SHARED_RE.search(text):
-        return "ko"
+    if (_KOREAN_LISTENING_SHARED_RE.search(text) or _ENGLISH_LISTENING_TASK_RE.search(text)) and not _PRINTED_READING_MATERIAL_RE.search(text):
+        # A shared audio instruction is not a printed reading passage. Keep
+        # mixed reading/material+listening tasks when printed context is named.
+        return None
     if _KOREAN_INDEPENDENT_GROUP_TASK_RE.search(text):
         return None
     if _KOREAN_MATERIAL_RE.search(text) and _KOREAN_TASK_RE.search(text):
