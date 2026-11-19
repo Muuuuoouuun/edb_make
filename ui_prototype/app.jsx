@@ -3572,13 +3572,14 @@ function TopBar({
           onClick={onUndo}
           disabled={pageReviewActive || operationBusy || !canUndo}
         >{Icon.undo}</button>}
-        {canRedo && <button
+        {/* Always beside undo, only disabled: mounting it late slid undo out from under the pointer. */}
+        {(hasMaterials || canUndo || canRedo) && <button
           className="btn ghost icon"
-          title={`다시 실행 (${PRIMARY_MODIFIER_LABEL}+Shift+Z)`}
-          data-tooltip="되돌린 편집 다시 실행"
+          title={canRedo ? `다시 실행 (${PRIMARY_MODIFIER_LABEL}+Shift+Z)` : '다시 실행할 변경이 없습니다'}
+          data-tooltip={canRedo ? '되돌린 편집 다시 실행' : '다시 실행할 변경이 없습니다'}
           aria-label="다시 실행"
           onClick={onRedo}
-          disabled={pageReviewActive || operationBusy}
+          disabled={pageReviewActive || operationBusy || !canRedo}
         >{Icon.redo}</button>}
         <ToolbarActionMenu
           id="topbar-more"
@@ -5467,7 +5468,8 @@ function ReviewStage({
       if (evt.key !== 'Delete' && evt.key !== 'Backspace') return;
       if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
       if (isEditableKeyboardTarget(evt.target)) return;
-      if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
+      // Popovers (원본 파일) and ⋯ menus are not modal, but Delete there never means 제외.
+      if (evt.target?.closest?.('dialog[open], [role="dialog"], [role="menu"]')) return;
       evt.preventDefault();
       evt.stopPropagation();
       void doExclude();
@@ -9599,6 +9601,7 @@ function BoardStage({
               <div className="manual-split-shortcut-guide board-shortcut-guide" role="region" aria-label="칠판 단축키 목록">
                 <span><kbd>F2</kbd> 수업 이름 바꾸기</span>
                 <span><kbd>{PRIMARY_MODIFIER_LABEL} Z</kbd> 실행 취소</span>
+                <span><kbd>{PRIMARY_MODIFIER_LABEL} Shift Z</kbd> 다시 실행</span>
                 <span><kbd>{ALTERNATE_MODIFIER_LABEL} 1·2·3</kbd> 오른쪽 편집 · 크기·배치 · 설정</span>
                 <span><kbd>{ALTERNATE_MODIFIER_LABEL} 드래그</kbd> 칠판에서 순서 이동</span>
                 <span><kbd>Esc</kbd> 칠판 드래그 취소</span>
@@ -10775,7 +10778,7 @@ function StorageCleanupCard({ disabled = false }){
         disabled={disabled || status === 'loading' || status === 'busy' || !(bytes > 0)}>
         {status === 'busy' ? '정리 중…' : '오래된 작업 파일 정리'}
       </button>
-      {message && <p className={`runtime-note ${status === 'error' ? 'warn' : ''}`} role="status">{message}</p>}
+      <div role="status" aria-live="polite" aria-atomic="true">{message && <p className={`runtime-note ${status === 'error' ? 'warn' : ''}`}>{message}</p>}</div>
       <p className="bug-report-privacy">완성한 .edb 파일과 최근 수업 목록의 수업 자료는 지우지 않아요.</p>
     </div>
   );
@@ -13202,7 +13205,7 @@ function LoadingOverlay({ label, hint, startedAt, stuck = null }){
         <div className="loading-card" role="alert">
           <div className="loading-label">{stuck.label}</div>
           <div className="loading-hint">{stuck.hint}</div>
-          <button className="btn primary" type="button" disabled={checking} onClick={async () => {
+          <button className="btn primary" type="button" autoFocus disabled={checking} onClick={async () => {
             setChecking(true);
             try { await stuck.onAction(); } finally { setChecking(false); }
           }}>{checking ? '확인 중…' : stuck.actionLabel}</button>
@@ -14949,6 +14952,7 @@ const RISK_FLAG_META = {
   fallback_grouping: '문항 경계 추정',
   hwp_oversegmentation: 'HWP 과분할',
   hwp_problem_count_mismatch: 'HWP 문항 수 차이',
+  hwp_text_fallback_problem: 'HWP 텍스트로 대체',
   large_block_dominance: '큰 영역 하나로 인식됨',
   marker_document_continuation: '지문·자료 분리',
   needs_review: '검토 필요',
@@ -17760,6 +17764,22 @@ async function postEnhanceImage(args, options = {}){
 
 // AI jobs do not hold up board edits, so an edit made meanwhile rejects the AI result.
 const AI_RESULT_BOARD_CHANGED_MESSAGE = '작업하는 동안 칠판이 바뀌어서 결과를 적용하지 않았어요. 다시 실행해 주세요.';
+// The pre-job save was refused while the board had unsaved edits: they stay on screen, unsaved,
+// and 수업 배치 변경 저장 merges them into the newer lesson (postRestoreBoardLayoutWithConflictRetry).
+const AI_UNSAVED_BOARD_CONFLICT_MESSAGE = '그사이 수업이 바뀌어서 시작하지 않았어요. 배치는 그대로 두었으니 수업 배치 변경 저장을 누른 뒤 다시 실행해 주세요.';
+
+// A conflict reply carries the saved lesson. Return it only when this screen was behind it
+// (another window saved, or a cancelled job still saved); otherwise every re-run hits the same
+// conflict. A screen that saved during the job already holds that revision and keeps its board.
+function savedLessonNewerThanScreen(error){
+  const session = error?.code === 'session_conflict' ? error.latestSession : null;
+  if (!Array.isArray(session?.problems)) return null;
+  const payload = { session, sessionRevision: error.sessionRevision, sessionEpoch: error.sessionEpoch };
+  if (sessionResponseRevisionIsStale(payload)) return null;
+  if (payload.sessionEpoch === latestServerSessionEpoch && payload.sessionRevision === latestServerSessionRevision) return null;
+  captureSessionRevision(payload);
+  return session;
+}
 
 async function postRestore(snapshot){
   const resp = await fetch('/api/session/restore', {
@@ -17987,9 +18007,10 @@ function App(){
   const restoreInFlightRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const publishInFlightRef = useRef(false);
-  // Board signature of the EDB built in this run. A reopened or merged lesson keeps an older
-  // build's summary, so the top bar opens a build only while the board still matches it.
-  const builtBoardRef = useRef('');
+  // The session object the EDB in this run was built from. Refresh, undo, redo and a reopened
+  // lesson restore a copy that keeps the old build's summary even after image-only changes, so
+  // the top bar opens a build only while this exact session is shown.
+  const builtBoardRef = useRef(null);
   const publishPlanRequestRef = useRef(0);
   const downloadInFlightRef = useRef(false);
   const bugReportSequenceRef = useRef(0);
@@ -17999,6 +18020,7 @@ function App(){
   const historyStackRef = useRef([]);
   const placementGapHistoryRef = useRef([]);
   const undoPlacementGapRef = useRef(null);
+  const undoMutationRef = useRef(null);
   const [placementGapUndoCount, setPlacementGapUndoCount] = useState(0);
   // Unsaved board edits (move, size, processing step) undo locally first.
   const localEditHistoryRef = useRef({ stack: [], burstKey: '', burstAt: 0 });
@@ -18007,6 +18029,8 @@ function App(){
   itemsRef.current = items;
   const layoutGapModeRef = useRef(layoutGapMode);
   layoutGapModeRef.current = layoutGapMode;
+  const publishedRef = useRef(published);
+  publishedRef.current = published;
   // Redo entries belong to the exact session and undo history the last
   // undo/redo produced; any other change to either makes them stale.
   const redoStackRef = useRef([]);
@@ -18022,7 +18046,8 @@ function App(){
     const entry = top?.items === itemsRef.current && top.boardColumns === boardColumnsRef.current
       && top.layoutGapMode === layoutGapModeRef.current
       ? top
-      : { items: itemsRef.current, boardColumns: boardColumnsRef.current, layoutGapMode: layoutGapModeRef.current };
+      : { items: itemsRef.current, boardColumns: boardColumnsRef.current, layoutGapMode: layoutGapModeRef.current,
+        published: publishedRef.current };
     if (pushUndoEntry(history, entry, burstKey)) setLocalEditUndoCount(history.stack.length);
     redoStackRef.current = [];
     redoAnchorRef.current = null;
@@ -18143,7 +18168,7 @@ function App(){
     jobDismissTimersRef.current.forEach(timer => window.clearTimeout(timer));
     jobDismissTimersRef.current.clear();
   }, []);
-  const canUndo = (historyStack.length > 0 || localEditUndoCount > 0) && !mutating && !reviewEditorActive;
+  const canUndo = (historyStack.length > 0 || localEditUndoCount > 0) && !mutating && !loading && !reviewEditorActive;
 
   const activeIndex = items.findIndex(i => i.id === activeId);
   const active = activeIndex >= 0 ? items[activeIndex] : null;
@@ -18197,7 +18222,7 @@ function App(){
   );
   const redoAnchor = redoAnchorRef.current;
   const canRedo = redoCount > 0 && redoAnchor?.session === session && redoAnchor?.history === historyStack
-    && !mutating && !reviewEditorActive && !hasRunningBackgroundJobs && !sessionEditState.dirty;
+    && !mutating && !loading && !reviewEditorActive && !hasRunningBackgroundJobs && !sessionEditState.dirty;
   const updateInstallBlockedReason = reviewEditorActive || recognitionReview
     ? '업데이트 전에 현재 영역 편집을 적용하거나 취소해 주세요.'
     : sessionEditState.dirty
@@ -18949,6 +18974,10 @@ function App(){
       showToast('이미 인식 작업을 진행 중입니다');
       return;
     }
+    if (hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
+      return;
+    }
     sessionRecognitionInFlightRef.current = true;
     sessionRecognitionGuardUntilRef.current = Date.now() + 1500;
     const pageIds = listUnique((args?.pageIds || args?.page_ids || []).filter(Boolean));
@@ -18969,8 +18998,16 @@ function App(){
         ? '선택한 원본 영역에서 경계를 다시 찾습니다. 완료되면 바로 반영합니다.'
         : '완료되면 바로 반영합니다. 그동안 문항 수정은 잠시 멈춥니다.',
     });
+    const boardUnsaved = sessionEditorDraftSignature(snapshotBefore) !== sessionEditorDraftSignature(session);
+    let boardSaved = false;
     try {
-      await postRestore(snapshotBefore);
+      // Like 고화질: this save is the saved lesson even if recognition stops.
+      const saved = await postRestore(snapshotBefore);
+      boardSaved = true;
+      if (saved && boardUnsaved) {
+        setHistoryStack(prev => appendBoundedHistory(prev, session, UNDO_HISTORY_LIMIT));
+        setSession(saved);
+      }
       const result = await postRetryAi(args, { signal: job.controller.signal, preview: true, jobId: job.id });
       if (job.controller.signal.aborted) return;
       const next = result.session;
@@ -19001,17 +19038,22 @@ function App(){
         return;
       }
       const boardChanged = e?.code === 'session_conflict';
+      // A refused pre-job save leaves the edits unsaved: keep them rather than take the saved lesson.
+      const unsavedBoardKept = boardChanged && !boardSaved && boardUnsaved;
+      const savedLesson = boardChanged && !unsavedBoardKept && savedLessonNewerThanScreen(e);
+      if (savedLesson) adoptMutatedSession(savedLesson, snapshotBefore);
+      const conflictMessage = boardChanged && (unsavedBoardKept ? AI_UNSAVED_BOARD_CONFLICT_MESSAGE : AI_RESULT_BOARD_CHANGED_MESSAGE);
       settleBackgroundJob(job.id, {
         status: 'failed',
         label: 'AI 인식 실패',
-        hint: boardChanged ? AI_RESULT_BOARD_CHANGED_MESSAGE : e.message,
+        hint: conflictMessage || e.message,
       }, 5000);
-      if (boardChanged) showToast(AI_RESULT_BOARD_CHANGED_MESSAGE, 'error');
+      if (conflictMessage) showToast(conflictMessage, 'error');
       else showSimpleErrorToast(e, 'AI 재인식 실패');
     } finally {
       sessionRecognitionInFlightRef.current = false;
     }
-  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, showSimpleErrorToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, hasRunningBackgroundJobs]);
 
   const recognizeCurrentSession = useCallback(async () => {
     if (!session || !Array.isArray(session.pages) || session.pages.length === 0) {
@@ -19041,7 +19083,7 @@ function App(){
     }
     if (
       mutatingRef.current
-      || hasRunningSessionRecognition
+      || hasRunningBackgroundJobs
       || sessionRecognitionInFlightRef.current
       || Date.now() < sessionRecognitionGuardUntilRef.current
     ) {
@@ -19113,7 +19155,7 @@ function App(){
   }, [
     session,
     usingMock,
-    hasRunningSessionRecognition,
+    hasRunningBackgroundJobs,
     fileName,
     aiEnabled,
     reusableSessionSourcePaths,
@@ -19243,7 +19285,8 @@ function App(){
       setLayoutGapModeState(entry.layoutGapMode);
       setItems(entry.items);
       setLocalEditUndoCount(localEditHistoryRef.current.stack.length);
-      setPublished(false);
+      // Back on the board as it was, so is its build: 'ClassIn에서 열기' returns without a rebuild.
+      setPublished(Boolean(entry.published));
       showToast('마지막 변경을 되돌렸어요');
       return true;
     }
@@ -19342,7 +19385,8 @@ function App(){
       const key = manualSplitShortcutKey(evt);
       const redo = (key === 'z' && evt.shiftKey) || (key === 'y' && evt.ctrlKey && !evt.shiftKey);
       if (!redo && !(key === 'z' && !evt.shiftKey)) return;
-      if (isEditableKeyboardTarget(evt.target)) return;
+      // A slider keeps focus after a drag but has no undo of its own.
+      if (isEditableKeyboardTarget(evt.target) && evt.target.type !== 'range') return;
       if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
       if (!(redo ? canRedo : canUndo)) return;
       evt.preventDefault();
@@ -19396,9 +19440,9 @@ function App(){
     }, 1000);
     return () => window.clearTimeout(timer);
   }, [session, items, fileName, boardColumns, layoutGapMode, sessionEditState.dirty, sessionEditState.busy]);
-  // Once the saved lesson has loaded, offer back a draft made on exactly it.
+  // Once a saved lesson is on screen (the app can start empty), offer back a draft made on exactly it.
   useEffect(() => {
-    if (!initialSessionLoaded || boardDraftCheckedRef.current) return;
+    if (!initialSessionLoaded || boardDraftCheckedRef.current || !session) return;
     boardDraftCheckedRef.current = true;
     let restore = null;
     try {
@@ -19489,6 +19533,10 @@ function App(){
       showToast('변경할 자료가 없습니다. 먼저 파일을 추가해 주세요');
       return;
     }
+    if (hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
+      return;
+    }
     const mode = ['auto', 'preserve', 'ai'].includes(options?.mode) ? options.mode : 'auto';
     if (mode === 'ai' && !aiEnabled) {
       showToast('AI 기능이 꺼져 있습니다. 설정에서 AI를 켜 주세요');
@@ -19514,11 +19562,19 @@ function App(){
         ? '원본 글자 형태를 유지하며 이 컴퓨터에서 확대하고 배경을 투명하게 만듭니다.'
         : '글자 보존형 또는 선택형 AI 재구성 방식을 사용합니다.',
     });
+    const boardUnsaved = sessionEditorDraftSignature(snapshotBefore) !== sessionEditorDraftSignature(session);
+    let boardSaved = false;
     try {
       const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
       // The server enhances its saved lesson; save unsaved board edits first
-      // so the result does not silently replace them.
-      await postRestore(snapshotBefore);
+      // so the result does not silently replace them. That save is the saved
+      // lesson from now on, even when the job is cancelled or fails.
+      const saved = await postRestore(snapshotBefore);
+      boardSaved = true;
+      if (saved && boardUnsaved) {
+        setHistoryStack(prev => appendBoundedHistory(prev, session, UNDO_HISTORY_LIMIT));
+        setSession(saved);
+      }
       const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal, jobId: job.id });
       if (job.controller.signal.aborted) return;
       const next = result.session;
@@ -19547,15 +19603,20 @@ function App(){
         return;
       }
       const boardChanged = e?.code === 'session_conflict';
+      // A refused pre-job save leaves the edits unsaved: keep them rather than take the saved lesson.
+      const unsavedBoardKept = boardChanged && !boardSaved && boardUnsaved;
+      const savedLesson = boardChanged && !unsavedBoardKept && savedLessonNewerThanScreen(e);
+      if (savedLesson) adoptMutatedSession(savedLesson, snapshotBefore);
+      const conflictMessage = boardChanged && (unsavedBoardKept ? AI_UNSAVED_BOARD_CONFLICT_MESSAGE : AI_RESULT_BOARD_CHANGED_MESSAGE);
       settleBackgroundJob(job.id, {
         status: 'failed',
         label: '고화질 처리 실패',
-        hint: boardChanged ? AI_RESULT_BOARD_CHANGED_MESSAGE : e.message,
+        hint: conflictMessage || e.message,
       }, 5000);
-      if (boardChanged) showToast(AI_RESULT_BOARD_CHANGED_MESSAGE, 'error');
+      if (conflictMessage) showToast(conflictMessage, 'error');
       else showSimpleErrorToast(e, '고화질 처리 실패');
     }
-  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, showToast]);
+  }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, showToast, hasRunningBackgroundJobs]);
 
   // keepHistory = 새 수업: leave the open lesson in 최근 수업 instead of wiping the list.
   const resetSession = useCallback(async ({ keepHistory = false } = {}) => {
@@ -19902,6 +19963,10 @@ function App(){
       showToast('이미 자료를 처리하고 있습니다');
       return;
     }
+    if (hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 자료를 처리해 주세요');
+      return;
+    }
     const requestedKeySet = requestedKeys ? new Set(requestedKeys) : null;
     const files = pendingFilesRef.current.filter(file => targetKey
       ? fileQueueKey(file) === targetKey
@@ -20075,7 +20140,7 @@ function App(){
       setLoading(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [keepAttachedFigures, trimPageWhitespace, initialSessionLoaded, operationRecovery, pendingFiles, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
+  }, [keepAttachedFigures, trimPageWhitespace, initialSessionLoaded, operationRecovery, pendingFiles, hasRunningBackgroundJobs, aiEnabled, userSettings, session, usingMock, items, fileName, boardColumns, layoutGapMode, inputIntent, applySession, startBackgroundJob, settleBackgroundJob, refreshSessionHistory, setPendingFilesTracked, queueRequestIsCurrent, activateOperationRecovery, clearOperationRecovery, showToast]);
 
   // Recognition results are applied as soon as they arrive (no confirm
   // popup). Ctrl+Z restores the previous board when one existed.
@@ -20380,6 +20445,10 @@ function App(){
       showToast('이전 변경을 적용하는 중입니다');
       return false;
     }
+    if (hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
+      return false;
+    }
     let snapshotBefore = cloneSession(session);
     const nextItems = reflowItemsForBoardOrder(
       items,
@@ -20451,6 +20520,11 @@ function App(){
   const reorder = (fromId, toId, dropPosition = 'before', options = {}) => {
     if (mutatingRef.current) {
       showToast('이전 변경을 적용하는 중입니다');
+      return false;
+    }
+    // Like mutateSession: a save now would make the running job's result be rejected.
+    if (session && hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
       return false;
     }
     const requestedSourceIds = Array.isArray(options?.sourceIds) && options.sourceIds.length
@@ -20558,7 +20632,7 @@ function App(){
       showActionToast(
         `${problemIds.length}개 문제를 삭제했어요`,
         '실행 취소',
-        () => { void undoMutation(); }
+        () => { void undoMutationRef.current?.(); }
       );
       return true;
     }
@@ -20596,6 +20670,9 @@ function App(){
     );
     return true;
   };
+  // The delete toast's 실행 취소 runs after later renders: use the current undo,
+  // whose redo target is the board after the delete, not the one before it.
+  undoMutationRef.current = undoMutation;
   const addMockSample = () => {
     if (session) {
       showToast('실제 수업에는 샘플 자료를 넣지 않아요');
@@ -20696,6 +20773,8 @@ function App(){
         status: 'passed',
         notes: '',
       });
+      // 검수 완료 only marks the build: the board this run built stays the one it opens.
+      if (builtBoardRef.current === session) builtBoardRef.current = updated;
       setSession(updated);
       refreshSessionHistory();
       setPublished(true);
@@ -20718,6 +20797,10 @@ function App(){
     }
     if (hasRunningQueueRecognition || confirmingRecognition || queueRegistrationInFlightRef.current || pendingFiles.length) {
       showToast('자료 처리가 끝난 뒤 제작할 수 있습니다');
+      return;
+    }
+    if (hasRunningBackgroundJobs) {
+      showToast('진행 중인 작업이 끝난 뒤 제작할 수 있습니다');
       return;
     }
     if (publishInFlightRef.current) {
@@ -20871,7 +20954,8 @@ function App(){
           const markedSession = applyPublishPreflightIssuesToSession(sessionForPublish, blockedPublish);
           const blockedTarget = publishBlockedTarget(blockedPublish);
           if (markedSession && markedSession !== sessionForPublish) {
-            setSession(markedSession);
+            // The server saved nothing: flag the saved lesson so unsaved board edits stay unsaved.
+            setSession(applyPublishPreflightIssuesToSession(session, blockedPublish));
             setItems((markedSession.problems || []).map((problem, idx) => mapProblemToItem(problem, idx, markedSession)));
           }
           setReviewFocus(blockedTarget.reviewFocus);
@@ -20915,7 +20999,7 @@ function App(){
       const publishSummary = json.publishSummary || json.publish_summary || json.session?.publishSummary || json.session?.publish_summary;
       const normalizedPublishSummary = normalizePublishSummary(publishSummary, json.session);
       setPublished(true);
-      builtBoardRef.current = sessionEditorDraftSignature(json.session);
+      builtBoardRef.current = json.session;
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
       if (!normalizedPublishSummary?.canDownload) {
         const downloadError = new Error('EDB 제작본은 저장됐지만 다운로드할 파일을 찾지 못했습니다.');
@@ -21251,8 +21335,8 @@ function App(){
     || backgroundJobs.filter(job => job.status === 'running').map(job => job.label).join(', ');
 
   // Open only a build made from this exact board in this run; split builds open their folder.
-  const latestPublishSummary = published && !sessionEditState.dirty && builtBoardRef.current
-    && builtBoardRef.current === sessionEditorDraftSignature(session) ? sessionPublishSummary(session) : null;
+  const latestPublishSummary = published && !sessionEditState.dirty && session && builtBoardRef.current === session
+    ? sessionPublishSummary(session) : null;
   const openPublishedFolder = Boolean(latestPublishSummary?.edbSplit && latestPublishSummary.canOpenOutputDir);
   const openLatestPublish = openPublishedFolder ? () => openOutputFolder(latestPublishSummary.outputDir)
     : latestPublishSummary?.canOpenEdbFile ? () => openPublishedEdb(latestPublishSummary) : null;

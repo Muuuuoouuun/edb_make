@@ -9262,8 +9262,8 @@ def _session_problem_review_confirmed(problem: dict[str, Any]) -> bool:
     """True while the teacher's 확인 still covers this exact crop.
 
     ``_mutate_confirm`` records the image path and bbox it confirmed. Any later
-    re-crop, enhance or AI regeneration changes one of them, which makes the
-    record stale and re-arms the publish checks.
+    re-crop or AI 재인식 changes one of them, which makes the record stale and
+    re-arms the publish checks (고화질 of the same crop moves the record along).
     """
     if not problem.get("reviewConfirmedImagePath"):
         return False

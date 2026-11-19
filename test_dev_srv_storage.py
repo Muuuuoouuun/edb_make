@@ -402,8 +402,11 @@ class TestStorageSettingsUi(unittest.TestCase):
         });
         const render = () => { cursor = 0; return sandbox.StorageCleanupCard({}); };
         const button = () => walk(render()).find(node => node.type === 'button');
+        const region = () => walk(render()).filter(node => node.props.role === 'status');
         (async () => {
           assert.match(text(render()), /확인하는 중/);
+          assert.equal(region().length, 1, 'the result region is mounted before any result');
+          assert.equal(text(region()[0]), '');
           assert.equal(button().props.disabled, true);
           effects[0](); await flush(); await flush();
           assert.deepEqual(requests, [['/api/runtime/artifacts/cleanup', { dryRun: true }]]);
@@ -419,6 +422,7 @@ class TestStorageSettingsUi(unittest.TestCase):
           button().props.onClick(); await flush(); await flush(); await flush();
           assert.deepEqual(requests.slice(1).map(([, body]) => body), [{ dryRun: false }, { dryRun: true }]);
           assert.match(text(render()), /2\.0MB를 정리했어요/);
+          assert.match(text(region()[0]), /2\.0MB를 정리했어요/);
           assert.match(text(render()), /정리할 오래된 작업 파일이 없어요/);
           assert.equal(button().props.disabled, true);
 
@@ -427,6 +431,7 @@ class TestStorageSettingsUi(unittest.TestCase):
           button().props.onClick(); await flush(); await flush(); await flush();
           assert.deepEqual(requests.slice(3).map(([, body]) => body), [{ dryRun: false }, { dryRun: true }]);
           assert.match(text(render()), /다른 프로그램이 쓰고 있는 파일은 지우지 못했어요/);
+          assert.match(text(region()[0]), /다른 프로그램이 쓰고 있는 파일은 지우지 못했어요/);
           assert.match(text(render()), /3KB 있어요/);
           assert.ok(walk(render()).some(node => String(node.props.className || '').includes('warn')));
           assert.equal(button().props.disabled, false, 'the teacher can try again');

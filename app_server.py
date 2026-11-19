@@ -86,7 +86,7 @@ MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
 MANUAL_PASSAGE_CENTER_DIVIDER_MIN_RATIO = 0.30
 MANUAL_PASSAGE_CENTER_DIVIDER_MAX_RATIO = 0.70
 PUBLISH_RECOVERY_STEPS = [
-    "같은 작업에서 다시 제작해 주세요. 편집 내용은 최근 작업에 보관됩니다.",
+    "같은 작업에서 다시 제작해 주세요. 편집 내용은 최근 수업 목록에 보관됩니다.",
     "계속 실패하면 PNG 묶음으로 먼저 보관한 뒤 오류 정보를 복사해 신고해 주세요.",
 ]
 
@@ -1980,10 +1980,15 @@ def _bug_report_diagnostics() -> tuple[dict[str, Path], dict[str, Any]]:
             updateHelperProcess=newest / "update-helper-process.log",
             updateInstall=newest / "update-install.log",
         )
+    try:
+        hangul_notes = cached_runtime_diagnostics()["hangul"]["technicalNotes"]
+    except Exception:  # a broken converter probe must never block the report itself
+        hangul_notes = None
     return logs, {
         "arch": _app_arch_key(),
         "dataFolderFallback": is_frozen_app() and BASE_DIR != default_frozen_app_home(),
         "lastUpdateFailed": update_failed,
+        "hangulNotes": hangul_notes,
     }
 
 
@@ -2082,6 +2087,7 @@ def _download_update_artifact(
             "업데이트 파일을 다운로드하지 못했습니다. 인터넷 연결과 배포 서버 상태를 확인해 주세요.",
             status=HTTPStatus.BAD_GATEWAY,
             recovery_steps=["인터넷 연결을 확인한 뒤 다시 시도해 주세요."],
+            detail=f"{type(exc).__name__}: {exc}",
         ) from exc
     finally:
         # The checksum and helper launch follow; a later attempt must not start from a stale 100%.
@@ -2493,24 +2499,22 @@ def configure_app_logging(log_file: str | Path | None = None) -> None:
     global _app_log_stream
     target = Path(log_file).expanduser() if log_file else APP_LOG_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if target.stat().st_size > 5 * 1024 * 1024:
-            os.replace(target, target.with_name(target.name + ".1"))
-    except OSError:
-        pass
     stream = target.open("a", encoding="utf-8", buffering=1)
     sys.stdout = stream
     sys.stderr = stream
     _app_log_stream = stream
+    # In place, never renamed: a macOS Dock relaunch runs this while the serving copy still writes the file.
+    _rotate_app_log_if_large()
     print(f"\n[{datetime.now().isoformat(timespec='seconds')}] {APP_NAME} starting")
 
 
 def _rotate_app_log_if_large() -> None:
     """Copy a too-large app.log to app.log.1 and empty it, keeping the open stream.
 
-    print() and faulthandler write through the one handle opened at launch, and
-    Windows cannot rename a file that is open, so the file is copied and then
-    truncated. The stream is in append mode, so later writes start at the new end.
+    print() and faulthandler write through the one handle opened at launch.
+    Windows cannot rename an open file, and a macOS relaunch may run while the
+    serving copy writes it, so the file is copied and then truncated. The stream
+    is in append mode, so later writes start at the new end.
     """
     # ponytail: lines written between the copy and the truncate are lost; fine for a diagnostic log.
     stream = _app_log_stream
@@ -5726,8 +5730,9 @@ def cleanup_runtime_artifacts(
     """Plan or remove old, unreferenced runtime artifacts.
 
     The default is intentionally non-destructive. Files referenced by the
-    active session or any retained history snapshot are never selected, and
-    neither are finished outputs (.edb/.zip, published/, the exports root).
+    active session or any retained history snapshot are never selected, nor
+    any other file in a preview run that holds one, and neither are finished
+    outputs (.edb/.zip, published/, the exports root).
     An unreadable history raises SessionHistoryUnreadable before anything is selected.
     """
     if min_age_seconds < 0:
@@ -5740,6 +5745,14 @@ def cleanup_runtime_artifacts(
     current_history = history if history is not None else load_session_history(strict=True)
     protected_paths = _session_artifact_protection_paths(current_session)
     protected_paths |= _history_artifact_protection_paths(current_history)
+    # A file added to an open lesson keeps its own preview run, and 실행 취소 can bring back a crop the
+    # lesson no longer lists: keep a run whole while a lesson uses any file in it (the launch cleanup's rule).
+    previews = (base / DEFAULT_OUTPUT_ROOT_NAME / "previews").resolve()
+    protected_paths |= {
+        previews / path.relative_to(previews).parts[0]
+        for path in protected_paths
+        if path != previews and path.is_relative_to(previews)
+    }
     observed_at = time.time() if now is None else float(now)
 
     files: list[tuple[Path, int, float, bool]] = []
@@ -8950,7 +8963,8 @@ def _mutate_confirm(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]
             continue
         # Remember which crop the teacher confirmed. The publish overlap and
         # page-decoration checks accept only this exact image and bbox; any
-        # later re-crop, enhance or AI regeneration makes the record stale.
+        # later re-crop or AI 재인식 makes the record stale (고화질 keeps it,
+        # see _mutate_enhance_image).
         problem["reviewConfirmedImagePath"] = problem.get("imagePath") or problem.get("image_path") or ""
         confirmed_bbox = problem.get("bbox") or problem.get("sourceBbox") or problem.get("source_bbox")
         problem["reviewConfirmedBBox"] = dict(confirmed_bbox) if isinstance(confirmed_bbox, dict) else None
@@ -9663,6 +9677,7 @@ def _mutate_enhance_image(
                 })
 
         if resolved_mode == "ai" and result is not None and not _result_passes_content_gate(result):
+            _stop_if_cancelled(should_cancel)  # a cancel during attempt 1 skips the second Gemini call
             retry_path = _image_generation_output_path(
                 output_dir,
                 problem_id,
@@ -9758,6 +9773,7 @@ def _mutate_enhance_image(
             })
             continue
 
+        was_confirmed = _lazy_call("build_problem_board_edb", "_session_problem_review_confirmed", problem)
         if not problem.get("originalImagePath"):
             problem["originalImagePath"] = source_path.resolve().as_uri()
         uri = result.output_path.resolve().as_uri()
@@ -9805,6 +9821,9 @@ def _mutate_enhance_image(
             flags.append("ai_image_reconstructed_check_text")
         problem["riskFlags"] = list(dict.fromkeys(flags))
         problem["reviewStatus"] = "check_needed" if problem["riskFlags"] else "normal"
+        if was_confirmed and problem["reviewStatus"] == "normal":
+            # 고화질 redraws the crop the teacher confirmed (same bbox), so the 확인 still holds.
+            problem["reviewConfirmedImagePath"] = uri
         problem["aiImageReconstruction"] = {
             **result.to_metadata(),
             "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -10190,9 +10209,14 @@ def _mutate_problem_number(session: dict[str, Any], problem_id: str, value: Any)
     if not isinstance(metadata, dict):
         metadata = {}
         problem["metadata"] = metadata
+    # A question restored from HWP text is still drawn from that text; its source
+    # is what keeps it out of the crop-overlap checks once 확인 clears the flag.
+    previous_source = (problem.get("problemNumberSource") or problem.get("problem_number_source")
+                       or metadata.get("problemNumberSource") or metadata.get("problem_number_source"))
+    source = "hwp_text_snippet" if str(previous_source or "").strip() == "hwp_text_snippet" else "manual"
     for container in (problem, metadata):
         container["problemNumber"] = container["problem_number"] = int(text) if text else None
-        container["problemNumberSource"] = container["problem_number_source"] = "manual"
+        container["problemNumberSource"] = container["problem_number_source"] = source
     return session
 
 
@@ -10890,6 +10914,11 @@ class AppHTTPServer(ThreadingHTTPServer):
                 raise ArtifactCleanupBusy(
                     f"session reset paused while {self._active_artifact_jobs} request(s) are using files"
                 )
+            if keep_history and self.latest_session is not None:
+                # A save may have skipped a locked history (persist_latest_session_with_history):
+                # record the open lesson before its latest file goes, or fail and keep it open.
+                with _session_storage_lock:
+                    save_session_history(_session_history_with_session(_history_for_write(), self.latest_session))
             _atomically_clear_persisted_session_state(keep_history=keep_history)
             self.latest_session = None
             self._session_revision += 1
@@ -11104,10 +11133,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         payload: dict[str, Any] = {
             "ok": False,
             "code": "session_conflict",
-            "error": "다른 작업이 먼저 세션을 변경했습니다. 최신 상태를 불러온 뒤 다시 시도해 주세요.",
+            "error": "다른 창이나 작업에서 먼저 저장해서 방금 한 작업을 적용하지 않았어요.",
+            "detail": f"session changed before this request was applied (current revision {current_revision})",
             "session": rewrite_session_for_http(current) if isinstance(current, dict) else None,
             "recoverySteps": [
-                "화면의 최신 세션 상태를 확인해 주세요.",
+                "화면이 최신 상태인지 확인해 주세요.",
                 "방금 수행한 작업을 최신 상태에서 다시 시도해 주세요.",
             ],
         }
@@ -12811,7 +12841,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     "retryable": True,
                     "error": "다른 작업이 진행 중이라 지금은 정리할 수 없어요.",
                     "detail": str(exc),
-                    "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                    # AI jobs and just-cancelled ones count too (same step as 새 수업's busy reply).
+                    "recoverySteps": ["진행 중이거나 방금 취소한 작업(AI 인식·고화질 포함)이 끝난 뒤 다시 시도해 주세요."],
                 },
                 status=HTTPStatus.CONFLICT,
             )
@@ -12823,7 +12854,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     "code": "session_history_unreadable",
                     "operation": "artifact_cleanup",
                     "retryable": True,
-                    "error": "작업 이력을 읽지 못해 안전을 위해 아무 파일도 지우지 않았어요.",
+                    "error": "최근 수업 목록을 읽지 못해 지금은 정리할 수 없어요.",
                     "detail": str(exc),
                     "recoverySteps": ["앱을 다시 실행한 뒤 다시 시도해 주세요."],
                 },
@@ -12935,11 +12966,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "operation": "session_reset",
                 "retryable": True,
                 "artifactCleanupRequested": cleanup_requested,
-                "error": str(exc),
+                "error": "진행 중인 작업이 있어 지금은 새 수업을 시작할 수 없어요."
+                if keep_history
+                else "진행 중인 작업이 있어 지금은 초기화할 수 없어요.",
+                "detail": str(exc),
                 "session": rewrite_session_for_http(current_session)
                 if isinstance(current_session, dict)
                 else None,
-                "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                # A cancelled AI job holds its files until its running Gemini call returns.
+                "recoverySteps": ["진행 중이거나 방금 취소한 작업(AI 인식·고화질 포함)이 끝난 뒤 다시 시도해 주세요."],
             }
             if busy_revision is not None:
                 busy_payload["sessionRevision"] = busy_revision
@@ -12949,18 +12984,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             )
             return
         except (OSError, TypeError, ValueError) as exc:
+            # 문제 신고 drops `detail`; the app.log tail it attaches is where support sees the cause.
+            _log_operation_exception("session_reset", exc)
             self._send_json(
                 {
                     "ok": False,
                     "code": "reset_failed",
                     "operation": "session_reset",
                     "retryable": True,
-                    "error": f"failed to clear: {exc}",
+                    "error": "새 수업을 준비하지 못했어요." if keep_history else "초기화하지 못했어요.",
+                    "detail": f"{type(exc).__name__}: {exc}",
                     "recoverySteps": [
                         "진행 중인 작업이 끝난 뒤 새 수업을 다시 시작해 주세요."
                         if keep_history
                         else "진행 중인 작업이 끝난 뒤 초기화를 다시 시도해 주세요.",
-                        "계속 실패하면 최근 작업을 유지한 채 오류 정보를 신고해 주세요.",
+                        "계속 실패하면 문제 신고로 오류 정보를 보내 주세요.",
                     ],
                 },
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -13106,6 +13144,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         try:
             result = begin_app_update(payload.get("pin"), expected_update=payload["expectedUpdate"])
         except AppUpdateError as exc:
+            # A failed download leaves no helper log; app.log (in 문제 신고) keeps the chained cause.
+            _log_operation_exception("app_update_install", exc)
             response = {"ok": False, "error": str(exc), "code": exc.code}
             if exc.recovery_steps:
                 response["recoverySteps"] = exc.recovery_steps

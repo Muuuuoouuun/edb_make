@@ -258,6 +258,8 @@ class TestReviewUiCopy(unittest.TestCase):
           const label = sandbox.riskFlagLabel(flag);
           assert.ok(label && !label.includes('_') && /[^\x00-\x7f]/.test(label), `${flag} -> ${label}`);
         }
+        // A restored HWP-text question names its reason the same way in both tables.
+        assert.equal(sandbox.riskFlagLabel('hwp_text_fallback_problem'), sandbox.passageReviewReasonLabel('hwp_text_fallback_problem'));
         const review = section('function ReviewStage', '// ─── LEFT:');
         assert.ok(!review.includes('위험 ·'));
         assert.ok(!review.includes("pageRiskFlags.join("), 'page header must not print raw codes');

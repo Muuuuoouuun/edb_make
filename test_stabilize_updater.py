@@ -91,9 +91,13 @@ def test_windows_updates_stay_out_of_synced_documents_and_old_attempts_are_prune
     assert recent.exists()
 
 
-def test_large_app_log_is_rotated_at_launch(tmp_path):
+def test_large_app_log_is_rotated_at_launch(tmp_path, monkeypatch):
+    # In place, never renamed: on macOS a Dock relaunch runs this while the serving copy still writes app.log.
+    monkeypatch.setattr(app, "APP_LOG_MAX_BYTES", 4096)
+    monkeypatch.setattr(app, "_app_log_stream", None)
     log = tmp_path / "app.log"
-    log.write_bytes(b"x" * (5 * 1024 * 1024 + 1))
+    log.write_bytes(b"x" * 4097)
+    serving = log.open("a", encoding="utf-8", buffering=1)
     original = (app.sys.stdout, app.sys.stderr)
     try:
         app.configure_app_logging(log)
@@ -101,5 +105,8 @@ def test_large_app_log_is_rotated_at_launch(tmp_path):
     finally:
         app.sys.stdout, app.sys.stderr = original
     stream.close()
-    assert (tmp_path / "app.log.1").stat().st_size == 5 * 1024 * 1024 + 1
+    serving.write("server after relaunch\n")
+    serving.close()
+    assert (tmp_path / "app.log.1").stat().st_size == 4097
     assert log.stat().st_size < 1024
+    assert log.read_text(encoding="utf-8").endswith("server after relaunch\n")

@@ -146,7 +146,7 @@ class TestPlacementOwnsSessionLayout(unittest.TestCase):
         (async () => {
           for (const columns of [1, 2, 3]) {
             const messages = [];
-            const state = { hasRunningQueueRecognition:false, confirmingRecognition:false, queueRegistrationInFlightRef:{current:false}, pendingFiles:[], session: { problems: [{ id: 'legacy' }] },
+            const state = { hasRunningQueueRecognition:false, hasRunningBackgroundJobs:false, confirmingRecognition:false, queueRegistrationInFlightRef:{current:false}, pendingFiles:[], session: { problems: [{ id: 'legacy' }] },
               boardColumns: columns, BOARD_COLUMN_MIN: 1,
               publishInFlightRef: { current: false }, operationRecovery: null,
               normalizeBoardColumns: value => value, showToast: message => messages.push(message),

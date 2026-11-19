@@ -750,7 +750,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("setActiveId(fromId)", reorder_flow)
         self.assertIn("if (session)", remove_flow)
         self.assertIn("await mutateSession('exclude', { problemId: id })", remove_flow)
-        self.assertIn("() => { void undoMutation(); }", remove_flow)
+        self.assertIn("() => { void undoMutationRef.current?.(); }", remove_flow)
+        self.assertIn("undoMutationRef.current = undoMutation;", remove_flow)
         self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
 
     def test_undo_keeps_the_current_workspace_and_active_problem(self) -> None:

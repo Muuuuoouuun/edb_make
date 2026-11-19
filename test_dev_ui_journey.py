@@ -304,14 +304,14 @@ class TestTopBarJourney(unittest.TestCase):
     def test_top_bar_opens_only_a_build_made_from_the_current_board(self):
         run_node(NODE_SETUP + r"""
         const gate = section('  // Open only a build made from this exact board', '  return (');
+        const built = { problems: [{ id: 'p1' }] };
         function wiring(overrides = {}) {
           const calls = [];
           const summary = { canOpenEdbFile: true, canOpenOutputDir: true, edbSplit: false, outputDir: 'C:/out',
             ...overrides.summary };
           const sandbox = {
             published: true, sessionEditState: { dirty: false },
-            session: { problems: [{ id: 'p1' }] }, builtBoardRef: { current: '["p1"]' },
-            sessionEditorDraftSignature: s => JSON.stringify((s?.problems || []).map(problem => problem.id)),
+            session: built, builtBoardRef: { current: built },
             sessionPublishSummary: () => summary,
             openPublishedEdb: value => calls.push(['edb', value]), openOutputFolder: path => calls.push(['folder', path]),
             ...overrides,
@@ -339,7 +339,10 @@ class TestTopBarJourney(unittest.TestCase):
 
         for (const stale of [
           { session: { problems: [{ id: 'p1' }, { id: 'p2' }] } },
-          { builtBoardRef: { current: '' } },
+          // A refresh, undo, redo or reopened copy of the same board still carries the old summary.
+          { session: { problems: [{ id: 'p1' }] } },
+          { builtBoardRef: { current: null } },
+          { session: null, builtBoardRef: { current: null } },
           { sessionEditState: { dirty: true } },
           { published: false },
         ]) {
@@ -355,7 +358,7 @@ class TestTopBarJourney(unittest.TestCase):
           const { sandbox, events } = publishSandbox({ ok: true, session: { problems: [{ id: 'p1' }, { id: 'p2' }] } });
           await sandbox.publish();
           assert.equal(events.errors.length, 0);
-          assert.equal(sandbox.builtBoardRef.current, 'sig:p1,p2');
+          assert.equal(sandbox.builtBoardRef.current, sandbox.session, 'the exact session the EDB was built from');
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
@@ -620,6 +623,7 @@ class TestUpdateRelaunch(unittest.TestCase):
         assert.equal(walk(tree).some(node => node.props?.className === 'loading-spinner'), false, 'no endless spinner');
         assert.ok(text(tree).includes('아직 다시 열리지 않았어요'));
         const button = walk(tree).find(node => node.type === 'button');
+        assert.equal(button.props.autoFocus, true, 'stuck card focuses its only action');
         assert.equal(text(button), '다시 확인');
         button.props.onClick().then(() => assert.equal(checks, 1));
         """)

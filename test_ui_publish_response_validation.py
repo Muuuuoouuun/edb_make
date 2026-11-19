@@ -8,7 +8,7 @@ function publishSandbox(response) {
   const events = { adopted: [], errors: [], requests: 0, downloads: 0, captures: 0 };
   const session = { session_name: '미저장 수업', problems: [{ id: 'p1' }, { id: 'p2' }] };
   const sandbox = {
-    hasRunningQueueRecognition:false, confirmingRecognition:false, queueRegistrationInFlightRef:{current:false}, pendingFiles:[],
+    hasRunningQueueRecognition:false, hasRunningBackgroundJobs:false, confirmingRecognition:false, queueRegistrationInFlightRef:{current:false}, pendingFiles:[],
     session, items: session.problems, fileName: session.session_name, boardColumns: 1, layoutGapMode: 'classin-grid',
     BOARD_COLUMN_MIN: 1, DEFAULT_SLOT_HEIGHT_PAGES: 1.2, publishInFlightRef: { current: false }, operationRecovery: null,
     publishRequestDraft: { sessionIds: new Set(['p1', 'p2']), order: ['p1', 'p2'], excluded: [], itemsForPublish: session.problems, sessionForPublish: session, placements: [] },
@@ -24,7 +24,7 @@ function publishSandbox(response) {
     setSession: value => { events.adopted.push(value); sandbox.session = value; }, setItems: value => { sandbox.items = value; },
     setActiveId() {}, setLayoutGapModeState() {}, refreshSessionHistory() {},
     normalizePublishSummary: () => ({canDownload:true}), setPublished: value => { events.published = value; },
-    builtBoardRef: { current: '' }, sessionEditorDraftSignature: value => 'sig:' + value.problems.map(problem => problem.id).join(','),
+    builtBoardRef: { current: null },
     setDownloadBusy() {}, downloadPublishSummary: async () => { events.downloads++; return {ok:true}; },
     activateOperationRecovery: (error, message, detail, options) => {events.errors.push({error,options});},
     isNetworkRequestError: () => false,

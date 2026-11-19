@@ -295,7 +295,7 @@ class TestBoardShortcutSheet(unittest.TestCase):
         keys().onSelect();
         assert.equal(keys().label, '단축키 닫기');
         const guide = text(findClass(renderEstimate(), 'board-shortcut-guide'));
-        for (const label of ['F2', '⌘ Z', '⌘ A', 'Option 1·2·3', 'Option ↑↓', 'Option 드래그', 'Shift ↑↓', 'Delete', 'Esc']) {
+        for (const label of ['F2', '⌘ Z', '⌘ Shift Z', '⌘ A', 'Option 1·2·3', 'Option ↑↓', 'Option 드래그', 'Shift ↑↓', 'Delete', 'Esc']) {
           assert.ok(guide.includes(label), `missing ${label}`);
         }
         assert.ok(!guide.includes('Ctrl') && !guide.includes('Alt'), 'Mac wording must not show Windows keys');

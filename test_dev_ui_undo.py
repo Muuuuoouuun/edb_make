@@ -19,6 +19,7 @@ function undoSandbox() {
   const { sandbox, state } = stateSandbox();
   Object.defineProperty(sandbox, 'itemsRef', { value: { get current() { return sandbox.items; } } });
   Object.defineProperty(sandbox, 'layoutGapModeRef', { value: { get current() { return sandbox.layoutGapMode; } } });
+  Object.defineProperty(sandbox, 'publishedRef', { value: { get current() { return sandbox.published; } } });
   Object.defineProperty(sandbox, 'boardColumnsRef', { value: {
     get current() { return sandbox.boardColumns; }, set current(value) { sandbox.boardColumns = value; } } });
   Object.assign(sandbox, {
@@ -284,22 +285,45 @@ class TestServerRedo(unittest.TestCase):
         fire({ key: 'y', ctrlKey: true }); fire({ key: 'ㅋ', code: 'KeyZ', ctrlKey: true });
         assert.deepEqual(calls.splice(0), ['undo', 'redo', 'redo', 'undo']);
         fire({ key: 'z', ctrlKey: true, target: { tagName: 'INPUT' } });
+        for (const target of [{ tagName: 'INPUT', type: 'text' }, { tagName: 'TEXTAREA', type: 'textarea' }]) {
+          assert.equal(fire({ key: 'z', ctrlKey: true, target }).prevented, undefined, 'a text field keeps its own undo');
+        }
+        assert.deepEqual(calls, []);
+        const slider = { tagName: 'INPUT', type: 'range' };
+        const undone = fire({ key: 'z', ctrlKey: true, target: slider });
+        const redone = fire({ key: 'z', ctrlKey: true, shiftKey: true, target: slider });
+        assert.deepEqual(calls.splice(0), ['undo', 'redo'], 'a focused slider must not swallow undo');
+        assert.equal(undone.prevented, true);
+        assert.equal(redone.prevented, true);
         fire({ key: 'z' }); fire({ key: 'y', metaKey: true });
         sandbox.canRedo = false;
         assert.equal(fire({ key: 'z', ctrlKey: true, shiftKey: true }).prevented, undefined);
         assert.deepEqual(calls, []);
         """)
 
-    def test_topbar_shows_redo_only_when_there_is_something_to_redo(self) -> None:
+    def test_topbar_keeps_redo_beside_undo_and_only_disables_it(self) -> None:
         subprocess.run(["node", "-e", TOOLBAR_SETUP + r"""
         const onRedo = () => {};
         const redoButton = tree => walk(tree).find(node => node.props?.['aria-label'] === '다시 실행');
-        assert.equal(redoButton(sandbox.TopBar({ ...base, onRedo })), undefined);
+        const labels = tree => walk(walk(tree).find(node => node.props?.className === 'topbar-actions').props.children)
+          .map(node => node?.props?.['aria-label']).filter(Boolean);
+        const idle = redoButton(sandbox.TopBar({ ...base, onRedo }));
+        assert.equal(idle.props.disabled, true, 'nothing to redo: shown but disabled, like undo');
+        assert.equal(idle.props.title, '다시 실행할 변경이 없습니다');
         const shown = redoButton(sandbox.TopBar({ ...base, onRedo, canRedo: true }));
         assert.equal(shown.props.onClick, onRedo);
         assert.ok(!shown.props.disabled);
         assert.ok(shown.props.title.includes('Ctrl+Shift+Z'));
-        assert.equal(redoButton(sandbox.TopBar({ ...base, onRedo, canRedo: true, operationBusy: true })).props.disabled, true);
+        assert.deepEqual(labels(sandbox.TopBar({ ...base, onRedo })), labels(sandbox.TopBar({ ...base, onRedo, canRedo: true })),
+          'a redo becoming available must not move undo under the pointer');
+        // Its own run: App drops canUndo/canRedo (mutating) and raises operationBusy.
+        const running = redoButton(sandbox.TopBar({ ...base, onRedo, canUndo: false, canRedo: false, operationBusy: true }));
+        assert.ok(running, 'the pressed button stays on the page while its redo runs');
+        assert.equal(running.props.disabled, true);
+        assert.equal(redoButton(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false, onRedo })), undefined,
+          'an empty home has no history buttons');
+        assert.ok(redoButton(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false, canRedo: true, onRedo })),
+          'an emptied lesson can still be redone');
         """], cwd=PROJECT_ROOT, check=True)
 
 
@@ -312,12 +336,14 @@ class TestEnhanceSavesBoardFirst(unittest.TestCase):
           const sandbox = {
             useCallback: fn => fn, session: { problems: [{ id: 'p1' }] }, items: [], fileName: '수업',
             boardColumns: 1, layoutGapMode: 'classin-grid', aiEnabled: true, userSettings: {},
+            hasRunningBackgroundJobs: false,
             materializeSessionForItems: () => draft, cloneSession: value => value,
             listUnique: values => [...new Set(values)],
             startBackgroundJob: () => ({ id: 'job', controller: new AbortController() }),
             settleBackgroundJob() {}, setHistoryStack() {}, adoptMutatedSession: next => calls.push(['adopt', next]),
             appendBoundedHistory: (history, entry) => [...history, entry], UNDO_HISTORY_LIMIT: 20,
             showToast() {}, showSimpleErrorToast: error => errors.push(error),
+            sessionEditorDraftSignature: value => JSON.stringify(value), setSession: value => calls.push(['session', value]),
             postRestore: async snapshot => { calls.push(['restore', snapshot]); if (sandbox.restoreError) throw sandbox.restoreError; return snapshot; },
             postEnhanceImage: async () => { calls.push(['enhance']); return { session: draft, enhance: [] }; },
           };
@@ -325,7 +351,8 @@ class TestEnhanceSavesBoardFirst(unittest.TestCase):
           vm.runInContext(section('  const enhanceImageSession = useCallback(', '  const resetSession = useCallback(')
             + '\nglobalThis.enhanceImageSession = enhanceImageSession;', sandbox);
           await sandbox.enhanceImageSession(['p1'], { mode: 'preserve' });
-          assert.deepEqual(calls.map(call => call[0]), ['restore', 'enhance', 'adopt']);
+          assert.deepEqual(calls.map(call => call[0]), ['restore', 'session', 'enhance', 'adopt'],
+            'the save is the saved lesson before the job runs');
           assert.equal(calls[0][1], draft, 'the unsaved board is what gets saved');
           calls.length = 0;
           sandbox.restoreError = new Error('offline');
@@ -518,6 +545,19 @@ class TestBoardDraft(unittest.TestCase):
         unreadable.render();
         assert.equal(unreadable.asked.length, 0);
         assert.equal(unreadable.store.has('edb.boardDraft.v1'), false, 'an unreadable copy is dropped, not a startup crash');
+
+        // The app can start with no lesson (latest lesson unreadable at launch, or 새 작업으로 시작).
+        const empty = app(true);
+        const lesson = { session: empty.sandbox.session, items: empty.sandbox.items };
+        Object.assign(empty.sandbox, { session: null, items: [], fileName: '새 수업', initialSessionLoaded: true });
+        empty.render();
+        empty.render();
+        assert.equal(empty.asked.length, 0);
+        assert.ok(empty.store.has('edb.boardDraft.v1'), 'no lesson yet: the copy is left alone');
+        Object.assign(empty.sandbox, { ...lesson, fileName: lesson.session.session_name });  // 최근 수업 opens it
+        empty.render();
+        assert.deepEqual(empty.asked, ['저장하지 않은 배치가 있어요. 복원할까요?'], 'offered when its lesson first opens');
+        assert.equal(empty.sandbox.items[0].placementXRatio, 0.4);
         """)
 
     def test_storage_failures_never_break_the_editor(self) -> None:

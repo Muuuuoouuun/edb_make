@@ -27,6 +27,7 @@ function placementSandbox() {
   // Review labels/counts are unrelated to persisted placement. Keep the actual
   // placement normalizers, reflow, serialization, mapping and signatures.
   const sandbox = {
+    hasRunningBackgroundJobs: false,
     riskFlagsFor: entity => entity.riskFlags || [],
     riskFlagLabel: flag => flag,
     deriveProblemStatus: entity => entity.reviewStatus || 'normal',

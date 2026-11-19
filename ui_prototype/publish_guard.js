@@ -109,8 +109,9 @@
   }
 
   // True while the teacher's 확인 still covers this exact crop: the server
-  // records the image path and bbox at 확인, and any re-crop, enhance or AI
-  // regeneration changes one of them, which re-arms the check.
+  // records the image path and bbox at 확인, and any re-crop or AI 재인식
+  // changes one of them, which re-arms the check (고화질 of the same crop
+  // keeps it: the server moves the record to the new image).
   function isReviewConfirmedCrop(item) {
     if (!item?.reviewConfirmedImagePath) return false;
     if (String(item?.reviewStatus || item?.review_status || "").trim() !== "normal") return false;

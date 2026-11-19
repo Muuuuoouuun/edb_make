@@ -464,6 +464,7 @@ def test_enhance_summary_counts_fallbacks_as_text_preserve_and_explains_conflict
     let reply;
     const sandbox = {
       useCallback: fn => fn, session: { problems: [] }, aiEnabled: true, userSettings: { hasGeminiApiKey: true },
+      hasRunningBackgroundJobs: false, setSession() {}, sessionEditorDraftSignature: () => '',
       items: [], fileName: '수업', boardColumns: 1, layoutGapMode: 'compact', UNDO_HISTORY_LIMIT: 5,
       listUnique: values => [...new Set(values)], materializeSessionForItems: () => ({}), cloneSession: value => value,
       startBackgroundJob: () => ({ id: 'job', controller: { signal: { aborted: false } } }),

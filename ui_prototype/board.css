@@ -8102,9 +8102,9 @@
     font-size: var(--text-sm);
     font-weight: 600;
     line-height: 1.35;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
   .undo-toast-copy strong{
     color: #fff;
@@ -8326,9 +8326,6 @@
       max-width: none;
       transform: none;
       animation: none;
-    }
-    .undo-toast-copy{
-      white-space: normal;
     }
   }
   @media (prefers-reduced-motion: reduce){

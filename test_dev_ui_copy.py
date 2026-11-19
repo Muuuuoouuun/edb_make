@@ -149,6 +149,7 @@ class TestDevUiCopy(unittest.TestCase):
         announcement = app.split("const statusAnnouncement =", 1)[1].split(";\n", 1)[0]
         self.assertNotIn("경과", announcement)
         self.assertIn("loading.label", announcement)
+        self.assertIn("actionToast?.message", announcement)
         self.assertIn("toast.type !== 'error'", announcement)
         self.assertIn("role={isError ? 'alert' : undefined}", app)
         jobs = APP.split("function BackgroundJobsPanel", 1)[1].split("const CENTER_PANEL_PREVIEW_MAX_DIMENSION", 1)[0]

@@ -503,6 +503,10 @@ def build_bug_report(
         for flag in ("dataFolderFallback", "lastUpdateFailed"):
             if flag in extra:
                 diagnostics[flag] = bool(extra[flag])
+        # Which HWP converters are missing: the teacher-facing hangul summary no longer says.
+        notes = extra.get("hangulNotes")
+        if isinstance(notes, list):
+            diagnostics["hangulNotes"] = [_bounded_text(note, 200) for note in notes[:5]]
         extra_tails = {
             name: tail
             for name in EXTRA_LOG_NAMES
