@@ -141,7 +141,7 @@ class TestUiPlacementSaveState(unittest.TestCase):
             setLayoutGapModeState: mode => { sandbox.layoutGapMode = mode; },
             setItems: update => { sandbox.items = update(sandbox.items); },
             setSession() { throw new Error('local spacing must not overwrite the persisted baseline'); },
-            setPublished() {}, showToast() {},
+            setPublished() {}, showToast() {}, pushLocalEdit() {},
           });
           vm.runInContext(section('  const updateLayoutGapMode =', '  const resetPlacementGaps =')
             + '\nglobalThis.updateLayoutGapMode = updateLayoutGapMode;', sandbox);

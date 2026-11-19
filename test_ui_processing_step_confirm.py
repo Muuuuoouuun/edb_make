@@ -53,7 +53,7 @@ function controller() {
     setMutating() {}, setLoading() {}, refreshSessionHistory() {}, setReviewFocus() {}, setActionToast() {},
     hasRunningBackgroundJobs: false,
     showToast: message => state.toasts.push(message), showSimpleErrorToast: error => state.errors.push(error),
-    showActionToast() {}, stepLabel: value => value,
+    showActionToast() {}, stepLabel: value => value, pushLocalEdit() {}, PRIMARY_MODIFIER_LABEL: 'Ctrl',
     requestViewChange: value => state.views.push(value),
     sessionReviewSummary: s => ({ remaining: s.problems.filter(p => p.reviewStatus !== 'normal').length }),
     reviewFlowState: summary => ({ remaining: summary.remaining, complete: summary.remaining === 0 }),

@@ -471,6 +471,7 @@ def test_enhance_summary_counts_fallbacks_as_text_preserve_and_explains_conflict
       adoptMutatedSession() {}, showToast: (message, type) => toasts.push([message, type || 'info']),
       showSimpleErrorToast() { throw new Error('no generic error toast'); },
       postEnhanceImage: async (_args, options) => { jobIds.push(options.jobId); return reply(); },
+      postRestore: async () => ({}),  // dev/ui-undo saves unsaved board edits before enhancing
     };
     vm.createContext(sandbox);
     vm.runInContext(section('const AI_RESULT_BOARD_CHANGED_MESSAGE', 'async function postRestore(')

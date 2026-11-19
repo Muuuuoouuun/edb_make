@@ -220,6 +220,23 @@ const appendBoundedHistory = REORDER_HELPERS.appendBoundedHistory || ((history, 
   return next.length > limit ? next.slice(next.length - limit) : next;
 });
 const UNDO_HISTORY_LIMIT = 20;
+// Local (unsaved) undo stacks: { stack, burstKey, burstAt }. A repeated control
+// such as a slider drag or a held arrow key is one step while it keeps firing
+// within a second; pushing the same value as the top is a no-op.
+function pushUndoEntry(state, value, burstKey = '', limit = UNDO_HISTORY_LIMIT, now = Date.now()){
+  const sameBurst = Boolean(burstKey) && state.burstKey === burstKey && now - state.burstAt < 1000;
+  state.burstKey = burstKey;
+  state.burstAt = now;
+  if (sameBurst || state.stack[state.stack.length - 1] === value) return false;
+  state.stack = appendBoundedHistory(state.stack, value, limit);
+  return true;
+}
+function popUndoEntry(state){
+  const value = state.stack[state.stack.length - 1];
+  state.stack = state.stack.slice(0, -1);
+  state.burstKey = '';
+  return value;
+}
 const adjacentReorderCommand = REORDER_HELPERS.adjacentReorderCommand || ((items, itemId, direction) => {
   const sourceIndex = items.findIndex(item => String(item.id) === String(itemId));
   const targetIndex = sourceIndex + (direction === 'up' ? -1 : direction === 'down' ? 1 : 0);
@@ -401,6 +418,14 @@ function writeStoredPreference(key, value){
     window.localStorage?.setItem(key, JSON.stringify(value));
   } catch (_error) {
     // Private windows and locked-down profiles refuse storage; the UI still works.
+  }
+}
+
+function removeStoredPreference(key){
+  try {
+    window.localStorage?.removeItem(key);
+  } catch (_error) {
+    // Same as above: storage may be unavailable.
   }
 }
 
@@ -1532,6 +1557,7 @@ const Icon = {
   zoomIn: <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6M11 8v6"/></svg>,
   zoomOut:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3M8 11h6"/></svg>,
   undo:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 010 10h-3"/></svg>,
+  redo:   <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M15 14l5-5-5-5M20 9H9a5 5 0 000 10h3"/></svg>,
   refresh:<svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3.5-7.1M21 4v5h-5"/></svg>,
   reset:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>,
   power:  <svg viewBox="0 0 24 24" className="ic" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v9"/><path d="M6.3 7.5a8 8 0 1 0 11.4 0"/></svg>,
@@ -2834,6 +2860,7 @@ function ManualSplitEditor({
           <span>S 스탬프</span>
           <span>A 자동 나누기</span>
           <span>M 합치기</span>
+          <span>{PRIMARY_MODIFIER_LABEL}+Z 실행 취소</span>
           <span>Enter 적용 · ? 도움말</span>
         </div>
         {shortcutHelpOpen && (
@@ -2846,6 +2873,7 @@ function ManualSplitEditor({
             <span><kbd>P</kbd> 패널 좌우 이동</span>
             <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 전체 선택</span>
             <span><kbd>{PRIMARY_MODIFIER_LABEL} D</kbd> 선택 복제</span>
+            <span><kbd>{PRIMARY_MODIFIER_LABEL} Z</kbd> 영역 변경 실행 취소</span>
             <span><kbd>방향키</kbd> 1px 이동</span>
             <span><kbd>Shift 방향키</kbd> 빠른 이동</span>
             <span><kbd>Delete</kbd> 선택 삭제</span>
@@ -3489,7 +3517,7 @@ function TopBar({
   fileName, setFileName, onRename, total, onPublish, published, onOpenPublished, openPublishedFolder = false, onReset, onNewLesson,
   onRefresh, refreshing, canReset, view, setView, reviewAvailable,
   reviewAttentionCount = 0,
-  recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
+  recognitionBusy, onUndo, canUndo, onRedo, canRedo = false, onShutdown, onExportImages, exportingImages,
   canExportImages, pageReviewActive, operationBusy, resetBlocked, conflictBlocked,
   editingActive = false, saveStateLabel = '', saveStateTone = '',
   onOpenUpdateSettings, onOpenBugReport, onOpenSettings, updateAvailable = false, updateBusy = false,
@@ -3544,6 +3572,14 @@ function TopBar({
           onClick={onUndo}
           disabled={pageReviewActive || operationBusy || !canUndo}
         >{Icon.undo}</button>}
+        {canRedo && <button
+          className="btn ghost icon"
+          title={`다시 실행 (${PRIMARY_MODIFIER_LABEL}+Shift+Z)`}
+          data-tooltip="되돌린 편집 다시 실행"
+          aria-label="다시 실행"
+          onClick={onRedo}
+          disabled={pageReviewActive || operationBusy}
+        >{Icon.redo}</button>}
         <ToolbarActionMenu
           id="topbar-more"
           label={updateAvailable ? '수업 작업 더보기 · 새 버전 있음' : '수업 작업 더보기'}
@@ -3764,6 +3800,14 @@ function ReviewStage({
   const [boxEdit, setBoxEdit] = useState(null);
   const [boxEditDraftBox, setBoxEditDraftBox] = useState(null);
   const [manualSplit, setManualSplit] = useState(null);
+  const manualSplitRef = useRef(manualSplit);
+  manualSplitRef.current = manualSplit;
+  // Region edits in 직접 자르기 undo with Ctrl/Cmd+Z. The history belongs to
+  // the open page and is dropped when the page changes or the editor closes.
+  const manualSplitUndoRef = useRef({ stack: [], burstKey: '', burstAt: 0 });
+  const pushManualSplitUndo = (burstKey = '', regions = manualSplitRef.current?.regions) => {
+    if (Array.isArray(regions)) pushUndoEntry(manualSplitUndoRef.current, regions, burstKey, 30);
+  };
   const [manualSplitDraftBox, setManualSplitDraftBox] = useState(null);
   const [manualSplitPanelSide, setManualSplitPanelSide] = useState('right');
   const [manualSplitShortcutHelpOpen, setManualSplitShortcutHelpOpen] = useState(false);
@@ -4318,6 +4362,7 @@ function ReviewStage({
     manualSplitSeqRef.current = 1;
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
+    manualSplitUndoRef.current = { stack: [], burstKey: '', burstAt: 0 };
     setManualSplitDraftBox(null);
     setManualSplitShortcutHelpOpen(false);
     setBoxEdit(null);
@@ -4495,6 +4540,7 @@ function ReviewStage({
 
   const deleteManualSplitRegion = (regionId) => {
     if (!regionId) return;
+    pushManualSplitUndo();
     setManualSplit(prev => {
       if (!prev) return prev;
       return {
@@ -4506,6 +4552,7 @@ function ReviewStage({
   };
 
   const deleteManualSplitSelected = () => {
+    if ((manualSplitRef.current?.selectedRegionIds || []).length) pushManualSplitUndo();
     setManualSplit(prev => {
       const selected = new Set(prev?.selectedRegionIds || []);
       if (!prev || !selected.size) return prev;
@@ -4529,6 +4576,7 @@ function ReviewStage({
 
   const duplicateManualSplitSelected = () => {
     if (!manualSplitPage) return;
+    if ((manualSplitRef.current?.selectedRegionIds || []).length) pushManualSplitUndo();
     setManualSplit(prev => {
       const selected = new Set(prev?.selectedRegionIds || []);
       if (!prev || !selected.size) return prev;
@@ -4562,6 +4610,7 @@ function ReviewStage({
 
   const duplicateManualSplitRegion = (regionId) => {
     if (!manualSplitPage) return;
+    pushManualSplitUndo();
     setManualSplit(prev => {
       if (!prev) return prev;
       const index = (prev.regions || []).findIndex(region => region.id === regionId);
@@ -4588,6 +4637,7 @@ function ReviewStage({
   };
 
   const moveManualSplitRegionInList = (regionId, delta) => {
+    pushManualSplitUndo();
     setManualSplit(prev => {
       if (!prev) return prev;
       const next = prev.regions.slice();
@@ -4605,6 +4655,7 @@ function ReviewStage({
   };
 
   const reorderManualSplitRegion = (fromId, toId, position = 'before') => {
+    pushManualSplitUndo();
     setManualSplit(prev => {
       if (!prev) return prev;
       const reordered = reorderItemsForDrop(prev.regions || [], fromId, toId, position);
@@ -4619,6 +4670,7 @@ function ReviewStage({
 
   const autoSortManualSplitRegions = () => {
     if (!manualSplitPage) return;
+    pushManualSplitUndo();
     setManualSplit(prev => prev ? {
       ...prev,
       regions: sortManualSplitRegions(prev.regions || [], manualSplitPage),
@@ -4646,6 +4698,8 @@ function ReviewStage({
 
   const nudgeManualSplitSelected = (dx, dy) => {
     if (!manualSplitPage) return;
+    // A held or rapidly repeated arrow key is one undo step.
+    if ((manualSplitRef.current?.selectedRegionIds || []).length) pushManualSplitUndo('nudge');
     setManualSplit(prev => {
       const selected = new Set(prev?.selectedRegionIds || []);
       if (!prev || !selected.size) return prev;
@@ -4712,7 +4766,21 @@ function ReviewStage({
   const trimNewManualSplitRegionRef = useRef(trimNewManualSplitRegion);
   trimNewManualSplitRegionRef.current = trimNewManualSplitRegion;
   const [manualSplitNotice, setManualSplitNotice] = useState('');
-  useEffect(() => { setManualSplitNotice(''); }, [manualSplit?.pageId]);
+  useEffect(() => {
+    setManualSplitNotice('');
+    manualSplitUndoRef.current = { stack: [], burstKey: '', burstAt: 0 };
+  }, [manualSplit?.pageId]);
+  const undoManualSplit = () => {
+    if (manualSplitDragRef.current) return;
+    if (!manualSplitUndoRef.current.stack.length) {
+      setManualSplitNotice('되돌릴 영역 변경이 없어요');
+      return;
+    }
+    const regions = popUndoEntry(manualSplitUndoRef.current);
+    setManualSplitDraftBox(null);
+    setManualSplit(prev => prev ? { ...prev, regions, selectedRegionIds: [] } : prev);
+    setManualSplitNotice('영역 변경을 되돌렸어요');
+  };
   // Splits the selected regions at blank bands, all regions when none is
   // selected, and the whole page when nothing is drawn yet.
   const autoSplitManualSplitRegions = async () => {
@@ -4740,13 +4808,14 @@ function ReviewStage({
     }));
     const partsById = new Map(pieces.filter(piece => piece.id).map(piece => [piece.id, partsFor(piece)]));
     const pageParts = pieces.filter(piece => !piece.id).flatMap(partsFor);
+    if (manualSplitRef.current?.pageId === page.id) pushManualSplitUndo();
     setManualSplit(prev => {
       if (!prev || prev.pageId !== page.id) return prev;
       const regions = pageParts.length ? pageParts
         : (prev.regions || []).flatMap(region => partsById.get(region.id) || [region]);
       return { ...prev, mode: 'select', regions: renumberManualSplitRegions(regions), selectedRegionIds: [] };
     });
-    setManualSplitNotice(`영역 ${created}개로 나눴어요 · 잘못 나뉜 곳은 함께 선택해 합치세요 (M)`);
+    setManualSplitNotice(`영역 ${created}개로 나눴어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌리거나, 잘못 나뉜 곳은 함께 선택해 합치세요 (M)`);
   };
   const mergeManualSplitSelected = () => {
     const page = manualSplitPage;
@@ -4756,6 +4825,7 @@ function ReviewStage({
     const bbox = mergedManualSplitBox(selected.map(region => region.bbox), page);
     const id = `draft-region-${manualSplitSeqRef.current++}`;
     const mergedIds = new Set(selected.map(region => region.id));
+    pushManualSplitUndo();
     setManualSplit(prev => {
       if (!prev || prev.pageId !== page.id) return prev;
       const list = prev.regions || [];
@@ -4779,6 +4849,7 @@ function ReviewStage({
     const point = manualSplitPointFromClient(evt.clientX, evt.clientY, page, rect);
     const box = manualSplitStampBoxFromPoint(point, page, manualSplit.stampBox);
     const id = `draft-region-${manualSplitSeqRef.current++}`;
+    pushManualSplitUndo();
     setManualSplit(prev => {
       if (!prev || prev.pageId !== page.id) return prev;
       const nextRegions = sortManualSplitRegions([
@@ -4857,6 +4928,7 @@ function ReviewStage({
       scaleY: (Number(page.height) || 1) / rect.height,
       regionIds,
       initialBoxes,
+      regionsBefore: manualSplit.regions,
     };
   };
 
@@ -4881,6 +4953,7 @@ function ReviewStage({
       scaleX: (Number(page.width) || 1) / rect.width,
       scaleY: (Number(page.height) || 1) / rect.height,
       initialBox: { ...region.bbox },
+      regionsBefore: manualSplit.regions,
     };
   };
 
@@ -5615,6 +5688,7 @@ function ReviewStage({
         const moved = Math.hypot(evt.clientX - drag.startX, evt.clientY - drag.startY) >= MANUAL_SPLIT_DRAW_THRESHOLD_PX;
         if (moved) {
           const id = `draft-region-${manualSplitSeqRef.current++}`;
+          if (manualSplitRef.current?.pageId === drag.page.id) pushManualSplitUndo();
           setManualSplit(prev => {
             if (!prev || prev.pageId !== drag.page.id) return prev;
             const nextRegions = sortManualSplitRegions([
@@ -5629,6 +5703,8 @@ function ReviewStage({
           });
           trimNewManualSplitRegionRef.current?.(drag.page, id, box);
         }
+      } else if (drag.regionsBefore && (evt.clientX !== drag.startX || evt.clientY !== drag.startY)) {
+        pushManualSplitUndo('', drag.regionsBefore);
       }
       manualSplitDragRef.current = null;
       setManualSplitDraftBox(null);
@@ -5674,6 +5750,11 @@ function ReviewStage({
         return;
       }
       if (isFormControl) return;
+      if (primaryModifier && !evt.altKey && !evt.shiftKey && key === 'z') {
+        evt.preventDefault();
+        undoManualSplit();
+        return;
+      }
       if (primaryModifier && !evt.altKey && !evt.shiftKey && key === 'a') {
         evt.preventDefault();
         selectAllManualSplitRegions();
@@ -6496,7 +6577,7 @@ function ReviewStage({
                     onAutoSplit={autoSplitManualSplitRegions}
                     notice={manualSplitNotice}
                     layout={originalLayout}
-                    onRegionBoxChange={(id,box)=>setManualSplit(prev=>prev?{...prev,regions:prev.regions.map(region=>region.id===id?{...region,originalBox:region.originalBox || region.bbox,bbox:adjustOriginalBox(region.bbox,page,box)}:region)}:prev)}
+                    onRegionBoxChange={(id,box)=>{pushManualSplitUndo(`geometry:${id}`);setManualSplit(prev=>prev?{...prev,regions:prev.regions.map(region=>region.id===id?{...region,originalBox:region.originalBox || region.bbox,bbox:adjustOriginalBox(region.bbox,page,box)}:region)}:prev);}}
                     regions={manualSplit.regions || []}
                     draftBox={manualSplitDraftBox}
                     mode={manualSplit.mode || 'draw'}
@@ -14483,6 +14564,71 @@ function deriveSessionEditState(session, items, fileName, boardColumns, layoutGa
   };
 }
 
+// Crash-safe copy of unsaved board edits, kept only in this browser. It holds
+// what changed per problem against the saved lesson it was made on and is
+// offered back only when that exact saved lesson loads again. The server's
+// revision number restarts with the app, so the saved content is the key.
+const BOARD_DRAFT_KEY = 'edb.boardDraft.v1';
+
+function boardDraftSessionKey(rawSession){
+  for (const key of ['output_dir', 'outputDir', 'pages_json_path', 'pagesJsonPath']) {
+    const value = String(rawSession?.[key] || '').trim();
+    if (value) return value;
+  }
+  return `${rawSession?.session_name || ''}|${rawSession?.generated_at || rawSession?.generatedAt || ''}`;
+}
+
+function buildBoardDraft(session, items, fileName, boardColumns, layoutGapMode){
+  const draft = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode);
+  if (!draft) return null;
+  const savedById = new Map(session.problems.map(problem => [problem.id, problem]));
+  const patches = {};
+  draft.problems.forEach(problem => {
+    const saved = savedById.get(problem.id) || {};
+    const patch = {};
+    new Set([...Object.keys(saved), ...Object.keys(problem)]).forEach(key => {
+      if (JSON.stringify(problem[key]) !== JSON.stringify(saved[key])) patch[key] = problem[key] ?? null;
+    });
+    if (Object.keys(patch).length) patches[problem.id] = patch;
+  });
+  return {
+    v: 1,
+    sessionKey: boardDraftSessionKey(session),
+    base: sessionEditorDraftSignature(session),
+    fileName: draft.session_name,
+    boardColumns: normalizeBoardColumns(boardColumns),
+    layoutGapMode: normalizeLayoutGapMode(layoutGapMode),
+    patches,
+  };
+}
+
+// The board state a stored draft restores, or null when it belongs to another
+// lesson or another saved version of it, or would change nothing.
+function boardDraftRestoreState(session, draft){
+  if (!session || !Array.isArray(session.problems) || !draft || draft.v !== 1
+    || !draft.patches || typeof draft.patches !== 'object') return null;
+  if (draft.sessionKey !== boardDraftSessionKey(session)
+    || draft.base !== sessionEditorDraftSignature(session)) return null;
+  const boardColumns = normalizeBoardColumns(draft.boardColumns);
+  const layoutGapMode = normalizeLayoutGapMode(draft.layoutGapMode);
+  const fileName = String(draft.fileName || session.session_name || '');
+  const restored = {
+    ...session,
+    problems: session.problems.map(problem => (
+      Object.prototype.hasOwnProperty.call(draft.patches, problem.id)
+        ? { ...problem, ...draft.patches[problem.id] } : problem
+    )),
+  };
+  const items = reflowItemsForBoardOrder(
+    restored.problems.map((problem, index) => mapProblemToItem(problem, index, restored)),
+    DEFAULT_SLOT_HEIGHT_PAGES,
+    boardColumns,
+    layoutGapMode
+  );
+  return deriveSessionEditState(session, items, fileName, boardColumns, layoutGapMode).dirty
+    ? { items, fileName, boardColumns, layoutGapMode } : null;
+}
+
 let latestServerSessionRevision = null;
 let latestServerSessionEpoch = null;
 const retiredServerSessionEpochs = new Set();
@@ -17776,6 +17922,35 @@ function App(){
   const placementGapHistoryRef = useRef([]);
   const undoPlacementGapRef = useRef(null);
   const [placementGapUndoCount, setPlacementGapUndoCount] = useState(0);
+  // Unsaved board edits (move, size, processing step) undo locally first.
+  const localEditHistoryRef = useRef({ stack: [], burstKey: '', burstAt: 0 });
+  const [localEditUndoCount, setLocalEditUndoCount] = useState(0);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const layoutGapModeRef = useRef(layoutGapMode);
+  layoutGapModeRef.current = layoutGapMode;
+  // Redo entries belong to the exact session and undo history the last
+  // undo/redo produced; any other change to either makes them stale.
+  const redoStackRef = useRef([]);
+  const redoAnchorRef = useRef(null);
+  const [redoCount, setRedoCount] = useState(0);
+  // Record the board (items, columns, gap mode) before an unsaved edit so
+  // Ctrl+Z can take it back. Any new edit also retires redo, which would
+  // otherwise overwrite it, and an older toast's undo, which would now undo
+  // this edit instead of the one it names.
+  const pushLocalEdit = (burstKey = '') => {
+    const history = localEditHistoryRef.current;
+    const top = history.stack[history.stack.length - 1];
+    const entry = top?.items === itemsRef.current && top.boardColumns === boardColumnsRef.current
+      && top.layoutGapMode === layoutGapModeRef.current
+      ? top
+      : { items: itemsRef.current, boardColumns: boardColumnsRef.current, layoutGapMode: layoutGapModeRef.current };
+    if (pushUndoEntry(history, entry, burstKey)) setLocalEditUndoCount(history.stack.length);
+    redoStackRef.current = [];
+    redoAnchorRef.current = null;
+    setRedoCount(0);
+    setActionToast(null);
+  };
   // A legacy session keeps its own column count. Empty/new work always starts
   // with one column; viewing either editor mode never rewrites a saved layout.
   const boardColumns = normalizeBoardColumns(t.boardColumns);
@@ -17788,6 +17963,12 @@ function App(){
     placementGapHistoryRef.current = [];
     setPlacementGapUndoCount(0);
   }, [session, usingMock, boardColumns, layoutGapMode]);
+  // Local undo entries carry their own columns and gap mode, so only another
+  // lesson (or the sample) makes them meaningless.
+  useEffect(() => {
+    localEditHistoryRef.current = { stack: [], burstKey: '', burstAt: 0 };
+    setLocalEditUndoCount(0);
+  }, [session, usingMock]);
   const boardColumnsRef = useRef(boardColumns);
   boardColumnsRef.current = boardColumns;
   const fileInputRef = useRef(null);
@@ -17884,7 +18065,7 @@ function App(){
     jobDismissTimersRef.current.forEach(timer => window.clearTimeout(timer));
     jobDismissTimersRef.current.clear();
   }, []);
-  const canUndo = historyStack.length > 0 && !mutating && !reviewEditorActive;
+  const canUndo = (historyStack.length > 0 || localEditUndoCount > 0) && !mutating && !reviewEditorActive;
 
   const activeIndex = items.findIndex(i => i.id === activeId);
   const active = activeIndex >= 0 ? items[activeIndex] : null;
@@ -17936,6 +18117,9 @@ function App(){
     () => deriveSessionEditState(session, items, fileName, boardColumns, layoutGapMode, mutating || publishBusy || confirmingRecognition),
     [session, items, fileName, boardColumns, layoutGapMode, mutating, publishBusy, confirmingRecognition]
   );
+  const redoAnchor = redoAnchorRef.current;
+  const canRedo = redoCount > 0 && redoAnchor?.session === session && redoAnchor?.history === historyStack
+    && !mutating && !reviewEditorActive && !hasRunningBackgroundJobs && !sessionEditState.dirty;
   const updateInstallBlockedReason = reviewEditorActive || recognitionReview
     ? '업데이트 전에 현재 영역 편집을 적용하거나 취소해 주세요.'
     : sessionEditState.dirty
@@ -18970,6 +19154,21 @@ function App(){
 
   const undoMutation = useCallback(async () => {
     if (reviewEditorActive || mutatingRef.current) return false;
+    // Unsaved board edits come off first, one at a time, without touching
+    // the saved lesson; only then does undo restore a saved step.
+    if (localEditHistoryRef.current.stack.length) {
+      const entry = popUndoEntry(localEditHistoryRef.current);
+      if (entry.boardColumns !== boardColumnsRef.current) {
+        boardColumnsRef.current = entry.boardColumns;
+        setTweak('boardColumns', entry.boardColumns);
+      }
+      setLayoutGapModeState(entry.layoutGapMode);
+      setItems(entry.items);
+      setLocalEditUndoCount(localEditHistoryRef.current.stack.length);
+      setPublished(false);
+      showToast('마지막 변경을 되돌렸어요');
+      return true;
+    }
     if (hasRunningBackgroundJobs) {
       showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
       return false;
@@ -18979,6 +19178,13 @@ function App(){
     const snapshot = currentHistory[currentHistory.length - 1];
     const viewBeforeUndo = view;
     const activeBeforeUndo = activeId;
+    // The state being left becomes the redo target, so nothing is lost.
+    const forward = session
+      ? (materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session)
+      : null;
+    const anchor = redoAnchorRef.current;
+    const redoBase = anchor && anchor.session === session && anchor.history === currentHistory
+      ? redoStackRef.current : [];
     mutatingRef.current = true;
     setMutating(true);
     setLoading({ label: '되돌리는 중…', startedAt: Date.now() });
@@ -18987,8 +19193,11 @@ function App(){
       setHistoryStack(prev => {
         const next = prev.slice(0, -1);
         historyStackRef.current = next;
+        redoAnchorRef.current = { session: restored, history: next };
         return next;
       });
+      redoStackRef.current = forward ? appendBoundedHistory(redoBase, forward, UNDO_HISTORY_LIMIT) : [];
+      setRedoCount(redoStackRef.current.length);
       applySession(restored);
       setView(viewBeforeUndo);
       if ((restored?.problems || []).some(problem => problem?.id === activeBeforeUndo)) {
@@ -19003,25 +19212,67 @@ function App(){
       setMutating(false);
       setLoading(null);
     }
-  }, [view, activeId, session, applySession, refreshSessionHistory, showSimpleErrorToast, showToast, reviewEditorActive, hasRunningBackgroundJobs]);
+  }, [view, activeId, session, items, fileName, boardColumns, layoutGapMode, applySession, refreshSessionHistory, showSimpleErrorToast, showToast, reviewEditorActive, hasRunningBackgroundJobs]);
 
-  // Ctrl/Cmd+Z → undo. Skipped when focus is inside a text input so the
-  // browser's native undo still works for editable fields (file-name crumb).
+  const redoMutation = useCallback(async () => {
+    if (reviewEditorActive || mutatingRef.current || hasRunningBackgroundJobs) return false;
+    const anchor = redoAnchorRef.current;
+    const target = redoStackRef.current[redoStackRef.current.length - 1];
+    // A redo is a full lesson restore: refuse it once anything moved on.
+    if (!target || anchor?.session !== session || anchor?.history !== historyStackRef.current
+      || sessionEditState.dirty) return false;
+    const current = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session;
+    const viewBeforeRedo = view;
+    const activeBeforeRedo = activeId;
+    mutatingRef.current = true;
+    setMutating(true);
+    setLoading({ label: '다시 실행하는 중…', startedAt: Date.now() });
+    try {
+      const restored = assertPlacementSaveSession(await postRestore(target));
+      const remaining = redoStackRef.current.slice(0, -1);
+      setHistoryStack(prev => {
+        const next = appendBoundedHistory(prev, current, UNDO_HISTORY_LIMIT);
+        historyStackRef.current = next;
+        redoAnchorRef.current = { session: restored, history: next };
+        return next;
+      });
+      redoStackRef.current = remaining;
+      setRedoCount(remaining.length);
+      applySession(restored);
+      setView(viewBeforeRedo);
+      if ((restored?.problems || []).some(problem => problem?.id === activeBeforeRedo)) {
+        setActiveId(activeBeforeRedo);
+      }
+      refreshSessionHistory();
+      showToast('다시 실행했어요');
+      return true;
+    } catch (e) {
+      showSimpleErrorToast(e, '다시 실행 실패');
+      return false;
+    } finally {
+      mutatingRef.current = false;
+      setMutating(false);
+      setLoading(null);
+    }
+  }, [view, activeId, session, items, fileName, boardColumns, layoutGapMode, sessionEditState.dirty, hasRunningBackgroundJobs, applySession, refreshSessionHistory, showSimpleErrorToast, showToast, reviewEditorActive]);
+
+  // Ctrl/Cmd+Z → undo; Ctrl/Cmd+Shift+Z or Ctrl+Y → redo. Skipped when focus
+  // is inside a text input so the browser's native undo still works there.
   useEffect(() => {
     const onKey = (evt) => {
-      if (!(evt.key === 'z' || evt.key === 'Z')) return;
       if (!(evt.ctrlKey || evt.metaKey)) return;
-      if (evt.shiftKey) return;  // reserve Ctrl/Cmd+Shift+Z for future redo
-      const target = evt.target;
-      if (isEditableKeyboardTarget(target)) return;
+      const key = manualSplitShortcutKey(evt);
+      const redo = (key === 'z' && evt.shiftKey) || (key === 'y' && evt.ctrlKey && !evt.shiftKey);
+      if (!redo && !(key === 'z' && !evt.shiftKey)) return;
+      if (isEditableKeyboardTarget(evt.target)) return;
       if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
-      if (historyStack.length === 0 || mutating || reviewEditorActive) return;
+      if (!(redo ? canRedo : canUndo)) return;
       evt.preventDefault();
-      undoMutation();
+      void (redo ? redoMutation() : undoMutation());
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [historyStack.length, mutating, undoMutation, reviewEditorActive]);
+  }, [canUndo, canRedo, undoMutation, redoMutation]);
 
   // initial session fetch — empty editor on 404, no automatic dummy data.
   useEffect(() => {
@@ -19052,6 +19303,47 @@ function App(){
     const timer = window.setTimeout(() => { void checkForUpdates({ silent: true }); }, 3000);
     return () => window.clearTimeout(timer);
   }, [checkForUpdates]);
+
+  // Keep unsaved board edits in this browser so a crash or forced restart
+  // does not lose them; saving (or undoing back to saved) removes the copy.
+  const boardDraftCheckedRef = useRef(false);
+  useEffect(() => {
+    if (!boardDraftCheckedRef.current || sessionEditState.busy) return undefined;
+    if (!sessionEditState.dirty) {
+      removeStoredPreference(BOARD_DRAFT_KEY);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      writeStoredPreference(BOARD_DRAFT_KEY, buildBoardDraft(session, items, fileName, boardColumns, layoutGapMode));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [session, items, fileName, boardColumns, layoutGapMode, sessionEditState.dirty, sessionEditState.busy]);
+  // Once the saved lesson has loaded, offer back a draft made on exactly it.
+  useEffect(() => {
+    if (!initialSessionLoaded || boardDraftCheckedRef.current) return;
+    boardDraftCheckedRef.current = true;
+    let restore = null;
+    try {
+      restore = boardDraftRestoreState(session, readStoredPreference(BOARD_DRAFT_KEY, null));
+    } catch (_error) {
+      // A copy this version cannot read must never stop the editor from opening.
+      removeStoredPreference(BOARD_DRAFT_KEY);
+    }
+    if (!restore) return;
+    if (!window.confirm('저장하지 않은 배치가 있어요. 복원할까요?')) {
+      removeStoredPreference(BOARD_DRAFT_KEY);
+      return;
+    }
+    // Ctrl+Z after restoring goes back to the saved board.
+    pushLocalEdit();
+    boardColumnsRef.current = restore.boardColumns;
+    setTweak('boardColumns', restore.boardColumns);
+    setLayoutGapModeState(restore.layoutGapMode);
+    setItems(restore.items);
+    setFileName(restore.fileName);
+    setPublished(false);
+    showToast('저장하지 않은 배치를 복원했어요 · 저장을 눌러 보관하세요');
+  }, [initialSessionLoaded, session, setTweak, showToast]);
 
   // load user settings (Gemini key status) on mount
   useEffect(() => {
@@ -19146,6 +19438,9 @@ function App(){
     });
     try {
       const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
+      // The server enhances its saved lesson; save unsaved board edits first
+      // so the result does not silently replace them.
+      await postRestore(snapshotBefore);
       const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal, jobId: job.id });
       if (job.controller.signal.aborted) return;
       const next = result.session;
@@ -19863,6 +20158,7 @@ function App(){
 
   const setStep = (id, step) => {
     const nextStep = normalizeProcessingStep(step);
+    pushLocalEdit();
     setItems(it => it.map(x => x.id === id ? { ...x, step: nextStep } : x));
     setPublished(false);
   };
@@ -19873,6 +20169,7 @@ function App(){
     const previousSteps = new Map(items
       .filter(item => selectedIdSet.has(String(item.id)))
       .map(item => [String(item.id), item.step]));
+    pushLocalEdit();
     setItems(prev => prev.map(item => (
       selectedIdSet.has(String(item.id)) ? { ...item, step: nextStep } : item
     )));
@@ -19881,6 +20178,7 @@ function App(){
       `${selectedIdSet.size}개 문제를 ${stepLabel(nextStep)}로 변경했어요`,
       '실행 취소',
       () => {
+        pushLocalEdit();
         setItems(prev => prev.map(item => (
           previousSteps.has(String(item.id))
             ? { ...item, step: previousSteps.get(String(item.id)) }
@@ -19906,10 +20204,11 @@ function App(){
       return;
     }
     const nextStep = normalizeProcessingStep(step);
+    pushLocalEdit();
     setItems(it => it.map(x => ({ ...x, step: nextStep })));
     setPublished(false);
     if (options.silent) return;
-    showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요`);
+    showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`);
   };
   const setPlacements = (updates) => {
     const validUpdates = Array.isArray(updates)
@@ -19923,6 +20222,9 @@ function App(){
       || Object.prototype.hasOwnProperty.call(update.patch, 'scaleRatio')
       || Object.prototype.hasOwnProperty.call(update.patch, 'gapAfterPages')
     ));
+    if (!items.some(x => patchById.has(String(x.id)))) return;
+    // A slider drag fires many patches for the same items and fields.
+    pushLocalEdit(`placement:${[...patchById.keys()].join(',')}:${Object.keys(validUpdates[0].patch).join(',')}`);
     setItems(it => {
       let changed = false;
       const nextItems = it.map(x => {
@@ -19964,6 +20266,7 @@ function App(){
       nextMode === LAYOUT_GAP_MODE_COMPACT
       && !window.confirm('전체 문항 사이의 쪽 맞춤 여백을 제거할까요? 미리보기에서 확인한 뒤 저장할 수 있습니다.')
     ) return;
+    pushLocalEdit();
     setLayoutGapModeState(nextMode);
     setItems(previous => reflowItemsForBoardOrder(
       previous,
@@ -19979,6 +20282,7 @@ function App(){
   const resetPlacementGaps = () => {
     placementGapHistoryRef.current = [];
     setPlacementGapUndoCount(0);
+    pushLocalEdit();
     setItems(previous => reflowItemsForBoardOrder(
       previous.map(item => applyPlacementPatchToItem(item, { gapAfterPages: null })),
       DEFAULT_SLOT_HEIGHT_PAGES,
@@ -20117,6 +20421,8 @@ function App(){
       setMoveFeedback(null);
       moveFeedbackTimerRef.current = null;
     }, 900);
+    // Without a saved lesson the move is a local edit; with one it is saved below.
+    if (!session) pushLocalEdit();
     setItems(nextItems);
     setActiveId(fromId);
     if (session) {
@@ -20892,6 +21198,8 @@ function App(){
         reviewAttentionCount={reviewAttentionCount}
         onUndo={undoMutation}
         canUndo={canUndo}
+        onRedo={redoMutation}
+        canRedo={canRedo}
         onShutdown={shutdownApp}
         onExportImages={exportSessionImages}
         exportingImages={exportingImages}
@@ -21161,7 +21469,10 @@ function App(){
           mutateSession={mutateSession}
           mutating={mutating || hasRunningQueueRecognition || confirmingRecognition}
           boardColumns={boardColumns}
-          setBoardColumns={v => setTweak('boardColumns', v)}
+          setBoardColumns={v => {
+            if (normalizeBoardColumns(v) !== boardColumns) pushLocalEdit();
+            setTweak('boardColumns', v);
+          }}
           layoutGapMode={layoutGapMode}
           setLayoutGapMode={updateLayoutGapMode}
           resetPlacementGaps={resetPlacementGaps}

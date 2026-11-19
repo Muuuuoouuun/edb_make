@@ -46,7 +46,7 @@ function rootGapController(items, columns = 1) {
   Object.assign(sandbox, {
     items, boardColumns: columns, layoutGapMode: 'classin-grid',
     placementGapHistoryRef: { current: [] }, undoPlacementGapRef: { current: null },
-    mutatingRef: { current: false }, sessionEditState: { busy: false },
+    mutatingRef: { current: false }, sessionEditState: { busy: false }, pushLocalEdit() {},
     setItems: update => { sandbox.items = typeof update === 'function' ? update(sandbox.items) : update; },
     setPublished: value => { sandbox.published = value; },
     setPlacementGapUndoCount: count => { sandbox.undoCount = count; },

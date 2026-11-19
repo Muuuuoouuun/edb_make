@@ -313,7 +313,7 @@ class TestBoardShortcutSheet(unittest.TestCase):
             "const isRangeArrow = event.shiftKey && (event.key === 'ArrowUp' || event.key === 'ArrowDown');",
             "const isSelectAll = (event.ctrlKey || event.metaKey) && String(event.key).toLowerCase() === 'a';",
             "if ((e.key === 'Delete' || e.key === 'Backspace') && handlersRef.current.selectedItemCount > 0) {",
-            "if (!(evt.key === 'z' || evt.key === 'Z')) return;",  # undo
+            "void (redo ? redoMutation() : undoMutation());",  # undo / redo (dev/ui-undo)
             "reorderMode: evt.altKey,",  # Alt-drag on the board
             "cancelPositionDrag({ pointerId: drag.pointerId });",  # Esc cancels a board drag
         ):
