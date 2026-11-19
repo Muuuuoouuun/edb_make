@@ -35,6 +35,7 @@ function stateSandbox() {
       return true;
     },
     clearOperationRecovery() {}, setRecentSessionsAuthoritative() {}, setRecognitionReview() {}, setReviewFocus() {},
+    reviewEditorActive: false, recognitionReview: null,
     activateOperationRecovery() {}, showToast() {},
     showSimpleErrorToast: error => state.errors.push(error), simpleToastErrorMessage: error => error.message,
     formatProblemCount: counts => String(counts.total), sessionProblemCounts: s => ({ total: s.problems.length }),

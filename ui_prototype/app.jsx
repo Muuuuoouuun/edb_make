@@ -3475,7 +3475,7 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
 }
 
 function TopBar({
-  fileName, setFileName, onRename, total, onPublish, published, onReset,
+  fileName, setFileName, onRename, total, onPublish, published, onOpenPublished, onReset, onNewLesson,
   onRefresh, refreshing, canReset, view, setView, reviewAvailable,
   reviewAttentionCount = 0,
   recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
@@ -3493,6 +3493,8 @@ function TopBar({
     : operationBusy ? '진행 중인 작업이 끝난 뒤 사용할 수 있어요'
     : '저장된 최신 세션 다시 읽기';
   const hasOutput = total > 0;
+  // Once built and unchanged, the main button opens the EDB; rebuilding moves to the menu.
+  const openPublished = published && onOpenPublished ? onOpenPublished : null;
 
   return (
     <div className="topbar">
@@ -3536,6 +3538,9 @@ function TopBar({
           label={updateAvailable ? '수업 작업 더보기 · 새 버전 있음' : '수업 작업 더보기'}
           icon={<>{Icon.more}{updateAvailable && <span className="topbar-more-badge" aria-hidden="true" />}</>}
           items={[
+            ...(onNewLesson && hasOutput ? [{ id: 'new-lesson', icon: Icon.plus, label: '새 수업 시작',
+              description: '지금 수업은 최근 작업에 남겨 둡니다',
+              disabled: pageReviewActive || operationBusy || resetBlocked || conflictBlocked, onSelect: onNewLesson }] : []),
             ...(view === 'review'
               ? [{ id: 'board', icon: Icon.board, label: '칠판으로 돌아가기',
                   disabled: pageReviewActive || operationBusy, onSelect: () => setView?.('board') }]
@@ -3554,7 +3559,7 @@ function TopBar({
       </div>
       {hasOutput && <div className="topbar-export-group" role="group" aria-label="수업 내보내기">
       <button
-        className={`btn ${view === 'board' && !editingActive ? 'primary' : ''} ${published ? 'done' : ''}`}
+        className={`btn ${view === 'board' && !editingActive ? 'primary' : ''} ${openPublished ? 'done' : ''}`}
         type="button"
         data-tooltip={pageReviewActive
           ? '페이지 확인 후 제작할 수 있습니다'
@@ -3564,17 +3569,23 @@ function TopBar({
               ? '진행 중인 작업이나 대기 중인 파일이 있어요. 끝나거나 대기 목록에서 뺀 뒤 제작해 주세요'
               : reviewAttentionCount > 0
                 ? `확인 필요 ${reviewAttentionCount}개를 먼저 확인해 주세요`
-                : published ? '최근 제작 완료 상태' : '현재 배치로 EDB 파일 제작'}
-        onClick={onPublish}
+                : openPublished ? 'EDB를 이미 만들었어요 · 누르면 ClassIn에서 엽니다. 새로 만들려면 옆 메뉴에서 ‘다시 제작’을 고르세요' : '현재 배치로 EDB 파일 제작'}
+        onClick={openPublished || onPublish}
         disabled={pageReviewActive || operationBusy}
       >
-        {published ? <>{Icon.check} 제작 완료</> : <>{Icon.board} EDB 제작</>}
+        {openPublished ? <>{Icon.check} ClassIn에서 열기</> : <>{Icon.board} EDB 제작</>}
       </button>
       <ToolbarActionMenu
         id="topbar-export"
         label="다른 형식으로 내보내기"
         icon={Icon.chevronDown}
         items={[
+          ...(openPublished ? [{
+            id: 'republish', icon: Icon.board, label: '다시 제작',
+            description: '지금 배치로 EDB 파일을 새로 만듭니다',
+            disabled: pageReviewActive || operationBusy,
+            onSelect: onPublish,
+          }] : []),
           {
             id: 'images', icon: Icon.download,
             label: exportingImages ? '이미지 다운로드 준비 중' : '이미지 다운로드',
@@ -7898,7 +7909,6 @@ function ItemsRail({
                     publish.canDownload
                     || publish.canOpenEdbFile
                     || publish.canOpenOutputDir
-                    || publish.canOpenClassinHandoff
                   ));
                   return (
                     <div className="session-history-row" key={entry.id}>
@@ -7945,11 +7955,6 @@ function ItemsRail({
                               {publish.canOpenOutputDir && (
                                 <button className="btn" type="button" onClick={() => openOutputFolder(publish.outputDir)}>
                                   {Icon.folder}<span>출력 폴더 열기</span>
-                                </button>
-                              )}
-                              {publish.canOpenClassinHandoff && (
-                                <button className="btn" type="button" onClick={() => openClassinHandoff(publish)}>
-                                  {Icon.check}<span>ClassIn 검수 열기</span>
                                 </button>
                               )}
                             </div>
@@ -10121,6 +10126,7 @@ function HomeDashboard({
                 const problemCount = entry.problemCount ?? entry.problem_count;
                 const sessionName = entry.sessionName || entry.session_name || '이름 없는 작업';
                 const updatedAt = entry.updatedAt || entry.updated_at;
+                const hasEdb = Boolean(normalizePublishSummary(entry.publishSummary || entry.publish_summary, entry)?.canOpenEdbFile);
                 return (
                   <button
                     type="button"
@@ -10143,6 +10149,7 @@ function HomeDashboard({
                         <span className="home-recent-count">
                           {recentSessionCountLabel(entry) || (problemCount ? `${problemCount}개 문항` : '저장된 작업')}
                         </span>
+                        {hasEdb && <span className="home-recent-count home-recent-edb">EDB 제작 완료</span>}
                         {updatedAt && (
                           <span className="home-recent-date">
                             {formatPublishTime(updatedAt)}
@@ -10275,12 +10282,6 @@ function notifyOpenFailure(message){
   window.dispatchEvent(new CustomEvent('edb-notice', { detail: { message, type: 'error' } }));
 }
 
-function openClassinHandoff(target){
-  const url = target?.classinHandoffMarkdownUri || target?.classinHandoffUri;
-  if (!url) return;
-  window.open(url, '_blank', 'noopener');
-}
-
 function readSettingsSectionsOpen(){
   try {
     const stored = JSON.parse(window.localStorage?.getItem(SETTINGS_SECTIONS_OPEN_KEY) || 'null');
@@ -10359,6 +10360,24 @@ function PublishResultPanel({
         >
           {Icon.download}<span>{publishDownloadBusy ? '다운로드 준비 중…' : summary.edbFileExists === false ? '파일 없음' : summary.edbSplit ? 'EDB 묶음 다운로드' : 'EDB 다운로드'}</span>
         </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => openPublishedEdb(summary)}
+          disabled={!summary.canOpenEdbFile}
+          title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
+        >
+          {Icon.board}<span>ClassIn 열기</span>
+        </button>
+        <button
+          className="btn"
+          type="button"
+          onClick={() => summary.outputDir && openOutputFolder(summary.outputDir)}
+          disabled={!summary.canOpenOutputDir}
+          title={summary.outputDirExists === false ? '출력 폴더가 없습니다' : '출력 폴더 열기'}
+        >
+          {Icon.folder}<span>{summary.outputDirExists === false ? '폴더 없음' : '폴더'}</span>
+        </button>
       </div>
       {open && (
         <div className="publish-result-detail-body">
@@ -10406,33 +10425,6 @@ function PublishResultPanel({
             <button
               className="btn"
               type="button"
-              onClick={() => openPublishedEdb(summary)}
-              disabled={!summary.canOpenEdbFile}
-              title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
-            >
-              {Icon.board}<span>ClassIn 열기</span>
-            </button>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => summary.outputDir && openOutputFolder(summary.outputDir)}
-              disabled={!summary.canOpenOutputDir}
-              title={summary.outputDirExists === false ? '출력 폴더가 없습니다' : '출력 폴더 열기'}
-            >
-              {Icon.folder}<span>{summary.outputDirExists === false ? '폴더 없음' : '폴더'}</span>
-            </button>
-            <button
-              className="btn"
-              type="button"
-              onClick={() => openClassinHandoff(summary)}
-              disabled={!summary.canOpenClassinHandoff}
-              title={summary.canOpenClassinHandoff ? 'ClassIn 검수 파일 열기' : 'ClassIn 검수 파일이 없습니다'}
-            >
-              {Icon.check}<span>ClassIn 검수</span>
-            </button>
-            <button
-              className="btn"
-              type="button"
               onClick={() => onExportImages?.()}
               disabled={!canExportImages || exportingImages || !onExportImages}
               title={canExportImages ? '현재 선택 단계 기준 최종 PNG 묶음 다운로드' : '다운로드할 이미지가 없습니다'}
@@ -10473,13 +10465,6 @@ function PublishResultPanel({
                     disabled={!item.canOpenEdbFile}
                     onClick={() => openPublishedEdb(item)}
                   >{Icon.board}</button>
-                  <button
-                    className="icon-btn"
-                    type="button"
-                    title="ClassIn 검수 파일 열기"
-                    disabled={!item.canOpenClassinHandoff}
-                    onClick={() => openClassinHandoff(item)}
-                  >{Icon.check}</button>
                 </div>
               ))}
             </div>
@@ -12878,8 +12863,10 @@ function OperationRecoveryBanner({
   );
 }
 
-function LoadingOverlay({ label, hint, startedAt }){
+// `stuck` ({ afterSec, label, hint, actionLabel, onAction }) ends the spinner with a message and a button.
+function LoadingOverlay({ label, hint, startedAt, stuck = null }){
   const [elapsed, setElapsed] = useState(0);
+  const [checking, setChecking] = useState(false);
   useEffect(() => {
     if (!startedAt) { setElapsed(0); return; }
     const tick = () => setElapsed(Math.floor((Date.now() - startedAt) / 1000));
@@ -12888,6 +12875,20 @@ function LoadingOverlay({ label, hint, startedAt }){
     return () => clearInterval(id);
   }, [startedAt]);
   const fmt = (s) => s >= 60 ? `${Math.floor(s/60)}분 ${s%60}초` : `${s}초`;
+  if (stuck && startedAt && elapsed >= stuck.afterSec) {
+    return (
+      <div className="loading-overlay">
+        <div className="loading-card" role="alert">
+          <div className="loading-label">{stuck.label}</div>
+          <div className="loading-hint">{stuck.hint}</div>
+          <button className="btn primary" type="button" disabled={checking} onClick={async () => {
+            setChecking(true);
+            try { await stuck.onAction(); } finally { setChecking(false); }
+          }}>{checking ? '확인 중…' : stuck.actionLabel}</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="loading-overlay">
       <div className="loading-card">
@@ -16461,6 +16462,25 @@ function aiModelFallbackToast(session){
   return `${from} 호출 오류 · ${to}로 재시도했어요`;
 }
 
+// The finished-import notice counts only what this import added (scope from reviewFocusForNewSession).
+function importResultNotice(scope, incomingSession, restored, fallbackMessage = ''){
+  const newProblemIds = new Set(scope?.scopeProblemIds || []);
+  const newPageIds = new Set(scope?.scopePageIds || []);
+  const newProblems = (restored?.problems || []).filter(problem => newProblemIds.has(String(problem?.id || '').trim()));
+  const checkCount = (sessionReviewSummary(restored).reviewTargets || []).filter(target => target.status !== 'normal'
+    && (newProblemIds.has(String(target.id)) || newPageIds.has(target.pageId))).length;
+  const countLabel = reviewStageCopyFor(incomingSession, countSessionProblems(newProblems), newPageIds.size).countLabel;
+  return {
+    checkCount,
+    firstNewProblemId: newProblems[0]?.id || null,
+    message: [
+      fallbackMessage,
+      `${countLabel} 칠판에 넣었어요`,
+      checkCount > 0 ? `확인 필요 ${checkCount}개` : '순서를 확인하고 EDB 제작을 누르세요',
+    ].filter(Boolean).join(' · '),
+  };
+}
+
 function mergeRetryCandidateIntoCurrent(currentSession, candidateSession, pageIds, options = {}){
   const base = cloneSession(currentSession);
   const candidate = cloneSession(candidateSession);
@@ -17127,14 +17147,16 @@ function updateArchitectureNotice(info){
   return `이 컴퓨터용 업데이트 파일이 아직 없습니다. ${updateArchitectureRecoverySteps(info).join(' ')}`;
 }
 
-async function clearSession(){
+async function clearSession({ keepHistory = false } = {}){
   const revision = latestServerSessionRevision;
   const queryParams = new URLSearchParams();
   if (Number.isInteger(revision)) queryParams.set('expectedSessionRevision', String(revision));
   if (latestServerSessionEpoch) queryParams.set('expectedSessionEpoch', latestServerSessionEpoch);
+  if (keepHistory) queryParams.set('keepHistory', '1');
   const query = queryParams.size ? `?${queryParams.toString()}` : '';
   const resp = await fetch(`/api/session/latest${query}`, { method: 'DELETE' });
-  if (resp.status === 404) return { history: [] }; // already cleared
+  // Already cleared. A kept history is unknown here, so the caller keeps its list.
+  if (resp.status === 404) return { history: keepHistory ? null : [] };
   const json = await expectOkJson(resp, '작업을 비우지 못했어요');
   return json;
 }
@@ -17551,6 +17573,9 @@ function App(){
     }
     return false;
   };
+  // Toast actions fire after later renders; read the current session and items, not a stale closure.
+  const openPendingReviewRef = useRef(null);
+  openPendingReviewRef.current = () => openFirstReviewTarget(session);
   // auto-revert to board view if the session is cleared or never had pages
   useEffect(() => {
     if (view === 'review' && !reviewAvailable) setView('board');
@@ -17960,8 +17985,9 @@ function App(){
     }
   }, [updateInfo, updateBusy, checkForUpdates, showSimpleErrorToast, showToast]);
 
-  // Lift the install overlay once a server answers again after going down (new or reopened app),
-  // or if the old server never stopped; the silent check then reports lastUpdateFailed if needed.
+  // Once a server answers again after going down (new or reopened app), reload so this tab runs
+  // the new screen code. If the old server never stopped, lift the overlay; the silent check then
+  // reports lastUpdateFailed if needed. Polling continues while the overlay shows its stuck message.
   useEffect(() => {
     if (!updateRestarting) return undefined;
     let cancelled = false;
@@ -17973,7 +17999,9 @@ function App(){
         sawServerDown = true;
         return;
       }
-      if (sawServerDown || Date.now() - updateRestarting.startedAt > 150000) {
+      if (sawServerDown) {
+        window.location.reload();
+      } else if (Date.now() - updateRestarting.startedAt > 150000) {
         setUpdateRestarting(null);
         checkForUpdates({ silent: true });
       }
@@ -18131,7 +18159,7 @@ function App(){
     };
   }, []);
 
-  const showMockItems = (message = '더미 자료를 표시했어요') => {
+  const showMockItems = (message = '샘플 자료를 표시했어요') => {
     const mockItems = freshInitialItems();
     setRecognitionReview(null);
     setSession(null);
@@ -18140,7 +18168,7 @@ function App(){
     setActiveId(mockItems[0]?.id || null);
     setUsingMock(true);
     setPublished(false);
-    setFileName('더미 세션');
+    setFileName('샘플 수업');
     setHistoryStack([]);
     setView('board');
     showToast(message);
@@ -18839,7 +18867,8 @@ function App(){
     }
   }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, showToast]);
 
-  const resetSession = useCallback(async () => {
+  // keepHistory = 새 수업: leave the open lesson in 최근 작업 instead of wiping the list.
+  const resetSession = useCallback(async ({ keepHistory = false } = {}) => {
     if (recognitionInFlightRef.current || queueRegistrationInFlightRef.current) {
       showToast('자료 처리가 끝난 뒤 초기화해 주세요');
       return false;
@@ -18860,19 +18889,24 @@ function App(){
       showToast('진행 중인 작업을 취소하거나 완료한 뒤 초기화해 주세요');
       return false;
     }
-    if (!session && items.length === 0 && pendingFiles.length === 0 && recentSessions.length === 0) {
+    if (!session && items.length === 0 && pendingFiles.length === 0 && (keepHistory || recentSessions.length === 0)) {
       showToast('이미 비어 있습니다');
       return false;
     }
-    if (!window.confirm('작업 목록을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 사라집니다. 이미 만든 EDB·PNG 출력 파일은 보관됩니다.')) return false;
+    if (keepHistory) {
+      // Saved edits are already in 최근 작업; ask only when something would be lost.
+      if ((sessionEditState.dirty || pendingFiles.length > 0 || reviewEditorActive) && !window.confirm(
+        '새 수업을 시작할까요? 저장하지 않은 수업 변경과 대기 중인 파일은 사라집니다. 지금 수업은 마지막으로 저장된 상태로 최근 작업에 남아 있어요.'
+      )) return false;
+    } else if (!window.confirm('작업 목록을 초기화할까요? 업로드 대기열, 보드 자료, 최근 작업 목록이 사라집니다. 이미 만든 EDB·PNG 출력 파일은 보관됩니다.')) return false;
     const localDraft = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || session;
     resetInFlightRef.current = true;
     setResetBusy(true);
-    setLoading({ label: '작업 목록을 초기화하는 중…', startedAt: Date.now() });
+    setLoading({ label: keepHistory ? '새 수업을 준비하는 중…' : '작업 목록을 초기화하는 중…', startedAt: Date.now() });
     try {
-      if (session || recentSessions.length) {
-        const result = await clearSession();
-        setRecentSessionsAuthoritative(result?.history);
+      if (session || (!keepHistory && recentSessions.length)) {
+        const result = await clearSession({ keepHistory });
+        if (!keepHistory || Array.isArray(result?.history)) setRecentSessionsAuthoritative(result?.history);
       }
       jobControllersRef.current.forEach(controller => controller.abort());
       jobControllersRef.current.clear();
@@ -18881,16 +18915,17 @@ function App(){
       setConfirmingRecognition(false);
       setPendingFilesTracked([]);
       setReviewFocus(null);
-      hideMockItems('초기화 완료');
+      hideMockItems(!keepHistory ? '초기화 완료' : session ? '새 수업을 시작해요 · 지난 수업은 최근 작업에 있어요' : '새 수업을 시작해요');
       clearOperationRecovery();
       return true;
     } catch (e) {
-      activateOperationRecovery(e, '초기화 실패', {
+      activateOperationRecovery(e, keepHistory ? '새 수업 시작 실패' : '초기화 실패', {
         operation: 'session_reset',
         code: e?.code || (isNetworkRequestError(e) ? 'reset_connection_failed' : 'reset_failed'),
       }, {
         kind: 'reset',
-        retryLabel: '초기화 다시 시도',
+        retryLabel: keepHistory ? '새 수업 다시 시작' : '초기화 다시 시도',
+        keepHistory,
         localDraft,
       });
       return false;
@@ -18899,7 +18934,7 @@ function App(){
       setResetBusy(false);
       setLoading(null);
     }
-  }, [loading, downloadBusy, publishBusy, backgroundJobs, session, items, fileName, boardColumns, layoutGapMode, pendingFiles.length, recentSessions.length, setPendingFilesTracked, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, showToast]);
+  }, [loading, downloadBusy, publishBusy, backgroundJobs, session, items, fileName, boardColumns, layoutGapMode, pendingFiles.length, recentSessions.length, sessionEditState.dirty, reviewEditorActive, setPendingFilesTracked, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, showToast]);
 
   // Warn before the tab closes only while edits are unsaved or work is still running.
   const leavingAppRef = useRef(false);
@@ -19004,10 +19039,13 @@ function App(){
       showToast('진행 중인 작업이 끝난 뒤 최근 작업을 열어 주세요');
       return false;
     }
-    const recoveryDraft = options.recoveryDraft
-      || materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode)
-      || session;
-    if (recoveryDraft && options.confirmOverwrite !== false && !window.confirm(
+    const localDraft = materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode);
+    const recoveryDraft = options.recoveryDraft || localDraft || session;
+    // Ask only when something unsaved would be replaced; the draft still goes on the undo stack.
+    if (recoveryDraft && options.confirmOverwrite !== false && (
+      Boolean(localDraft && sessionEditorDraftSignature(localDraft) !== sessionEditorDraftSignature(session))
+      || reviewEditorActive || recognitionReview
+    ) && !window.confirm(
       '최근 저장본을 열면 현재 화면의 저장되지 않은 배치를 덮어씁니다. 현재 배치는 되돌리기용으로 보관하고 계속할까요?'
     )) return false;
     restoreInFlightRef.current = true;
@@ -19042,7 +19080,7 @@ function App(){
       setRestoringSessionId(null);
       setLoading(null);
     }
-  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, session, items, fileName, boardColumns, layoutGapMode, showToast, initialSessionLoaded, loading, hasRunningBackgroundJobs, hasPendingSessionConflict]);
+  }, [applySession, restoringSessionId, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, session, items, fileName, boardColumns, layoutGapMode, showToast, initialSessionLoaded, loading, hasRunningBackgroundJobs, hasPendingSessionConflict, reviewEditorActive, recognitionReview]);
 
   const triggerUpload = () => fileInputRef.current?.click();
 
@@ -19401,6 +19439,7 @@ function App(){
         }
         applySession(restored);
         const nextScope = reviewFocusForNewSession(currentSnapshot, restored, 'queue-recognition');
+        let notice = null;
         if (review.manualSplit) {
           const pageIds = nextScope?.scopePageIds?.length ? nextScope.scopePageIds
             : (incomingSession.pages || []).map(page => page.id);
@@ -19408,11 +19447,16 @@ function App(){
           destinationView = 'review';
         } else {
           setReviewFocus(nextScope);
+          notice = importResultNotice(nextScope, incomingSession, restored, review.fallbackMessage);
+          // Files added to an open lesson land at the end; show them instead of item 1.
+          if (currentSnapshot && notice.firstNewProblemId) setActiveId(notice.firstNewProblemId);
         }
         refreshSessionHistory();
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         if (review.jobId) settleBackgroundJob(review.jobId, { status: 'done', label: '처리 완료' }, 0);
+        if (notice?.checkCount > 0) showActionToast(notice.message, '확인하기', () => openPendingReviewRef.current?.());
+        else if (notice) showToast(notice.message, { duration: 4500 });
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
           ? (materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session))
@@ -19468,7 +19512,7 @@ function App(){
     requestViewChange,
     setPendingFilesTracked,
     settleBackgroundJob, clearOperationRecovery, activateOperationRecovery,
-    showSimpleErrorToast,
+    showSimpleErrorToast, showToast, showActionToast,
   ]);
 
   useEffect(() => {
@@ -19839,36 +19883,14 @@ function App(){
   };
   const addMockSample = () => {
     if (session) {
-      showToast('실제 작업에는 예시 문항을 추가하지 않아요');
+      showToast('실제 수업에는 샘플 자료를 넣지 않아요');
       return;
     }
     if (loading || pendingFiles.length > 0) {
-      showToast('대기열 처리 전에는 더미를 추가하지 않습니다');
+      showToast('자료 처리가 끝난 뒤에 샘플을 열 수 있어요');
       return;
     }
-    const pool = ['geometry-circle','equation','table','graph','geometry-triangles','paragraph'];
-    const kind = pool[Math.floor(Math.random() * pool.length)];
-    const id = 'i' + (Date.now() % 100000);
-    const name = '새 자료 ' + (items.length + 1);
-    setItems(it => [...it, {
-      id,
-      name,
-      source: '방금 업로드',
-      type: 'image',
-      kind,
-      step: 's2',
-      heightFrac: heightForKind(kind),
-      placementXRatio: DEFAULT_PLACEMENT_X_RATIO,
-      placementYRatio: DEFAULT_PLACEMENT_Y_RATIO,
-      placementScaleRatio: DEFAULT_PLACEMENT_SCALE_RATIO,
-    }]);
-    setUsingMock(true);
-    setActiveId(id);
-    setPublished(false);
-    if (!items.length) {
-      setFileName('더미 세션');
-    }
-    showToast('더미 자료 1개 추가됨');
+    showMockItems('샘플 수업을 열었어요 · 파일을 올리면 샘플은 사라져요');
   };
 
   // when backend is reachable, addSample opens the real file picker → /api/export
@@ -19957,6 +19979,12 @@ function App(){
 
   const onPublish = async () => {
     if (!session || !Array.isArray(session.problems)) {
+      if (usingMock) {
+        // The sample has no real files behind it; point to the upload instead of a dead end.
+        showToast('샘플은 둘러보기용이에요. 파일을 올리면 실제 EDB를 만들 수 있어요');
+        triggerUpload();
+        return;
+      }
       showToast('만들 자료가 없습니다. 먼저 파일을 추가해 주세요.');
       return;
     }
@@ -20200,7 +20228,16 @@ function App(){
         return;
       }
       clearOperationRecovery();
-      showToast(`EDB 파일을 만들었어요 · ${normalizedPublishSummary.edbFileName || publishLabel}. 브라우저의 다운로드 목록에서 확인해 주세요.`);
+      // Offer the next step. Split lessons arrive as one ZIP; their parts sit unzipped in the output folder.
+      if (normalizedPublishSummary.edbSplit && normalizedPublishSummary.canOpenOutputDir) {
+        showActionToast(`EDB 파일 ${normalizedPublishSummary.edbPartCount}개를 만들었어요 · ZIP 다운로드도 시작했어요. 1번 파일부터 차례로 여세요`,
+          '폴더 열기', () => openOutputFolder(normalizedPublishSummary.outputDir));
+      } else if (!normalizedPublishSummary.edbSplit && normalizedPublishSummary.canOpenEdbFile) {
+        showActionToast(`EDB 파일을 만들었어요 · ${normalizedPublishSummary.edbFileName || publishLabel}. 다운로드도 시작했어요`,
+          'ClassIn에서 열기', () => openPublishedEdb(normalizedPublishSummary));
+      } else {
+        showToast(`EDB 파일을 만들었어요 · ${normalizedPublishSummary.edbFileName || publishLabel}. 브라우저의 다운로드 목록에서 확인해 주세요.`);
+      }
     } catch (e) {
       setDownloadBusy(false);
       activateOperationRecovery(e, '제작 실패', {
@@ -20343,7 +20380,7 @@ function App(){
         };
         if (!sessionResponseRevisionIsStale(payload)) captureSessionRevision(payload);
       }
-      void resetSession();
+      void resetSession({ keepHistory: Boolean(recovery.keepHistory) });
       return;
     }
     void onPublish();
@@ -20480,6 +20517,8 @@ function App(){
     }
   };
 
+  const latestPublishSummary = published && !sessionEditState.dirty ? sessionPublishSummary(session) : null;
+
   return (
     <div className="app editor-basic-mode">
       <TopBar
@@ -20489,7 +20528,9 @@ function App(){
         total={items.length}
         onPublish={onPublish}
         published={published && !sessionEditState.dirty}
+        onOpenPublished={latestPublishSummary?.canOpenEdbFile ? () => openPublishedEdb(latestPublishSummary) : null}
         onReset={resetSession}
+        onNewLesson={() => resetSession({ keepHistory: true })}
         onRefresh={refreshSession}
         refreshing={refreshing}
         canReset={initialSessionLoaded && (!!session || items.length > 0 || pendingFiles.length > 0 || recentSessions.length > 0) && !loading && !resetBusy && !publishBusy && !downloadBusy && !hasRunningBackgroundJobs && !hasPendingSessionConflict}
@@ -20928,6 +20969,16 @@ function App(){
           label={`${updateRestarting.version} 업데이트를 설치하고 있어요`}
           hint="새 창이 자동으로 열릴 때까지 앱을 다시 열지 말고 기다려 주세요."
           startedAt={updateRestarting.startedAt}
+          stuck={{
+            afterSec: 240,
+            label: '업데이트 후 앱이 아직 다시 열리지 않았어요',
+            hint: `새 창이 열렸다면 이 창은 닫아도 돼요. 새 창이 없으면 ${IS_MAC_PLATFORM ? '응용 프로그램 폴더에서 ClassInEDBMVP' : '시작 메뉴에서 ClassIn EDB'}를 다시 열고 ‘다시 확인’을 눌러 주세요.`,
+            actionLabel: '다시 확인',
+            onAction: async () => {
+              if (await probeLocalServerHealth(1500)) window.location.reload();
+              else showToast('아직 앱이 응답하지 않아요. 앱을 다시 연 뒤 눌러 주세요.', 'error');
+            },
+          }}
         />
       )}
 

@@ -888,9 +888,13 @@ def _recover_interrupted_session_reset() -> bool:
     return True
 
 
-def _atomically_clear_persisted_session_state() -> None:
-    """Clear all persisted session pointers as one recoverable transaction."""
-    targets = (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)
+def _atomically_clear_persisted_session_state(keep_history: bool = False) -> None:
+    """Clear persisted session pointers (and the history unless kept) as one recoverable transaction."""
+    targets = (
+        (LATEST_SESSION_JSON, GENERATED_SESSION_JS)
+        if keep_history
+        else (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)
+    )
     stamp = uuid.uuid4().hex
     moved: list[tuple[Path, Path]] = []
     marker = _session_reset_transaction_path()
@@ -10418,12 +10422,14 @@ class AppHTTPServer(ThreadingHTTPServer):
         cleanup_artifacts: bool = False,
         dry_run: bool = True,
         min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+        keep_history: bool = False,
     ) -> dict[str, Any] | None:
         cleanup_result, _revision = self.clear_session_with_revision(
             expected_revision=expected_revision,
             cleanup_artifacts=cleanup_artifacts,
             dry_run=dry_run,
             min_age_seconds=min_age_seconds,
+            keep_history=keep_history,
         )
         return cleanup_result
 
@@ -10434,6 +10440,7 @@ class AppHTTPServer(ThreadingHTTPServer):
         cleanup_artifacts: bool = False,
         dry_run: bool = True,
         min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+        keep_history: bool = False,
     ) -> tuple[dict[str, Any] | None, int]:
         with self._state_lock:
             if expected_revision is not None and self._session_revision != expected_revision:
@@ -10444,12 +10451,16 @@ class AppHTTPServer(ThreadingHTTPServer):
                 raise ArtifactCleanupBusy(
                     f"session reset paused while {self._active_artifact_jobs} request(s) are using files"
                 )
-            _atomically_clear_persisted_session_state()
+            _atomically_clear_persisted_session_state(keep_history=keep_history)
             self.latest_session = None
             self._session_revision += 1
             cleared_revision = self._session_revision
             self.allowed_files.clear()
-            if cleanup_artifacts:
+            if keep_history:
+                # Kept lessons stay openable (thumbnails, EDB files) from the recent list.
+                self.allowed_files.update(collect_session_history_file_paths(load_session_history()))
+            # Cleanup treats files outside history=[] as orphans, so it never runs with kept history.
+            if cleanup_artifacts and not keep_history:
                 try:
                     cleanup_result = cleanup_runtime_artifacts(
                         active_session={},
@@ -12293,11 +12304,18 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if not self._validate_expected_session_revision(revision_payload, current_revision):
             return
         expected_revision = self._payload_session_revision(revision_payload)
-        cleanup_requested = _coerce_bool(
+        # 새 수업: clear the open lesson but keep 최근 작업 (and never prune its files).
+        keep_history = _coerce_bool(
+            params.get("keepHistory", params.get("keep_history", [False]))[0],
+            default=False,
+        )
+        cleanup_requested = not keep_history and _coerce_bool(
             params.get("cleanupArtifacts", params.get("cleanup_artifacts", [False]))[0],
             default=False,
         )
         dry_run = _coerce_bool(params.get("dryRun", params.get("dry_run", [True]))[0], default=True)
+        # Only pass the flag when set, so servers without keep_history keep working.
+        history_kwargs: dict[str, Any] = {"keep_history": True} if keep_history else {}
         try:
             raw_min_age_days = params.get("minAgeDays", params.get("min_age_days", [DEFAULT_ARTIFACT_RETENTION_DAYS]))[0]
             min_age_seconds = float(raw_min_age_days) * 86_400
@@ -12310,9 +12328,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     cleanup_artifacts=cleanup_requested,
                     dry_run=dry_run,
                     min_age_seconds=min_age_seconds,
+                    **history_kwargs,
                 )
             elif callable(clearer):
-                clear_kwargs: dict[str, Any] = {}
+                clear_kwargs: dict[str, Any] = dict(history_kwargs)
                 if isinstance(self.app_server, AppHTTPServer):
                     clear_kwargs["expected_revision"] = expected_revision
                 if cleanup_requested:
@@ -12326,9 +12345,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     clearer(**clear_kwargs)
                     cleanup_result = None
             else:
-                _atomically_clear_persisted_session_state()
+                _atomically_clear_persisted_session_state(keep_history=keep_history)
                 self.app_server.latest_session = None
-                self.app_server.allowed_files = set()
+                self.app_server.allowed_files = (
+                    collect_session_history_file_paths(load_session_history()) if keep_history else set()
+                )
                 cleanup_result = (
                     cleanup_runtime_artifacts(
                         active_session={},
@@ -12381,7 +12402,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         response: dict[str, Any] = {
             "ok": True,
-            "history": [],
+            "history": _public_session_history(load_session_history()) if keep_history else [],
             "session": None,
             "artifactCleanupRequested": cleanup_requested,
             "artifactCleanupDryRun": dry_run if cleanup_requested else None,

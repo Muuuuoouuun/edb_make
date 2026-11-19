@@ -114,7 +114,7 @@ class TestStabilizeUiFlow(unittest.TestCase):
         };
         vm.createContext(sandbox);
         vm.runInContext(section('async function openOutputFolder(', 'async function saveUserSettings(')
-          + section('function notifyOpenFailure(', 'function openClassinHandoff('), sandbox);
+          + section('function notifyOpenFailure(', 'function readSettingsSectionsOpen('), sandbox);
         (async () => {
           await sandbox.openOutputFolder('C:/out');
           assert.equal(JSON.stringify(notices), JSON.stringify([{ message: '폴더를 찾지 못했어요. EDB를 다시 제작해 주세요.', type: 'error' }]));

@@ -16,6 +16,7 @@ const sandbox = {
   PRIMARY_MODIFIER_LABEL: 'Ctrl',
   recentSessionCountLabel: entry => `${entry.problemCount ?? entry.problem_count ?? 0}개 문항`,
   formatPublishTime: value => `시간 ${value}`,
+  normalizePublishSummary: raw => raw ? { canOpenEdbFile: raw.edbFileExists !== false } : null,
 };
 vm.createContext(sandbox);
 const components = section('function HomeDashboard({', 'async function downloadPublishSummary(')
