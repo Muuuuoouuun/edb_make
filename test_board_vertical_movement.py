@@ -160,7 +160,7 @@ const captureTarget = {setPointerCapture: () => { captured = true; },hasPointerC
   addEventListener: (name, fn) => captureListeners.set(name, fn),removeEventListener: name => captureListeners.delete(name)};
 const pageH = 400, contentW = 1000, columnCount = 1;
 const smartMove = false, interactionBusy = false;
-const items = [{id:'a',heightFrac:0.8,startYPages:0}], boardOrderSignature = 'a';
+const items = [{id:'a',heightFrac:0.8,startYPages:0}], boardOrderSignature = 'a', selectedIds = new Set();
 const layout = {items,totalH:1200};
 const placement = {snappedNext:1.2,startPages:0,top:0,xRatio:0,yRatio:0,columnCount:1};
 const event = (x=200,y=200) => ({button:0,pointerId:1,currentTarget:captureTarget,clientX:x,clientY:y,altKey:false,preventDefault:()=>{}});

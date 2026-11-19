@@ -250,7 +250,7 @@ Object.assign(sandbox, {
   recognitionDisabledReason: '', sessionEditState: {},
   activeContinuousFlow: false, columnCount: 1, processedCount: 1, items: [{id: 'p1'}],
   rawCount: 0, s1Count: 0, aiCount: 1, reconstructCount: 0, ALTERNATE_MODIFIER_LABEL: 'Alt',
-  estimateDetailsOpen: false,
+  estimateDetailsOpen: false, boardKeysOpen: false, setBoardKeysOpen() {},
   estimateBarRef: { current: { getBoundingClientRect: () => ({ right: 800, bottom: 120 }) } },
   estimateToggleRef: { current: toggleElement }, estimateDetailsRef: { current: panel },
   previewEstimate: {

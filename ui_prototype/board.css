@@ -1956,9 +1956,12 @@
     border-radius: 7px;
     background: var(--surface-2);
   }
+  /* 2x2: four Korean scope labels do not fit one row of the side panel. */
   .placement-scope{
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .placement-scope button:nth-child(2n){ border-right: 0; }
+  .placement-scope button:nth-child(-n+2){ border-bottom: 1px solid var(--line); }
   .placement-width-options{
     grid-template-columns: repeat(3, minmax(0, 1fr));
     min-width: 0;
@@ -7048,6 +7051,8 @@
     font: 700 var(--text-2xs)/1.2 var(--font-mono);
     text-align: center;
   }
+  /* Board shortcut sheet: its own full-width row under the board toolbar. */
+  .board-shortcut-guide{ flex: 1 0 100%; margin-bottom: 4px; }
   .manual-split-empty,
   .manual-split-note{
     padding: 12px;
