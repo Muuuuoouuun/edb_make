@@ -18,7 +18,13 @@ UNDO_SETUP = STATE_SETUP + r"""
 function undoSandbox() {
   const { sandbox, state } = stateSandbox();
   Object.defineProperty(sandbox, 'itemsRef', { value: { get current() { return sandbox.items; } } });
-  Object.assign(sandbox, { setActionToast() {}, showActionToast() {} });
+  Object.defineProperty(sandbox, 'layoutGapModeRef', { value: { get current() { return sandbox.layoutGapMode; } } });
+  Object.defineProperty(sandbox, 'boardColumnsRef', { value: {
+    get current() { return sandbox.boardColumns; }, set current(value) { sandbox.boardColumns = value; } } });
+  Object.assign(sandbox, {
+    setActionToast: value => { sandbox.actionToast = value; }, showActionToast() {},
+    setTweak: (key, value) => { sandbox[key] = value; },
+  });
   vm.runInContext(section('  const pushLocalEdit = (burstKey', '  // A legacy session keeps')
     + section('  const setPlacements = (updates) =>', '  const setPlacement = (id, patch)')
     + '\nglobalThis.pushLocalEdit = pushLocalEdit; globalThis.setPlacements = setPlacements;'
@@ -105,6 +111,90 @@ class TestLocalBoardUndo(unittest.TestCase):
           await sandbox.undoMutation();
           assert.equal(sandbox.items.map(item => item.step).join(','), before, '전체 칠판용 can be taken back');
         })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_column_and_gap_mode_changes_undo_one_step_at_a_time(self) -> None:
+        run_node(UNDO_SETUP + r"""
+        (async () => {
+          const { sandbox, state } = undoSandbox();
+          withServerStep(sandbox);
+          sandbox.window.confirm = () => true;
+          const start = source.indexOf('setBoardColumns={v => {');
+          const changeColumns = source.slice(start + 'setBoardColumns={'.length, source.indexOf('}}', start) + 1);
+          vm.runInContext(section('  const updateLayoutGapMode =', '  const resetPlacementGaps =')
+            + `\nglobalThis.updateLayoutGapMode = updateLayoutGapMode; globalThis.setBoardColumns = ${changeColumns};`, sandbox);
+          sandbox.boardColumns = 2;  // a legacy two-column lesson
+          const original = sandbox.items;
+          sandbox.setPlacements([{ id: 'p1', patch: { xRatio: 0.3 } }]);
+          const moved = sandbox.items;
+          sandbox.setBoardColumns(1);
+          sandbox.setBoardColumns(1);
+          assert.equal(sandbox.localEditHistoryRef.current.stack.length, 2, 'picking the same column count is not a step');
+          sandbox.updateLayoutGapMode('compact');
+          assert.equal(sandbox.localEditHistoryRef.current.stack.length, 3);
+          assert.notEqual(sandbox.items, moved);
+          await sandbox.undoMutation();
+          assert.equal(sandbox.layoutGapMode, 'classin-grid', 'Ctrl+Z takes back the 여백 change');
+          assert.equal(sandbox.items, moved);
+          assert.equal(sandbox.boardColumns, 1);
+          await sandbox.undoMutation();
+          assert.equal(sandbox.boardColumns, 2, 'then the column change');
+          assert.equal(sandbox.items, moved, 'and the move survives both');
+          await sandbox.undoMutation();
+          assert.equal(sandbox.items, original);
+          assert.equal(state.restores, 0, 'none of this touched the saved lesson');
+          await sandbox.undoMutation();
+          assert.equal(state.restores, 1);
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_only_a_new_lesson_clears_local_history(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const effects = [];
+        const sandbox = {
+          useEffect: (fn, deps) => effects.push({ fn, deps }), session: 'lesson', usingMock: false,
+          boardColumns: 2, layoutGapMode: 'compact', placementGapHistoryRef: { current: [] },
+          localEditHistoryRef: { current: null }, setPlacementGapUndoCount() {}, setLocalEditUndoCount() {},
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(section('  // Gap undo belongs', '  const boardColumnsRef = useRef(boardColumns);'), sandbox);
+        const clearing = effects.filter(effect => {
+          sandbox.localEditHistoryRef.current = { stack: ['entry'] };
+          effect.fn();
+          return !sandbox.localEditHistoryRef.current.stack.length;
+        });
+        assert.deepEqual(clearing.map(effect => [...effect.deps]), [['lesson', false]],
+          'a column or 여백 change must not wipe the local undo history');
+        """)
+
+    def test_sample_board_reorder_is_one_undo_step(self) -> None:
+        run_node(UNDO_SETUP + r"""
+        (async () => {
+          const { sandbox } = undoSandbox();
+          const helpers = require('./ui_prototype/reorder.js');
+          Object.assign(sandbox, {
+            session: null, PRIMARY_MODIFIER_LABEL: 'Ctrl', moveSequenceRef: { current: 0 },
+            moveFeedbackTimerRef: { current: null }, setMoveFeedback() {},
+            reorderItemsForDrop: helpers.reorderItemsForDrop, reorderItemGroupForDrop: helpers.reorderItemGroupForDrop,
+          });
+          Object.assign(sandbox.window, { setTimeout: () => 1, clearTimeout() {} });
+          vm.runInContext(section('  const reorder = (fromId, toId', '  const removeItem = async')
+            + '\nglobalThis.reorder = reorder;', sandbox);
+          sandbox.setPlacements([{ id: 'p1', patch: { xRatio: 0.3 } }]);
+          const moved = sandbox.items;
+          assert.equal(sandbox.reorder('p1', 'p2', 'after'), true);
+          assert.equal(sandbox.items.map(item => item.id).join(','), 'p2,p1');
+          await sandbox.undoMutation();
+          assert.equal(sandbox.items, moved, 'Ctrl+Z takes back only the reorder');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_a_new_board_edit_retires_an_older_toast_undo(self) -> None:
+        run_node(UNDO_SETUP + r"""
+        const { sandbox } = undoSandbox();
+        sandbox.actionToast = { message: '1개 문제를 삭제했어요', actionLabel: '실행 취소' };
+        sandbox.setPlacements([{ id: 'p1', patch: { xRatio: 0.3 } }]);
+        assert.equal(sandbox.actionToast, null, 'its button would now undo this edit instead of the deletion');
         """)
 
 
@@ -370,6 +460,7 @@ class TestBoardDraft(unittest.TestCase):
             setLayoutGapModeState: value => { sandbox.layoutGapMode = value; },
             setItems: value => { sandbox.items = value; }, setFileName: value => { sandbox.fileName = value; },
             setPublished() {}, showToast() {},
+            pushLocalEdit: () => { sandbox.pushed = { items: sandbox.items, boardColumns: sandbox.boardColumns }; },
           });
           vm.runInContext(section('function readStoredPreference(', 'function useStoredPreference(')
             + 'globalThis.renderEffects = () => {'
@@ -388,8 +479,10 @@ class TestBoardDraft(unittest.TestCase):
         accepted.render();
         assert.equal(accepted.asked.length, 0, 'nothing is offered before the saved lesson has loaded');
         accepted.sandbox.initialSessionLoaded = true;
+        const savedItems = accepted.sandbox.items;
         accepted.render();
         assert.deepEqual(accepted.asked, ['저장하지 않은 배치가 있어요. 복원할까요?']);
+        assert.equal(accepted.sandbox.pushed.items, savedItems, 'Ctrl+Z after restoring returns to the saved board');
         assert.equal(accepted.sandbox.fileName, '새 이름');
         assert.equal(accepted.sandbox.items[0].placementXRatio, 0.4);
         accepted.render();
@@ -416,6 +509,15 @@ class TestBoardDraft(unittest.TestCase):
         other.sandbox.initialSessionLoaded = true;
         other.render();
         assert.equal(other.asked.length, 0, 'a draft is never offered for another lesson');
+
+        const unreadable = app(true);
+        const stored = JSON.parse(unreadable.store.get('edb.boardDraft.v1'));
+        stored.patches.p1.title = 5;  // a copy this version cannot map
+        unreadable.store.set('edb.boardDraft.v1', JSON.stringify(stored));
+        unreadable.sandbox.initialSessionLoaded = true;
+        unreadable.render();
+        assert.equal(unreadable.asked.length, 0);
+        assert.equal(unreadable.store.has('edb.boardDraft.v1'), false, 'an unreadable copy is dropped, not a startup crash');
         """)
 
     def test_storage_failures_never_break_the_editor(self) -> None:

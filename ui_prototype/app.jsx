@@ -17634,20 +17634,29 @@ function App(){
   const [localEditUndoCount, setLocalEditUndoCount] = useState(0);
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const layoutGapModeRef = useRef(layoutGapMode);
+  layoutGapModeRef.current = layoutGapMode;
   // Redo entries belong to the exact session and undo history the last
   // undo/redo produced; any other change to either makes them stale.
   const redoStackRef = useRef([]);
   const redoAnchorRef = useRef(null);
   const [redoCount, setRedoCount] = useState(0);
-  // Record the board before an unsaved edit so Ctrl+Z can take it back. Any
-  // new edit also retires redo, which would otherwise overwrite it.
+  // Record the board (items, columns, gap mode) before an unsaved edit so
+  // Ctrl+Z can take it back. Any new edit also retires redo, which would
+  // otherwise overwrite it, and an older toast's undo, which would now undo
+  // this edit instead of the one it names.
   const pushLocalEdit = (burstKey = '') => {
-    if (pushUndoEntry(localEditHistoryRef.current, itemsRef.current, burstKey)) {
-      setLocalEditUndoCount(localEditHistoryRef.current.stack.length);
-    }
+    const history = localEditHistoryRef.current;
+    const top = history.stack[history.stack.length - 1];
+    const entry = top?.items === itemsRef.current && top.boardColumns === boardColumnsRef.current
+      && top.layoutGapMode === layoutGapModeRef.current
+      ? top
+      : { items: itemsRef.current, boardColumns: boardColumnsRef.current, layoutGapMode: layoutGapModeRef.current };
+    if (pushUndoEntry(history, entry, burstKey)) setLocalEditUndoCount(history.stack.length);
     redoStackRef.current = [];
     redoAnchorRef.current = null;
     setRedoCount(0);
+    setActionToast(null);
   };
   // A legacy session keeps its own column count. Empty/new work always starts
   // with one column; viewing either editor mode never rewrites a saved layout.
@@ -17660,9 +17669,13 @@ function App(){
   useEffect(() => {
     placementGapHistoryRef.current = [];
     setPlacementGapUndoCount(0);
+  }, [session, usingMock, boardColumns, layoutGapMode]);
+  // Local undo entries carry their own columns and gap mode, so only another
+  // lesson (or the sample) makes them meaningless.
+  useEffect(() => {
     localEditHistoryRef.current = { stack: [], burstKey: '', burstAt: 0 };
     setLocalEditUndoCount(0);
-  }, [session, usingMock, boardColumns, layoutGapMode]);
+  }, [session, usingMock]);
   const boardColumnsRef = useRef(boardColumns);
   boardColumnsRef.current = boardColumns;
   const fileInputRef = useRef(null);
@@ -18804,7 +18817,13 @@ function App(){
     // Unsaved board edits come off first, one at a time, without touching
     // the saved lesson; only then does undo restore a saved step.
     if (localEditHistoryRef.current.stack.length) {
-      setItems(popUndoEntry(localEditHistoryRef.current));
+      const entry = popUndoEntry(localEditHistoryRef.current);
+      if (entry.boardColumns !== boardColumnsRef.current) {
+        boardColumnsRef.current = entry.boardColumns;
+        setTweak('boardColumns', entry.boardColumns);
+      }
+      setLayoutGapModeState(entry.layoutGapMode);
+      setItems(entry.items);
       setLocalEditUndoCount(localEditHistoryRef.current.stack.length);
       setPublished(false);
       showToast('마지막 변경을 되돌렸어요');
@@ -18962,12 +18981,20 @@ function App(){
   useEffect(() => {
     if (!initialSessionLoaded || boardDraftCheckedRef.current) return;
     boardDraftCheckedRef.current = true;
-    const restore = boardDraftRestoreState(session, readStoredPreference(BOARD_DRAFT_KEY, null));
+    let restore = null;
+    try {
+      restore = boardDraftRestoreState(session, readStoredPreference(BOARD_DRAFT_KEY, null));
+    } catch (_error) {
+      // A copy this version cannot read must never stop the editor from opening.
+      removeStoredPreference(BOARD_DRAFT_KEY);
+    }
     if (!restore) return;
     if (!window.confirm('저장하지 않은 배치가 있어요. 복원할까요?')) {
       removeStoredPreference(BOARD_DRAFT_KEY);
       return;
     }
+    // Ctrl+Z after restoring goes back to the saved board.
+    pushLocalEdit();
     boardColumnsRef.current = restore.boardColumns;
     setTweak('boardColumns', restore.boardColumns);
     setLayoutGapModeState(restore.layoutGapMode);
@@ -19864,6 +19891,7 @@ function App(){
       nextMode === LAYOUT_GAP_MODE_COMPACT
       && !window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요? 미리보기에서 확인한 뒤 저장할 수 있습니다.')
     ) return;
+    pushLocalEdit();
     setLayoutGapModeState(nextMode);
     setItems(previous => reflowItemsForBoardOrder(
       previous,
@@ -20018,6 +20046,8 @@ function App(){
       setMoveFeedback(null);
       moveFeedbackTimerRef.current = null;
     }, 900);
+    // Without a saved lesson the move is a local edit; with one it is saved below.
+    if (!session) pushLocalEdit();
     setItems(nextItems);
     setActiveId(fromId);
     if (session) {
@@ -21050,7 +21080,10 @@ function App(){
           mutateSession={mutateSession}
           mutating={mutating || hasRunningQueueRecognition || confirmingRecognition}
           boardColumns={boardColumns}
-          setBoardColumns={v => setTweak('boardColumns', v)}
+          setBoardColumns={v => {
+            if (normalizeBoardColumns(v) !== boardColumns) pushLocalEdit();
+            setTweak('boardColumns', v);
+          }}
           layoutGapMode={layoutGapMode}
           setLayoutGapMode={updateLayoutGapMode}
           resetPlacementGaps={resetPlacementGaps}
