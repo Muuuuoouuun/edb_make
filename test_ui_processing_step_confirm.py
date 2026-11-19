@@ -90,14 +90,18 @@ function controller() {
   }
   function clickFooter(bulk) {
     const call = source.indexOf('onConfirm(item.id, { bulk, problemIds: bulk ? remainingApplyIds : [item.id], processingStep: item.step });');
-    const start = source.lastIndexOf('onClick={() => {', call) + 'onClick={() => {'.length;
+    const start = source.lastIndexOf('onClick={async () => {', call) + 'onClick={async () => {'.length;
     const end = source.indexOf('\n              }}', call);
     assert.ok(call >= 0 && end > start, 'processing confirmation click handler is missing');
     sandbox.footerBulk = bulk;
-    vm.runInContext('(() => { const item = globalThis.items.find(item => item.id === globalThis.activeId);'
-      + 'const items=globalThis.items;' + section('  const remainingReviewItems =', '  const showItemConfirmBar =')
+    // The handler awaits onConfirm and then advances to the next item to check.
+    sandbox.footerDone = vm.runInContext('(async () => { const item = globalThis.items.find(item => item.id === globalThis.activeId);'
+      + 'const items=globalThis.items; const activeIndex = items.indexOf(item);'
+      + 'const setActive = id => { globalThis.activeId = id; };'
+      + section('  const itemNeedsCheck =', '  const panelBusy =')
+      + section('  const remainingReviewItems =', '  const showItemConfirmBar =')
       + 'const bulk = globalThis.footerBulk; const onConfirm = (...args) => {'
-      + 'globalThis.pendingConfirm = globalThis.confirm(...args); };'
+      + 'globalThis.pendingConfirm = globalThis.confirm(...args); return globalThis.pendingConfirm; };'
       + source.slice(start, end) + '})()', sandbox);
     return sandbox.pendingConfirm;
   }

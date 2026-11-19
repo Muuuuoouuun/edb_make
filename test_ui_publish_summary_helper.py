@@ -304,7 +304,7 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             });
             const labels = summary.classinPreflightIssueLabels.join(' / ');
             for (const type of types) assert.ok(!labels.includes(type), labels);
-            assert.ok(labels.includes('좌우 원본 경계 확인 1'), labels);
+            assert.ok(labels.includes('글자 잘림 확인 1'), labels);
             assert.ok(labels.includes('기타 확인 필요 1'), labels);
             """
         )

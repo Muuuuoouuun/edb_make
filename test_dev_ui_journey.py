@@ -374,6 +374,7 @@ class TestPublishResultJourney(unittest.TestCase):
           sessionPublishSummary: () => summary, sessionPublishHistory: () => [summary, summary],
           openPublishedEdb: value => opened.push(value), openOutputFolder: value => folders.push(value),
           formatPublishHistoryMeta: () => '',
+          publishPreflightIssueButtons: () => [],  // dev/ui-review's per-issue jump buttons
         });
         compile(sandbox, section('function PublishResultPanel(', 'function SidebarDisclosure('));
         const props = { session: {}, visible: true, onDownloadPublish() {}, publishDownloadBusy: false };

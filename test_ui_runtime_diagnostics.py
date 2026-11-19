@@ -38,7 +38,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
 
@@ -484,7 +484,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         preset = side_panel.split("const applyPlacementPreset = (preset) => {", 1)[1]
         preset = preset.split("const updateCropDraft", 1)[0]
 
-        self.assertIn("passageGroupId:", item_mapper)
+        self.assertIn("    passageGroupId,\n", item_mapper)
         self.assertIn("passageRole:", item_mapper)
         self.assertIn("passageRange:", item_mapper)
         self.assertIn("supplementalItem:", item_mapper)
@@ -953,7 +953,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("문항 영역 겹침", review_stage)
         self.assertIn("sourceProblemOverlapGroups", review_stage)
         self.assertIn("sourceProblemOverlapGroups", summary_helper)
-        self.assertIn("source_problem_overlap_groups", summary_helper)
+        # Recomputed from the current problems, not the import-time list.
+        self.assertIn("findSourceProblemOverlaps(session?.problems || [])", summary_helper)
         self.assertIn("sourceProblemOverlapLabel", summary_helper)
         self.assertIn("source_problem_bbox_overlap", risk_meta)
         self.assertIn("문항 영역 겹침", risk_meta)
@@ -980,9 +981,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("지문 겹침", review_stage)
         self.assertIn("passageGroupSourceReuseGroups", review_stage)
         self.assertIn("passageGroupSourceReuseDetailLabel", review_stage)
-        self.assertIn("passage_group_source_reuse", review_stage)
+        self.assertIn("focusOverlapProblems(reviewSummary.passageGroupSourceReuseGroups)", review_stage)
         self.assertIn("passageGroupSourceReuseGroups", summary_helper)
-        self.assertIn("passage_group_source_reuse_groups", summary_helper)
+        self.assertIn("findPassageGroupSourceReuse(session?.problems || [])", summary_helper)
         self.assertIn("passageGroupSourceReuseLabel", summary_helper)
         self.assertIn("passageGroupSourceReuseDetailLabel", summary_helper)
 
@@ -994,31 +995,31 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             const summary = sandbox.sessionReviewSummary({
-              passageGroupSourceReuseGroups: [
-                {
-                  passageGroupId: 'hwp-text-passage-31-34',
-                  sourcePageId: 'page-004',
-                  problemIds: ['p31', 'p32'],
-                  overlapAreaRatio: 0.92,
-                },
-              ],
-              passageGroupSourceReuseGroupCount: 1,
+              // A stale import-time list must not decide the chip any more.
+              passageGroupSourceReuseGroups: [],
+              passageGroupSourceReuseGroupCount: 3,
               problems: [
                 {
                   id: 'p31',
+                  title: '31.',
                   reviewStatus: 'check_needed',
                   riskFlags: ['passage_group_source_reuse'],
-                  bbox: { width: 10, height: 10 },
+                  sourcePageId: 'page-004',
+                  passageGroupId: 'hwp-text-passage-31-34',
+                  bbox: { left: 0, top: 0, width: 100, height: 100 },
                 },
                 {
                   id: 'p32',
+                  title: '32.',
                   reviewStatus: 'check_needed',
                   riskFlags: ['passage_group_source_reuse'],
-                  bbox: { width: 10, height: 10 },
+                  sourcePageId: 'page-004',
+                  passageGroupId: 'hwp-text-passage-31-34',
+                  bbox: { left: 0, top: 8, width: 100, height: 92 },
                 },
               ],
               pages: [{ id: 'page-004', problemIds: ['p31', 'p32'], riskFlags: [] }],
@@ -1032,10 +1033,11 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (summary.passageGroupSourceReuseLabel !== '지문 겹침 1건') {
               throw new Error(`expected short passage group label, got ${summary.passageGroupSourceReuseLabel}`);
             }
-            if (!summary.passageGroupSourceReuseDetailLabel.includes('hwp-text-passage-31-34')) {
-              throw new Error(`expected passage group detail, got ${summary.passageGroupSourceReuseDetailLabel}`);
+            if (summary.passageGroupSourceReuseDetailLabel.includes('hwp-text-passage-31-34')
+              || !summary.passageGroupSourceReuseDetailLabel.includes('31. ↔ 32.')) {
+              throw new Error(`expected question numbers, not ids, got ${summary.passageGroupSourceReuseDetailLabel}`);
             }
-            if (!summary.passageGroupSourceReuseDetailLabel.includes('92%')) {
+            if (!summary.passageGroupSourceReuseDetailLabel.includes('100%')) {
               throw new Error(`expected overlap percent detail, got ${summary.passageGroupSourceReuseDetailLabel}`);
             }
             """
@@ -1157,7 +1159,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             const session = {
@@ -1227,7 +1229,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             const session = {
@@ -1296,7 +1298,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             if (typeof sandbox.publishReviewWarningMessage !== 'function') {
@@ -1352,7 +1354,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('const NON_ACTIONABLE_RISK_FLAGS');
             if (start < 0 || end < 0) throw new Error('publish preflight helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             if (typeof sandbox.publishBlockedTarget !== 'function') {
@@ -1460,7 +1462,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('const NON_ACTIONABLE_RISK_FLAGS');
             if (start < 0 || end < 0) throw new Error('publish preflight helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             if (typeof sandbox.applyPublishPreflightIssuesToSession !== 'function') {
