@@ -1650,9 +1650,9 @@ class TestStaticAssetCaching(unittest.TestCase):
     def test_file_download_blocks_reset_and_destructive_cleanup_until_stream_finishes(self):
         with TemporaryDirectory() as raw_tmp:
             runtime_dir = Path(raw_tmp)
-            export_dir = runtime_dir / "exports"
-            export_dir.mkdir(parents=True)
-            artifact = export_dir / "lesson.edb"
+            upload_dir = runtime_dir / "uploads"
+            upload_dir.mkdir(parents=True)
+            artifact = upload_dir / "lesson.pdf"
             payload = b"download-in-progress"
             artifact.write_bytes(payload)
             os.utime(artifact, (1, 1))
@@ -6505,14 +6505,14 @@ class TestSystemOpenTargets(unittest.TestCase):
             runtime_dir = Path(raw_tmp)
             upload_dir = runtime_dir / "uploads"
             output_dir = runtime_dir / "outputs" / "active"
-            export_dir = runtime_dir / "exports"
+            history_dir = runtime_dir / "outputs" / "older"
             upload_dir.mkdir()
             output_dir.mkdir(parents=True)
-            export_dir.mkdir()
+            history_dir.mkdir()
             protected_upload = upload_dir / "source.pdf"
-            protected_output = output_dir / "board.edb"
-            protected_history = export_dir / "history.zip"
-            orphan = export_dir / "orphan.zip"
+            protected_output = output_dir / "board.png"
+            protected_history = history_dir / "page.png"
+            orphan = upload_dir / "orphan.pdf"
             for path in (protected_upload, protected_output, protected_history, orphan):
                 path.write_bytes(b"artifact")
                 os.utime(path, (1, 1))
@@ -6554,10 +6554,10 @@ class TestSystemOpenTargets(unittest.TestCase):
     def test_runtime_artifact_capacity_only_selects_bytes_above_limit(self):
         with TemporaryDirectory() as raw_tmp:
             runtime_dir = Path(raw_tmp)
-            export_dir = runtime_dir / "exports"
-            export_dir.mkdir()
-            oldest = export_dir / "oldest.zip"
-            newer = export_dir / "newer.zip"
+            upload_dir = runtime_dir / "uploads"
+            upload_dir.mkdir()
+            oldest = upload_dir / "oldest.pdf"
+            newer = upload_dir / "newer.pdf"
             oldest.write_bytes(b"a" * 6)
             newer.write_bytes(b"b" * 6)
             os.utime(oldest, (1, 1))
@@ -7504,9 +7504,9 @@ class TestSystemOpenTargets(unittest.TestCase):
             latest_path = runtime_dir / "latest.json"
             history_path = runtime_dir / "history.json"
             generated_path = runtime_dir / "generated_session.js"
-            export_dir = runtime_dir / "exports"
-            export_dir.mkdir()
-            artifact = export_dir / "old.zip"
+            upload_dir = runtime_dir / "uploads"
+            upload_dir.mkdir()
+            artifact = upload_dir / "old.pdf"
             artifact.write_bytes(b"old")
             os.utime(artifact, (1, 1))
             latest_path.write_text('{"problems": []}', encoding="utf-8")

@@ -3474,6 +3474,7 @@
     color: var(--danger-ink);
     background: rgba(213,72,72,.08);
   }
+  .data-folder-fallback-note{ overflow-wrap: anywhere; }
   .update-architecture-note > strong,
   .update-architecture-note > small{
     display: block;

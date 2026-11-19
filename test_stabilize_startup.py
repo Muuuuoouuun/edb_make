@@ -60,7 +60,7 @@ class TestStabilizeStartup(unittest.TestCase):
         with mock.patch.object(app, "ensure_runtime_dirs"), \
                 mock.patch.object(app, "hydrate_user_settings_env"), \
                 mock.patch.object(app, "write_placeholder_generated_session"), \
-                mock.patch.object(app, "_run_startup_artifact_cleanup"), \
+                mock.patch.object(app, "_run_startup_maintenance"), \
                 mock.patch.object(app, "_local_server_is_healthy", return_value=False) as healthy, \
                 mock.patch.object(app, "AppHTTPServer", side_effect=bind) as server_class:
             app.run_server(host="127.0.0.1", port=8765)

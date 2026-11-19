@@ -558,6 +558,8 @@ def resource_root() -> Path:
 
 
 BASE_DIR = app_root()
+# Computed once: app_root() fell back because Documents was blocked, so the UI can say why old work is missing.
+DATA_FOLDER_FALLBACK = is_frozen_app() and BASE_DIR != default_frozen_app_home()
 RESOURCE_DIR = resource_root()
 UI_DIR = RESOURCE_DIR / "ui_prototype"
 LEGACY_UI_ASSET_ALIASES = {
@@ -652,6 +654,10 @@ class ArtifactCleanupBusy(RuntimeError):
     """Raised when cleanup would race an artifact-producing request."""
 
 
+class SessionHistoryUnreadable(RuntimeError):
+    """Raised by a strict history read; cleanup must then delete nothing."""
+
+
 class SessionRevisionConflict(RuntimeError):
     """Raised when a destructive request no longer targets the current session."""
 
@@ -671,6 +677,14 @@ class SessionWritePathTooLong(OSError):
 
 def default_output_root() -> Path:
     return RUNTIME_DIR / DEFAULT_OUTPUT_ROOT_NAME
+
+
+def _with_data_folder_status(settings_summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **settings_summary,
+        "dataFolderFallback": DATA_FOLDER_FALLBACK,
+        "dataFolder": str(BASE_DIR) if DATA_FOLDER_FALLBACK else "",
+    }
 
 
 def _fsync_parent_directory(path: Path) -> None:
@@ -4160,6 +4174,22 @@ def _parse_file_preview_max_dimension(query: dict[str, list[str]]) -> int | None
     return max(FILE_PREVIEW_MIN_DIMENSION, min(FILE_PREVIEW_MAX_DIMENSION, requested))
 
 
+@lru_cache(maxsize=2048)
+def _board_render_has_missing_tail_cached(
+    board_path: str,
+    board_modified_ns: int,
+    board_size: int,
+    source_path: str,
+    source_modified_ns: int,
+    source_size: int,
+) -> bool:
+    """Pixel-only decision, so one check serves every preview size and option."""
+    from PIL import Image
+
+    with Image.open(source_path) as loaded, Image.open(board_path) as rendered:
+        return bool(_lazy_call("image_reconstruction_backend", "board_render_has_missing_tail", loaded, rendered))
+
+
 @lru_cache(maxsize=32)
 def _build_guarded_board_payload(
     board_path: str,
@@ -4171,13 +4201,14 @@ def _build_guarded_board_payload(
     render_options: str,
     max_dimension: int | None,
 ) -> bytes | None:
-    """Repair a clipped derived preview in memory, leaving source files intact."""
+    """Repair a clipped derived preview in memory, leaving source files intact.
+
+    Callers first confirm _board_render_has_missing_tail_cached; the stats are cache-key inputs.
+    """
     del board_modified_ns, board_size, source_modified_ns, source_size
     from PIL import Image
 
-    with Image.open(source_path) as loaded, Image.open(board_path) as rendered:
-        if not _lazy_call("image_reconstruction_backend", "board_render_has_missing_tail", loaded, rendered):
-            return None
+    with Image.open(source_path) as loaded:
         source = loaded.copy()
 
     options = json.loads(render_options)
@@ -4223,11 +4254,14 @@ def _guarded_board_payload(
     }
     try:
         board_stat, source_stat = board_path.stat(), source.stat()
-        return _build_guarded_board_payload(
+        file_key = (
             str(board_path.resolve()), board_stat.st_mtime_ns, board_stat.st_size,
             str(source.resolve()), source_stat.st_mtime_ns, source_stat.st_size,
-            json.dumps(options, sort_keys=True), max_dimension,
         )
+        # The healthy (common) case stops here on a cache hit: no image decode per preview size.
+        if not _board_render_has_missing_tail_cached(*file_key):
+            return None
+        return _build_guarded_board_payload(*file_key, json.dumps(options, sort_keys=True), max_dimension)
     except (OSError, ValueError):
         # An unavailable legacy source must not prevent the remaining session
         # from opening. Normal file/download error handling still applies.
@@ -5339,7 +5373,9 @@ def save_latest_session(session: dict[str, Any], path: Path | None = None) -> No
         _atomic_write_text(target, payload)
 
 
-def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
+def load_session_history(path: Path | None = None, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Read saved history. ``strict`` raises SessionHistoryUnreadable instead of
+    returning [] for an unreadable file, so cleanup never mistakes it for "no history"."""
     target = path or SESSION_HISTORY_JSON
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
@@ -5348,9 +5384,13 @@ def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
             return []
         try:
             payload = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, json.JSONDecodeError) as exc:
+            if strict:
+                raise SessionHistoryUnreadable(f"{type(exc).__name__}: {exc}") from exc
             return []
     if not isinstance(payload, list):
+        if strict:
+            raise SessionHistoryUnreadable(f"session history is {type(payload).__name__}, not a list")
         return []
     return [entry for entry in payload if isinstance(entry, dict)]
 
@@ -5566,6 +5606,18 @@ def _path_is_protected(path: Path, protected_paths: set[Path]) -> bool:
     return path in protected_paths or any(parent in protected_paths for parent in path.parents)
 
 
+FINISHED_ARTIFACT_SUFFIXES = {".edb", ".zip"}
+
+
+def _is_finished_artifact(root_name: str, relative: Path) -> bool:
+    """Teachers' finished files: retention cleanup never selects them, referenced or not."""
+    return (
+        root_name == "exports"
+        or relative.suffix.lower() in FINISHED_ARTIFACT_SUFFIXES
+        or "published" in relative.parts[:-1]
+    )
+
+
 def cleanup_runtime_artifacts(
     *,
     runtime_dir: Path | None = None,
@@ -5579,7 +5631,9 @@ def cleanup_runtime_artifacts(
     """Plan or remove old, unreferenced runtime artifacts.
 
     The default is intentionally non-destructive. Files referenced by the
-    active session or any retained history snapshot are never selected.
+    active session or any retained history snapshot are never selected, and
+    neither are finished outputs (.edb/.zip, published/, the exports root).
+    An unreadable history raises SessionHistoryUnreadable before anything is selected.
     """
     if min_age_seconds < 0:
         raise ValueError("minAgeSeconds must be non-negative")
@@ -5588,7 +5642,7 @@ def cleanup_runtime_artifacts(
 
     base = (runtime_dir or RUNTIME_DIR).resolve()
     current_session = active_session if active_session is not None else load_latest_session()
-    current_history = history if history is not None else load_session_history()
+    current_history = history if history is not None else load_session_history(strict=True)
     protected_paths = _session_artifact_protection_paths(current_session)
     protected_paths |= _history_artifact_protection_paths(current_history)
     observed_at = time.time() if now is None else float(now)
@@ -5604,11 +5658,12 @@ def cleanup_runtime_artifacts(
                 continue
             try:
                 resolved = path.resolve()
-                resolved.relative_to(resolved_root)
+                relative = resolved.relative_to(resolved_root)
                 stat = path.stat()
             except (OSError, ValueError):
                 continue
-            files.append((path, int(stat.st_size), float(stat.st_mtime), _path_is_protected(resolved, protected_paths)))
+            protected = _is_finished_artifact(root_name, relative) or _path_is_protected(resolved, protected_paths)
+            files.append((path, int(stat.st_size), float(stat.st_mtime), protected))
 
     total_bytes = sum(size for _, size, _, _ in files)
     protected_bytes = sum(size for _, size, _, protected in files if protected)
@@ -5671,6 +5726,82 @@ def cleanup_runtime_artifacts(
         "deletedPaths": deleted_paths,
         "errors": errors,
     }
+
+
+STALE_WORK_FOLDER_MIN_AGE_SECONDS = 86_400.0
+_STALE_STAGING_PATTERNS = (
+    "*/.publish-staging/*", "*/.export-staging/*",
+    "previews/*/.publish-staging/*", "previews/*/.export-staging/*",
+)
+
+
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _scan_work_folder(folder: Path) -> tuple[int, float, bool]:
+    """Size, newest mtime, and whether a finished file (see _is_finished_artifact) sits inside.
+
+    An unreadable subfolder raises instead of being skipped, so a hidden .edb is never missed.
+    """
+    size, newest = 0, folder.stat().st_mtime
+    for root, _dirs, files in os.walk(folder, onerror=_raise_walk_error):
+        try:
+            newest = max(newest, os.stat(root).st_mtime)
+        except OSError:
+            pass
+        for name in files:
+            if _is_finished_artifact(DEFAULT_OUTPUT_ROOT_NAME, Path(root, name).relative_to(folder)):
+                return size, newest, True
+            try:
+                entry = os.lstat(os.path.join(root, name))
+            except OSError:
+                continue
+            newest = max(newest, entry.st_mtime)
+            size += entry.st_size
+    return size, newest, False
+
+
+def plan_stale_work_folders(
+    *,
+    output_root: Path,
+    active_session: dict[str, Any] | None,
+    history: list[dict[str, Any]],
+    min_age_seconds: float = STALE_WORK_FOLDER_MIN_AGE_SECONDS,
+    now: float | None = None,
+) -> list[tuple[Path, int]]:
+    """Pure garbage only: unreferenced preview runs and leftover staging generations.
+
+    A preview folder is kept whole when any active/history path lies inside it
+    or above it. Staging generations are renamed away before any session commit,
+    so only a reference inside one keeps it. A folder holding a finished file is
+    never planned: an adopted preview run is the lesson's output_dir, so publish
+    writes the teacher's EDB to previews/<run>/published/. Everything else under
+    outputs/ is left to the opt-in retention cleanup.
+    """
+    protected = _session_artifact_protection_paths(active_session) | _history_artifact_protection_paths(history)
+    holds_protected = set(protected)
+    for path in protected:
+        holds_protected.update(path.parents)
+    observed_at = time.time() if now is None else float(now)
+    candidates = [(path, True) for path in (output_root / "previews").glob("*")]
+    candidates += [(path, False) for pattern in _STALE_STAGING_PATTERNS for path in output_root.glob(pattern)]
+    planned: list[tuple[Path, int]] = []
+    for folder, is_preview in candidates:
+        try:
+            if folder.is_symlink() or not folder.is_dir():
+                continue
+            resolved = folder.resolve()
+            if resolved in holds_protected or (is_preview and _path_is_protected(resolved, protected)):
+                continue
+            if any(resolved.is_relative_to(selected) for selected, _ in planned):
+                continue
+            size, newest, holds_finished = _scan_work_folder(resolved)
+        except OSError:
+            continue
+        if not holds_finished and observed_at - newest >= min_age_seconds:
+            planned.append((resolved, size))
+    return planned
 
 
 def _file_uri_to_path(value: Any) -> Path | None:
@@ -10254,6 +10385,25 @@ class AppHTTPServer(ThreadingHTTPServer):
         self._session_revision = 1 if latest_session is not None else 0
         self.allowed_files: set[str] = collect_session_file_paths(latest_session) if latest_session else set()
         self.allowed_files |= collect_session_history_file_paths(history)
+        self._history_paths_seen: set[str] = {str(entry.get("id") or "") for entry in history}
+
+    def _allow_new_history_paths(self, history: list[dict[str, Any]]) -> None:
+        """Call with _state_lock held, after the committed snapshot's own paths were allowed.
+
+        history[0] is that snapshot; older entries never change, so each id is walked
+        once instead of re-resolving every history path on every board edit.
+        """
+        seen = getattr(self, "_history_paths_seen", None)
+        if seen is None:
+            seen = self._history_paths_seen = set()
+        for entry in history[1:]:
+            key = str(entry.get("id") or "") if isinstance(entry, dict) else ""
+            if key and key in seen:
+                continue
+            seen.add(key)
+            self.allowed_files |= collect_session_history_file_paths([entry])
+        if history and isinstance(history[0], dict):
+            seen.add(str(history[0].get("id") or ""))
 
     def note_shutdown_reason(self, reason: str) -> str:
         normalized = str(reason or "unknown").strip() or "unknown"
@@ -10327,7 +10477,7 @@ class AppHTTPServer(ThreadingHTTPServer):
             self.latest_session = snapshot
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(snapshot))
-            self.allowed_files.update(collect_session_history_file_paths(history))
+            self._allow_new_history_paths(history)
             if history_error is not None:
                 print(
                     f"[app-server] latest session committed but history update failed: {history_error}",
@@ -10359,7 +10509,7 @@ class AppHTTPServer(ThreadingHTTPServer):
             self.latest_session = updated_snapshot
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(updated_snapshot))
-            self.allowed_files.update(collect_session_history_file_paths(history))
+            self._allow_new_history_paths(history)
             if history_error is not None:
                 print(
                     f"[app-server] latest session committed but history update failed: {history_error}",
@@ -10402,7 +10552,7 @@ class AppHTTPServer(ThreadingHTTPServer):
             self.latest_session = updated_snapshot
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(updated_snapshot))
-            self.allowed_files.update(collect_session_history_file_paths(history))
+            self._allow_new_history_paths(history)
             if history_error is not None:
                 print(
                     f"[app-server] latest session committed but history update failed: {history_error}",
@@ -10464,20 +10614,47 @@ class AppHTTPServer(ThreadingHTTPServer):
         min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
         max_bytes: int | None = None,
     ) -> dict[str, Any]:
-        # Hold the state lock through selection/deletion. Otherwise a concurrent
-        # remember_session could make an already-selected file active.
+        # Deletion holds the state lock through selection, otherwise a concurrent
+        # remember_session could make an already-selected file active. A dry run
+        # only needs a snapshot, so it walks the folders without blocking requests.
         with self._state_lock:
             if not dry_run and self._active_artifact_jobs:
                 raise ArtifactCleanupBusy(
                     f"artifact cleanup paused while {self._active_artifact_jobs} request(s) are using files"
                 )
-            return cleanup_runtime_artifacts(
-                active_session=_clone_jsonish(self.latest_session) if self.latest_session is not None else {},
-                history=load_session_history(),
-                dry_run=dry_run,
-                min_age_seconds=min_age_seconds,
-                max_bytes=max_bytes,
-            )
+            active = _clone_jsonish(self.latest_session) if self.latest_session is not None else {}
+            options = {"dry_run": dry_run, "min_age_seconds": min_age_seconds, "max_bytes": max_bytes}
+            if not dry_run:
+                return cleanup_runtime_artifacts(
+                    active_session=active, history=load_session_history(strict=True), **options
+                )
+        return cleanup_runtime_artifacts(active_session=active, history=load_session_history(strict=True), **options)
+
+    def cleanup_stale_work_folders(
+        self, *, min_age_seconds: float = STALE_WORK_FOLDER_MIN_AGE_SECONDS,
+    ) -> dict[str, Any]:
+        """Remove unreferenced preview runs and leftover staging folders (see plan_stale_work_folders)."""
+        with self._state_lock:
+            if self._active_artifact_jobs:
+                raise ArtifactCleanupBusy("stale folder cleanup skipped while requests are using files")
+            revision = self._session_revision
+            active = _clone_jsonish(self.latest_session) if self.latest_session is not None else {}
+            history = load_session_history(strict=True)
+        planned = plan_stale_work_folders(
+            output_root=default_output_root(), active_session=active, history=history,
+            min_age_seconds=min_age_seconds,
+        )
+        deleted_count = deleted_bytes = 0
+        for folder, size in planned:
+            # One folder per lock hold; a new commit or job ends the pass (next launch resumes).
+            with self._state_lock:
+                if self._active_artifact_jobs or self._session_revision != revision:
+                    break
+                shutil.rmtree(folder, ignore_errors=True)
+            if not folder.exists():
+                deleted_count += 1
+                deleted_bytes += size
+        return {"plannedFolderCount": len(planned), "deletedFolderCount": deleted_count, "deletedBytes": deleted_bytes}
 
     def clear_session(
         self,
@@ -10517,6 +10694,7 @@ class AppHTTPServer(ThreadingHTTPServer):
             self._session_revision += 1
             cleared_revision = self._session_revision
             self.allowed_files.clear()
+            getattr(self, "_history_paths_seen", set()).clear()
             if cleanup_artifacts:
                 try:
                     cleanup_result = cleanup_runtime_artifacts(
@@ -12331,7 +12509,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             else:
                 result = cleanup_runtime_artifacts(
                     active_session=self._current_session_snapshot(),
-                    history=load_session_history(),
+                    history=load_session_history(strict=True),
                     dry_run=dry_run,
                     min_age_seconds=min_age_seconds,
                     max_bytes=max_bytes,
@@ -12343,15 +12521,46 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     "code": "artifact_cleanup_busy",
                     "operation": "artifact_cleanup",
                     "retryable": True,
-                    "error": str(exc),
+                    "error": "다른 작업이 진행 중이라 지금은 정리할 수 없어요.",
+                    "detail": str(exc),
                     "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
                 },
                 status=HTTPStatus.CONFLICT,
             )
             return
-        except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except SessionHistoryUnreadable as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "session_history_unreadable",
+                    "operation": "artifact_cleanup",
+                    "retryable": True,
+                    "error": "작업 이력을 읽지 못해 안전을 위해 아무 파일도 지우지 않았어요.",
+                    "detail": str(exc),
+                    "recoverySteps": ["앱을 다시 실행한 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.CONFLICT,
+            )
             return
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "artifact_cleanup_invalid_request",
+                    "error": "정리 요청을 처리하지 못했어요.",
+                    "detail": str(exc),
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
+            return
+        if not result.get("ok", True):
+            # Some files were locked (OneDrive, antivirus, an open viewer); the rest were deleted.
+            result = {
+                **result,
+                "code": "artifact_cleanup_partial",
+                "error": "다른 프로그램이 쓰고 있는 파일은 지우지 못했어요. 나머지는 정리했어요.",
+                "detail": "\n".join(f"{item.get('path')}: {item.get('error')}" for item in result.get("errors") or []),
+            }
         self._send_json(result)
 
     def _handle_session_clear(self, parsed=None) -> None:
@@ -12406,6 +12615,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 _atomically_clear_persisted_session_state()
                 self.app_server.latest_session = None
                 self.app_server.allowed_files = set()
+                getattr(self.app_server, "_history_paths_seen", set()).clear()
                 cleanup_result = (
                     cleanup_runtime_artifacts(
                         active_session={},
@@ -12629,7 +12839,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_user_settings_get(self) -> None:
         self._send_json(
-            {"ok": True, "settings": summarize_user_settings(RUNTIME_DIR)}
+            {"ok": True, "settings": _with_data_folder_status(summarize_user_settings(RUNTIME_DIR))}
         )
 
     def _handle_user_settings_post(self) -> None:
@@ -12659,7 +12869,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "recoverySteps": classified.get("recoverySteps") or ["앱을 다시 실행한 뒤 다시 저장해 주세요."],
             }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        self._send_json({"ok": True, "settings": summary})
+        self._send_json({"ok": True, "settings": _with_data_folder_status(summary)})
 
     def _handle_bug_report(self) -> None:
         try:
@@ -13456,6 +13666,22 @@ def _run_startup_artifact_cleanup(server: AppHTTPServer) -> dict[str, Any] | Non
     return result
 
 
+def _run_startup_maintenance(server: AppHTTPServer) -> None:
+    """Background, best effort: drop pure garbage folders, then audit retention cleanup."""
+    if str(os.environ.get("EDB_AUTO_ARTIFACT_CLEANUP") or "").strip() != "0":
+        try:
+            result = server.cleanup_stale_work_folders()
+            print(
+                "[app-server] stale work folder cleanup: "
+                f"planned={result.get('plannedFolderCount', 0)} deleted={result.get('deletedFolderCount', 0)} "
+                f"freed={result.get('deletedBytes', 0)}",
+                file=sys.stderr,
+            )
+        except Exception as exc:  # unreadable history, busy, locked files: retry next launch
+            print(f"[app-server] stale work folder cleanup skipped: {exc}", file=sys.stderr)
+    _run_startup_artifact_cleanup(server)
+
+
 def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
     ensure_runtime_dirs()
     hydrate_user_settings_env()
@@ -13487,11 +13713,11 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
                 return
             if not address_in_use or candidate == candidate_ports[-1]:
                 raise
-    _run_startup_artifact_cleanup(server)
     threading.Thread(target=_prune_stale_update_downloads, name="update-prune", daemon=True).start()
     print(f"{APP_NAME} running at {url}")
     if open_browser:
         webbrowser.open(url)
+    threading.Thread(target=_run_startup_maintenance, args=(server,), name="startup-maintenance", daemon=True).start()
     previous_signal_handlers: dict[int, Any] = {}
 
     def handle_termination_signal(signum, _frame) -> None:
