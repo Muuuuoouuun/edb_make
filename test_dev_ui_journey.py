@@ -13,6 +13,7 @@ from unittest.mock import patch
 import app_server
 from test_ui_home_flows import NODE_SETUP, run_node
 from test_ui_home_redesign import HOME_SETUP
+from test_ui_publish_response_validation import PUBLISH_SETUP
 from test_ui_recognition_auto_apply import SETUP as RECOGNITION_SETUP
 from test_ui_sidebar_hierarchy import RENDER_SETUP
 from test_ui_toolbar_controls import run_node as run_toolbar_node
@@ -81,6 +82,22 @@ class TestNewLessonKeepsHistoryServer(unittest.TestCase):
             self.assertFalse(latest.exists())
             self.assertTrue(history.exists())
             self.assertEqual({str(edb.resolve())}, server.allowed_files)
+
+    def test_failed_clear_suggests_retrying_what_the_teacher_asked_for(self):
+        def fail(**_kwargs):
+            raise OSError("locked")
+
+        handler = object.__new__(app_server.AppRequestHandler)
+        handler.server = type("FakeServer", (), {
+            "latest_session": None, "allowed_files": set(), "clear_session_with_revision": staticmethod(fail),
+        })()
+        responses = []
+        handler._send_json = lambda payload, **kwargs: responses.append(payload)
+        for query, expected in (("keepHistory=1", "새 수업을 다시 시작"), ("", "초기화를 다시 시도")):
+            handler._handle_session_clear(SimpleNamespace(query=query))
+            payload = responses.pop()
+            self.assertEqual("reset_failed", payload["code"])
+            self.assertIn(expected, payload["recoverySteps"][0])
 
     def test_default_clear_still_removes_history(self):
         with TemporaryDirectory() as raw_tmp:
@@ -180,12 +197,52 @@ class TestNewLessonUi(unittest.TestCase):
           assert.equal(state.recovery.keepHistory, true);
           assert.equal(state.recovery.retryLabel, '새 수업 다시 시작');
 
+          ({ sandbox, state } = resetSandbox({ loading: { label: 'busy' } }));
+          await sandbox.resetSession({ keepHistory: true });
+          await sandbox.resetSession();
+          assert.deepEqual(state.toasts, ['작업 중에는 새 수업을 시작할 수 없습니다', '작업 중에는 초기화할 수 없습니다']);
+
           ({ sandbox, state } = resetSandbox());
           await sandbox.resetSession({ type: 'click' });
           assert.equal(state.confirms.length, 1, '초기화 still asks every time');
           assert.ok(state.confirms[0].includes('최근 작업 목록이 사라집니다'));
           assert.equal(JSON.stringify(state.clears), JSON.stringify([{ keepHistory: false }]));
         })().catch(error => { console.error(error); process.exitCode = 1; });
+        """)
+
+    def test_failed_new_lesson_banner_says_new_lesson_not_reset(self):
+        run_node(NODE_SETUP + r"""
+        const Babel = require('./scripts/vendor/babel.min.js');
+        const sandbox = {
+          React: { createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
+            Fragment: 'fragment' },
+          useState: initial => [initial, () => {}], useEffect() {},
+          Icon: new Proxy({}, { get: (_, name) => String(name) }), IS_MAC_PLATFORM: false,
+          probeLocalServerHealth: async () => true,
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(Babel.transform(section('const OPERATION_RECOVERY_SUMMARIES', 'function operationRecoveryStateTransition(')
+          + section('function OperationRecoveryBanner(', 'function LoadingOverlay('), { presets: ['react'] }).code, sandbox);
+        const text = node => typeof node === 'string' ? node : (node?.children || []).map(text).join(' ');
+        const render = recovery => text(sandbox.OperationRecoveryBanner({ recovery, onRetry() {} }));
+        const error = code => ({ code, message: 'failed to clear: locked', retryable: true });
+
+        for (const recovery of [
+          { kind: 'reset', keepHistory: true, error: error('reset_failed') },
+          { kind: 'reset', keepHistory: true, error: error('artifact_cleanup_busy') },
+          { kind: 'reset', keepHistory: true, error: error('session_conflict'), conflict: { latestSession: { problems: [] } } },
+          { kind: 'reset', keepHistory: true, error: error('session_conflict'), conflict: { latestSession: null } },
+        ]) {
+          const banner = render(recovery);
+          assert.ok(banner.includes('새 수업을 시작하지 못했습니다'), banner);
+          assert.ok(banner.includes('새 수업 다시 시작'), banner);
+          assert.equal(banner.includes('초기화'), false, `a kept-history failure must not read like 초기화: ${banner}`);
+        }
+        assert.ok(render({ kind: 'reset', keepHistory: true, error: error('reset_failed') }).includes('최근 작업은 그대로 있어요'));
+
+        const reset = render({ kind: 'reset', error: error('reset_failed') });
+        assert.ok(reset.includes('초기화를 마치지 못했습니다'));
+        assert.ok(reset.includes('초기화 다시 시도'));
         """)
 
     def test_retry_of_a_failed_new_lesson_keeps_history(self):
@@ -217,6 +274,89 @@ class TestTopBarJourney(unittest.TestCase):
         const missingFile = sandbox.TopBar({ ...base, onPublish, published: true, onOpenPublished: null });
         assert.ok(text(walk(missingFile).find(node => node.props.onClick === onPublish)).includes('EDB 제작'));
         assert.equal(exportItems(missingFile).some(entry => entry.id === 'republish'), false);
+        """)
+
+    def test_main_button_label_matches_what_a_click_does(self):
+        run_toolbar_node(r"""
+        const calls = [];
+        const onPublish = () => calls.push('build'), onOpenPublished = () => calls.push('open');
+        const main = props => walk(sandbox.TopBar({ ...base, onPublish, ...props })).find(node => node.type === 'button'
+          && (node.props.onClick === onPublish || node.props.onClick === onOpenPublished));
+        const click = button => { calls.length = 0; button.props.onClick(); return calls.join(); };
+
+        const built = main({ published: true, onOpenPublished });
+        assert.ok(text(built).includes('ClassIn에서 열기'));
+        assert.equal(click(built), 'open');
+
+        const split = main({ published: true, onOpenPublished, openPublishedFolder: true });
+        assert.ok(text(split).includes('폴더 열기'));
+        assert.equal(text(split).includes('ClassIn에서 열기'), false);
+        assert.match(split.props['data-tooltip'], /폴더/);
+        assert.equal(click(split), 'open');
+
+        for (const props of [{ published: true, onOpenPublished: null }, { published: false, onOpenPublished }]) {
+          const button = main(props);
+          assert.ok(text(button).includes('EDB 제작'), JSON.stringify(Object.keys(props)));
+          assert.equal(click(button), 'build');
+        }
+        """)
+
+    def test_top_bar_opens_only_a_build_made_from_the_current_board(self):
+        run_node(NODE_SETUP + r"""
+        const gate = section('  // Open only a build made from this exact board', '  return (');
+        function wiring(overrides = {}) {
+          const calls = [];
+          const summary = { canOpenEdbFile: true, canOpenOutputDir: true, edbSplit: false, outputDir: 'C:/out',
+            ...overrides.summary };
+          const sandbox = {
+            published: true, sessionEditState: { dirty: false },
+            session: { problems: [{ id: 'p1' }] }, builtBoardRef: { current: '["p1"]' },
+            sessionEditorDraftSignature: s => JSON.stringify((s?.problems || []).map(problem => problem.id)),
+            sessionPublishSummary: () => summary,
+            openPublishedEdb: value => calls.push(['edb', value]), openOutputFolder: path => calls.push(['folder', path]),
+            ...overrides,
+          };
+          vm.createContext(sandbox);
+          vm.runInContext(gate + '\nglobalThis.result = { open: openLatestPublish, folder: openPublishedFolder };', sandbox);
+          return { open: sandbox.result.open, folder: sandbox.result.folder, calls };
+        }
+        let gateResult = wiring();
+        gateResult.open();
+        assert.equal(gateResult.calls[0][0], 'edb');
+        assert.equal(gateResult.folder, false);
+
+        gateResult = wiring({ summary: { edbSplit: true } });
+        gateResult.open();
+        assert.deepEqual(gateResult.calls, [['folder', 'C:/out']], 'a split build opens its folder, not part 1');
+        assert.equal(gateResult.folder, true);
+
+        gateResult = wiring({ summary: { edbSplit: true, canOpenOutputDir: false } });
+        gateResult.open();
+        assert.equal(gateResult.calls[0][0], 'edb');
+        assert.equal(gateResult.folder, false);
+
+        assert.equal(wiring({ summary: { canOpenEdbFile: false, canOpenOutputDir: false } }).open, null);
+
+        for (const stale of [
+          { session: { problems: [{ id: 'p1' }, { id: 'p2' }] } },
+          { builtBoardRef: { current: '' } },
+          { sessionEditState: { dirty: true } },
+          { published: false },
+        ]) {
+          gateResult = wiring(stale);
+          assert.equal(gateResult.open, null, `an older build must not be opened as current: ${JSON.stringify(stale)}`);
+          assert.equal(gateResult.folder, false);
+        }
+        """)
+
+    def test_a_finished_build_records_the_board_it_was_made_from(self):
+        run_node(PUBLISH_SETUP + r"""
+        (async () => {
+          const { sandbox, events } = publishSandbox({ ok: true, session: { problems: [{ id: 'p1' }, { id: 'p2' }] } });
+          await sandbox.publish();
+          assert.equal(events.errors.length, 0);
+          assert.equal(sandbox.builtBoardRef.current, 'sig:p1,p2');
+        })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
 

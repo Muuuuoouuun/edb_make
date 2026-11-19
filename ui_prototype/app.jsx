@@ -3475,7 +3475,7 @@ function LessonNameEditor({ fileName, setFileName, onRename, disabled }){
 }
 
 function TopBar({
-  fileName, setFileName, onRename, total, onPublish, published, onOpenPublished, onReset, onNewLesson,
+  fileName, setFileName, onRename, total, onPublish, published, onOpenPublished, openPublishedFolder = false, onReset, onNewLesson,
   onRefresh, refreshing, canReset, view, setView, reviewAvailable,
   reviewAttentionCount = 0,
   recognitionBusy, onUndo, canUndo, onShutdown, onExportImages, exportingImages,
@@ -3569,11 +3569,11 @@ function TopBar({
               ? '진행 중인 작업이나 대기 중인 파일이 있어요. 끝나거나 대기 목록에서 뺀 뒤 제작해 주세요'
               : reviewAttentionCount > 0
                 ? `확인 필요 ${reviewAttentionCount}개를 먼저 확인해 주세요`
-                : openPublished ? 'EDB를 이미 만들었어요 · 누르면 ClassIn에서 엽니다. 새로 만들려면 옆 메뉴에서 ‘다시 제작’을 고르세요' : '현재 배치로 EDB 파일 제작'}
+                : openPublished ? `EDB를 이미 만들었어요 · 누르면 ${openPublishedFolder ? '나뉜 EDB 파일이 있는 폴더를' : 'ClassIn에서 EDB를'} 엽니다. 새로 만들려면 옆 메뉴에서 ‘다시 제작’을 고르세요` : '현재 배치로 EDB 파일 제작'}
         onClick={openPublished || onPublish}
         disabled={pageReviewActive || operationBusy}
       >
-        {openPublished ? <>{Icon.check} ClassIn에서 열기</> : <>{Icon.board} EDB 제작</>}
+        {openPublished ? <>{Icon.check} {openPublishedFolder ? '폴더 열기' : 'ClassIn에서 열기'}</> : <>{Icon.board} EDB 제작</>}
       </button>
       <ToolbarActionMenu
         id="topbar-export"
@@ -12669,7 +12669,9 @@ function OperationRecoveryBanner({
   }, [localServerUnavailable]);
 
   if (!error) return null;
-  const summary = operationRecoverySummary(error);
+  // A failed 새 수업 shares the reset path, but 초기화 wording would say 최근 작업 is wiped.
+  const isNewLesson = recovery?.kind === 'reset' && Boolean(recovery.keepHistory);
+  const summary = (isNewLesson && NEW_LESSON_RECOVERY_SUMMARIES[error.code]) || operationRecoverySummary(error);
   const kind = recovery?.kind || 'publish';
   const isDownload = kind === 'download';
   const isQueue = kind === 'recognition' || kind === 'registration' || kind === 'apply-recognition';
@@ -12711,7 +12713,7 @@ function OperationRecoveryBanner({
     : isQueue
       ? '원본 파일과 대기열은 그대로 있습니다'
       : isReset
-        ? '초기화를 마치지 못했습니다'
+        ? (isNewLesson ? '새 수업을 시작하지 못했습니다' : '초기화를 마치지 못했습니다')
         : isRestore
           ? '최근 작업을 열지 못했습니다'
           : '제작을 마치지 못했지만 편집 내용은 안전합니다');
@@ -12719,6 +12721,10 @@ function OperationRecoveryBanner({
     ? (latestSessionIsEmpty
       ? '서버의 최신 상태는 빈 작업입니다. ‘빈 최신 상태 불러오기’로 새로 시작하거나, 현재 편집본이 더 필요하면 오류를 신고한 뒤 초기화 여부를 선택하세요.'
       : '다른 작업이 먼저 저장됐습니다. ‘최신 상태 불러오기’는 서버 내용을 사용하고, ‘내 배치 안전하게 합치기’는 최신 문항에 현재 보드 배치만 적용합니다.')
+    : hasConflict && isNewLesson
+      ? (latestSessionIsEmpty
+        ? '저장된 수업은 이미 비어 있습니다. ‘새 수업 다시 시작’으로 현재 화면도 비우거나 ‘빈 최신 상태 불러오기’로 맞추세요.'
+        : '‘새 수업 다시 시작’은 최신 수업을 최근 작업에 남기고 빈 수업을 열고, ‘최신 상태 불러오기’는 새 수업을 취소하고 최신 수업으로 돌아갑니다.')
     : hasConflict && isReset
       ? (latestSessionIsEmpty
         ? '서버는 이미 빈 상태입니다. ‘초기화 다시 시도’로 현재 화면도 정리하거나 ‘빈 최신 상태 불러오기’로 서버 상태에 맞추세요.'
@@ -12737,8 +12743,8 @@ function OperationRecoveryBanner({
           ? '같은 파일로 다시 시도하세요. 인식이 계속 실패하면 페이지 PNG 등록 또는 수동 자르기를 이용할 수 있습니다.'
           : isReset
             ? (error.code === 'artifact_cleanup_busy'
-              ? '진행 중인 제작·다운로드가 끝나거나 취소된 뒤 초기화를 다시 시도하세요.'
-              : '잠시 기다린 뒤 초기화를 다시 시도하세요. 계속 실패하면 앱을 다시 실행해 주세요.')
+              ? `진행 중인 제작·다운로드가 끝나거나 취소된 뒤 ${isNewLesson ? '새 수업을 다시 시작하세요' : '초기화를 다시 시도하세요'}.`
+              : `잠시 기다린 뒤 ${isNewLesson ? '새 수업을 다시 시작하세요' : '초기화를 다시 시도하세요'}. 계속 실패하면 앱을 다시 실행해 주세요.`)
             : isRestore
               ? '현재 화면의 배치는 보존했습니다. 같은 최근 작업을 다시 열거나 문제 신고를 보내 주세요.'
               : '먼저 EDB를 다시 제작하세요. 계속 실패하면 PNG로 대체 저장하거나 초기화 후 원본 PDF를 다시 등록해 주세요.';
@@ -12750,6 +12756,8 @@ function OperationRecoveryBanner({
     ? (downloadBusy ? '다운로드 준비 중…' : 'EDB 다운로드 다시 시도')
     : isQueue
       ? (retryBusy ? '다시 처리 중…' : recovery?.retryLabel || '자료 처리 다시 시도')
+      : isNewLesson
+        ? (resetBusy ? '새 수업 준비 중…' : resetBlocked ? '진행 작업 완료 후 새 수업' : '새 수업 다시 시작')
       : isReset
         ? (resetBusy ? '초기화 중…' : resetBlocked ? '진행 작업 완료 후 초기화' : '초기화 다시 시도')
         : isRestore
@@ -16920,6 +16928,12 @@ const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
   session_rebased_ready: '최신 저장 상태에 현재 배치를 안전하게 합쳤습니다. 작업을 다시 시도해 주세요.',
 });
 
+// 새 수업 keeps 최근 작업, so its failures must not read like a failed 초기화.
+const NEW_LESSON_RECOVERY_SUMMARIES = Object.freeze({
+  reset_failed: '새 수업을 준비하는 중 문제가 발생했습니다. 최근 작업은 그대로 있어요.',
+  artifact_cleanup_busy: '다른 작업이 제작 파일을 사용 중이라 새 수업을 시작하지 못했습니다.',
+});
+
 function operationRecoverySummary(error){
   if (error?.errorKind && error.errorKind !== 'export_failed') {
     return String(error.message || '처리 중 오류가 발생했습니다.').split('\n')[0];
@@ -17495,6 +17509,9 @@ function App(){
   const restoreInFlightRef = useRef(false);
   const refreshInFlightRef = useRef(false);
   const publishInFlightRef = useRef(false);
+  // Board signature of the EDB built in this run. A reopened or merged lesson keeps an older
+  // build's summary, so the top bar opens a build only while the board still matches it.
+  const builtBoardRef = useRef('');
   const publishPlanRequestRef = useRef(0);
   const downloadInFlightRef = useRef(false);
   const bugReportSequenceRef = useRef(0);
@@ -18870,23 +18887,23 @@ function App(){
   // keepHistory = 새 수업: leave the open lesson in 최근 작업 instead of wiping the list.
   const resetSession = useCallback(async ({ keepHistory = false } = {}) => {
     if (recognitionInFlightRef.current || queueRegistrationInFlightRef.current) {
-      showToast('자료 처리가 끝난 뒤 초기화해 주세요');
+      showToast(keepHistory ? '자료 처리가 끝난 뒤 새 수업을 시작해 주세요' : '자료 처리가 끝난 뒤 초기화해 주세요');
       return false;
     }
     if (downloadInFlightRef.current || downloadBusy) {
-      showToast('EDB 다운로드 준비가 끝난 뒤 초기화해 주세요');
+      showToast(keepHistory ? 'EDB 다운로드 준비가 끝난 뒤 새 수업을 시작해 주세요' : 'EDB 다운로드 준비가 끝난 뒤 초기화해 주세요');
       return false;
     }
     if (publishInFlightRef.current || publishBusy) {
-      showToast('EDB 제작이 끝난 뒤 초기화해 주세요');
+      showToast(keepHistory ? 'EDB 제작이 끝난 뒤 새 수업을 시작해 주세요' : 'EDB 제작이 끝난 뒤 초기화해 주세요');
       return false;
     }
     if (loading || resetInFlightRef.current) {
-      showToast('작업 중에는 초기화할 수 없습니다');
+      showToast(keepHistory ? '작업 중에는 새 수업을 시작할 수 없습니다' : '작업 중에는 초기화할 수 없습니다');
       return false;
     }
     if (backgroundJobs.some(job => job.status === 'running')) {
-      showToast('진행 중인 작업을 취소하거나 완료한 뒤 초기화해 주세요');
+      showToast(keepHistory ? '진행 중인 작업을 취소하거나 완료한 뒤 새 수업을 시작해 주세요' : '진행 중인 작업을 취소하거나 완료한 뒤 초기화해 주세요');
       return false;
     }
     if (!session && items.length === 0 && pendingFiles.length === 0 && (keepHistory || recentSessions.length === 0)) {
@@ -20192,6 +20209,7 @@ function App(){
       const publishSummary = json.publishSummary || json.publish_summary || json.session?.publishSummary || json.session?.publish_summary;
       const normalizedPublishSummary = normalizePublishSummary(publishSummary, json.session);
       setPublished(true);
+      builtBoardRef.current = sessionEditorDraftSignature(json.session);
       const publishLabel = publishSummary?.recordCountLabel || publishSummary?.record_count_label || `${publishSummary?.recordCount || publishSummary?.record_count || order.length}개 자료`;
       if (!normalizedPublishSummary?.canDownload) {
         const downloadError = new Error('EDB 제작본은 저장됐지만 다운로드할 파일을 찾지 못했습니다.');
@@ -20517,7 +20535,12 @@ function App(){
     }
   };
 
-  const latestPublishSummary = published && !sessionEditState.dirty ? sessionPublishSummary(session) : null;
+  // Open only a build made from this exact board in this run; split builds open their folder.
+  const latestPublishSummary = published && !sessionEditState.dirty && builtBoardRef.current
+    && builtBoardRef.current === sessionEditorDraftSignature(session) ? sessionPublishSummary(session) : null;
+  const openPublishedFolder = Boolean(latestPublishSummary?.edbSplit && latestPublishSummary.canOpenOutputDir);
+  const openLatestPublish = openPublishedFolder ? () => openOutputFolder(latestPublishSummary.outputDir)
+    : latestPublishSummary?.canOpenEdbFile ? () => openPublishedEdb(latestPublishSummary) : null;
 
   return (
     <div className="app editor-basic-mode">
@@ -20528,7 +20551,8 @@ function App(){
         total={items.length}
         onPublish={onPublish}
         published={published && !sessionEditState.dirty}
-        onOpenPublished={latestPublishSummary?.canOpenEdbFile ? () => openPublishedEdb(latestPublishSummary) : null}
+        onOpenPublished={openLatestPublish}
+        openPublishedFolder={openPublishedFolder}
         onReset={resetSession}
         onNewLesson={() => resetSession({ keepHistory: true })}
         onRefresh={refreshSession}

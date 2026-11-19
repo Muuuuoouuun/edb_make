@@ -12393,7 +12393,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     "retryable": True,
                     "error": f"failed to clear: {exc}",
                     "recoverySteps": [
-                        "진행 중인 작업이 끝난 뒤 초기화를 다시 시도해 주세요.",
+                        "진행 중인 작업이 끝난 뒤 새 수업을 다시 시작해 주세요."
+                        if keep_history
+                        else "진행 중인 작업이 끝난 뒤 초기화를 다시 시도해 주세요.",
                         "계속 실패하면 최근 작업을 유지한 채 오류 정보를 신고해 주세요.",
                     ],
                 },
