@@ -262,6 +262,7 @@ class TestUiHomeFlows(unittest.TestCase):
           restoringSessionId: null, initialSessionLoaded: true, loading: null,
           hasRunningBackgroundJobs: false, hasPendingSessionConflict: false,
           session: null, items: [], fileName: 'new', boardColumns: 1, layoutGapMode: 'classin-grid',
+          reviewEditorActive: false, recognitionReview: null,
           materializeSessionForItems: () => null,
           postRestoreSessionHistory: async () => { posts += 1; return { session: { problems: [{ id: 'p1' }] }, history: [] }; },
           applySession: () => true, setRecentSessionsAuthoritative() {}, activateOperationRecovery() {},

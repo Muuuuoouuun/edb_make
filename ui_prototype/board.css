@@ -2414,9 +2414,12 @@
   }
   .publish-result-primary-actions{
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
   }
+  /* Download on its own row; ClassIn 열기 · 폴더 share the next one. */
+  .publish-result-primary-actions .btn.primary{ flex-basis: 100%; }
   .publish-result-primary-actions .btn{
     flex: 1;
     min-width: 0;
@@ -8654,6 +8657,7 @@
   .home-recent-date{
     color: var(--muted);
   }
+  .home-recent-edb{ color: var(--ok-ink); }
   .home-recent-open-btn{
     flex: 0 0 auto;
     padding: 4px 10px;

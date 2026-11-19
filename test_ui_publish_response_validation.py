@@ -24,6 +24,7 @@ function publishSandbox(response) {
     setSession: value => { events.adopted.push(value); sandbox.session = value; }, setItems: value => { sandbox.items = value; },
     setActiveId() {}, setLayoutGapModeState() {}, refreshSessionHistory() {},
     normalizePublishSummary: () => ({canDownload:true}), setPublished: value => { events.published = value; },
+    builtBoardRef: { current: '' }, sessionEditorDraftSignature: value => 'sig:' + value.problems.map(problem => problem.id).join(','),
     setDownloadBusy() {}, downloadPublishSummary: async () => { events.downloads++; return {ok:true}; },
     activateOperationRecovery: (error, message, detail, options) => {events.errors.push({error,options});},
     isNetworkRequestError: () => false,
