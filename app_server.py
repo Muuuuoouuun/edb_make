@@ -465,6 +465,8 @@ _update_pin_failures = 0
 _update_pin_blocked_until = 0.0
 _update_install_lock = threading.Lock()
 _update_install_started = False
+# Bytes of the PIN update's installer received so far; one writer, read lock-free by the progress route.
+_update_download_progress = {"received": 0, "total": 0}
 _runtime_diagnostics_cache_lock = threading.Lock()
 _runtime_diagnostics_cache: tuple[float, dict[str, Any]] | None = None
 
@@ -1636,8 +1638,9 @@ def build_app_update_status() -> dict[str, Any]:
         try:
             _check_update_target(platform_key)
         except AppUpdateError as exc:
-            # The UI then hides the PIN install and offers the manual download.
+            # The UI then hides the PIN install and shows these steps (e.g. move the Mac app first).
             status["automaticUpdateBlockedReason"] = str(exc)
+            status["automaticUpdateBlockedSteps"] = list(exc.recovery_steps)
     if not feed_url:
         if config_error:
             status["channelStatus"] = "invalid_config"
@@ -1658,6 +1661,8 @@ def build_app_update_status() -> dict[str, Any]:
         status["detail"] = f"{type(exc).__name__}: {exc}"
         # HTTPError is an OSError too, so check it first.
         if isinstance(exc, HTTPError) and exc.code == 404:
+            # Nothing is published yet: a normal state, not a failure.
+            status["channelStatus"] = "no_release"
             status["error"] = "아직 받을 수 있는 업데이트가 없습니다. 나중에 다시 확인해 주세요."
         elif isinstance(exc, OSError) and not isinstance(exc, HTTPError):
             status["error"] = "업데이트 서버에 연결하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 확인해 주세요."
@@ -1781,6 +1786,10 @@ def build_app_update_status() -> dict[str, Any]:
     return _remember_update_status(cache_key, status)
 
 
+# Where teachers get a Gemini API key; the only page /api/system/open-url opens besides update URLs.
+GEMINI_KEY_HELP_URL = "https://aistudio.google.com/apikey"
+
+
 def _allowed_update_urls() -> set[str]:
     status = build_app_update_status()
     latest = status.get("latest") if isinstance(status.get("latest"), dict) else {}
@@ -1826,8 +1835,9 @@ def _update_artifact_details(status: dict[str, Any]) -> tuple[str, str, str, int
     if not expected_sha256 or expected_size is None:
         raise AppUpdateError(
             "update_integrity_metadata_required",
-            "자동 업데이트에는 파일 크기와 SHA-256 검증 정보가 필요합니다.",
-            recovery_steps=["관리자에게 업데이트 피드의 sizeBytes와 sha256 등록을 요청해 주세요."],
+            "업데이트 파일을 확인할 정보가 없어 자동으로 설치할 수 없습니다.",
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치하거나 관리자에게 알려 주세요."],
+            detail="update feed is missing sizeBytes or sha256 for this artifact",
         )
     if expected_size > MAX_UPDATE_ARTIFACT_BYTES:
         raise AppUpdateError("update_artifact_too_large", "업데이트 파일이 허용 크기를 초과합니다.")
@@ -1920,6 +1930,21 @@ def _bug_report_diagnostics() -> tuple[dict[str, Path], dict[str, Any]]:
     }
 
 
+def _prune_stale_update_downloads(runtime_dir: Path | None = None) -> None:
+    """Drop week-old pending-* folders: helper scripts, logs and sometimes a whole installer."""
+    # Windows downloads moved to LOCALAPPDATA; older versions left them in the (often synced)
+    # runtime folder, so that legacy root is swept too.
+    roots = {runtime_dir / "updates"} if runtime_dir else {_update_root(), RUNTIME_DIR / "updates"}
+    stale_before = time.time() - 7 * 24 * 3600
+    for root in roots:
+        for stale in root.glob("pending-*"):
+            try:
+                if not stale.is_symlink() and stale.stat().st_mtime < stale_before:
+                    shutil.rmtree(stale)
+            except OSError:
+                pass
+
+
 def _download_update_artifact(
     status: dict[str, Any],
     *,
@@ -1928,14 +1953,7 @@ def _download_update_artifact(
     download_url, file_name, _artifact_type, expected_size, expected_sha256 = _update_artifact_details(status)
     update_root = runtime_dir / "updates" if runtime_dir else _update_root()
     _perform_update_storage(update_root.mkdir, parents=True, exist_ok=True)
-    # Earlier attempts leave their helper script and logs behind; drop week-old ones.
-    stale_before = time.time() - 7 * 24 * 3600
-    for stale in update_root.glob("pending-*"):
-        try:
-            if not stale.is_symlink() and stale.stat().st_mtime < stale_before:
-                shutil.rmtree(stale)
-        except OSError:
-            pass
+    _prune_stale_update_downloads(runtime_dir)
     download_dir = Path(_perform_update_storage(tempfile.mkdtemp, prefix="pending-", dir=update_root))
     partial_path = download_dir / f"{file_name}.part"
     final_path = download_dir / file_name
@@ -1967,6 +1985,7 @@ def _download_update_artifact(
                         "update_size_mismatch",
                         "업데이트 파일 크기가 배포 정보와 일치하지 않습니다.",
                     )
+            _update_download_progress.update(received=0, total=expected_size)
             while True:
                 chunk = response.read(1024 * 1024)
                 if not chunk:
@@ -1979,6 +1998,7 @@ def _download_update_artifact(
                     )
                 digest.update(chunk)
                 _perform_update_storage(output.write, chunk)
+                _update_download_progress["received"] = total
             _perform_update_storage(output.flush)
             _perform_update_storage(os.fsync, output.fileno())
         if total != expected_size:
@@ -1990,7 +2010,8 @@ def _download_update_artifact(
             raise AppUpdateError(
                 "update_checksum_mismatch",
                 "업데이트 파일 무결성 검증에 실패했습니다.",
-                recovery_steps=["파일을 실행하지 않았습니다. 관리자에게 업데이트 피드를 확인해 달라고 요청해 주세요."],
+                recovery_steps=["받은 파일은 실행하지 않았습니다. 잠시 후 다시 시도하고, 계속되면 관리자에게 알려 주세요."],
+                detail="downloaded artifact sha256 does not match the update feed",
             )
         _perform_update_storage(os.replace, partial_path, final_path)
         return final_path
@@ -2005,6 +2026,9 @@ def _download_update_artifact(
             status=HTTPStatus.BAD_GATEWAY,
             recovery_steps=["인터넷 연결을 확인한 뒤 다시 시도해 주세요."],
         ) from exc
+    finally:
+        # The checksum and helper launch follow; a later attempt must not start from a stale 100%.
+        _update_download_progress.update(received=0, total=0)
 
 
 def _current_macos_bundle_path(executable: Path | None = None) -> Path | None:
@@ -2337,7 +2361,8 @@ def prepare_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, An
         raise AppUpdateError(
             "update_pin_not_configured",
             "이 배포본에는 업데이트 PIN이 설정되어 있지 않습니다.",
-            recovery_steps=["배포 설정에 updatePinHash를 등록한 설치본을 사용해 주세요."],
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요."],
+            detail="app_update_config.json has no updatePinHash",
         )
     if _parse_update_pin_verifier(verifier) is None:
         raise AppUpdateError("invalid_update_pin_config", "업데이트 PIN 설정이 올바르지 않습니다.")
@@ -2621,30 +2646,39 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
     hwp_renderer_ready = bool(hwp_renderers)
     hwp_ready = bool(pdf_ready or html_pdf_ready or hwp_renderer_ready)
     hwpx_ready = bool(pdf_ready or hwp_renderer_ready)
+    # warnings/recommendedActions are teacher copy; tool names and settings stay in technicalNotes
+    # for support and bug reports.
     warnings: list[str] = []
     recommended_actions: list[str] = []
+    technical_notes: list[str] = []
 
     if not pdf_ready and not hwp_renderer_ready:
-        warnings.append("LibreOffice, rhwp, hwp5pdf, airun-hwp, or rhwp-core renderer was not found.")
-        recommended_actions.append("LibreOffice/rhwp/HWP PDF 변환기, airun-hwp, 또는 rhwp-core 렌더러를 설치하거나, HWP/HWPX를 PDF로 내보낸 뒤 업로드해 주세요.")
+        warnings.append("HWPX 파일은 바로 열 수 없어요." if html_pdf_ready else "한글 파일을 바로 열 수 없어요.")
+        recommended_actions.append("한글 프로그램에서 PDF로 저장한 뒤 그 PDF를 넣어 주세요.")
+        technical_notes.append("LibreOffice, rhwp, hwp5pdf, airun-hwp, or rhwp-core renderer was not found.")
     if html_converters and not chrome_pdf_converters:
-        warnings.append("pyhwp HTML fallback is available, but Chrome PDF printing was not found.")
-        recommended_actions.append("Chrome을 설치하거나 EDB_CHROME 환경 변수로 Chrome 실행 파일 경로를 지정해 주세요.")
+        technical_notes.append(
+            "pyhwp HTML fallback is available, but Chrome PDF printing was not found "
+            "(install Chrome or set EDB_CHROME)."
+        )
     if not text_extractors:
-        warnings.append("hwp5txt/unhwp/rhwp/hwpilot/kordoc text extractor was not found; HWP 문항 수 사전 점검이 약해집니다.")
-        recommended_actions.append("pyhwp/hwp5txt, unhwp, rhwp, HWPilot, 또는 kordoc를 설치하면 HWP 내부 텍스트 기반 문항 수 QA가 더 정확해집니다.")
+        warnings.append("한글 파일의 문항 수 사전 점검이 약해질 수 있어요.")
+        technical_notes.append("hwp5txt/unhwp/rhwp/hwpilot/kordoc text extractor was not found.")
     if not hwp_to_hwpx_converters:
-        recommended_actions.append("선택 사항: HWPilot을 설치하면 HWP→HWPX 정규화 경로를 추가로 사용할 수 있습니다.")
+        technical_notes.append("Optional: HWPilot adds the HWP to HWPX normalization path.")
 
     if hwp_ready and hwpx_ready:
         status = "ready"
         label = "준비됨"
+        summary = "바로 열기 가능"
     elif hwp_ready or hwpx_ready:
         status = "partial"
         label = "부분 준비"
+        summary = "HWP 바로 열기 가능 · HWPX는 PDF로 저장해서 사용"
     else:
         status = "blocked"
-        label = "확인 필요"
+        label = "PDF로 저장 필요"
+        summary = "PDF로 저장해서 사용"
 
     tool_counts = {
         "pdfConverters": len(pdf_converters),
@@ -2654,17 +2688,6 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
         "chromePdfConverters": len(chrome_pdf_converters),
         "hwpRenderers": len(hwp_renderers),
     }
-    summary_parts = [
-        f"PDF {tool_counts['pdfConverters']}",
-        f"텍스트 {tool_counts['textExtractors']}",
-        f"브리지 {tool_counts['hwpToHwpxConverters']}",
-    ]
-    if hwp_renderers:
-        summary_parts.append(f"렌더 {tool_counts['hwpRenderers']}")
-    if html_pdf_ready:
-        summary_parts.append("HTML fallback")
-    if warnings:
-        summary_parts.append(f"주의 {len(warnings)}")
 
     return {
         "ok": True,
@@ -2676,7 +2699,7 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
         "hangul": {
             "status": status,
             "label": label,
-            "summary": " · ".join(summary_parts),
+            "summary": summary,
             "toolCounts": tool_counts,
             "pdfReady": pdf_ready,
             "hwpReady": hwp_ready,
@@ -2691,6 +2714,7 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
             "hwpRenderers": hwp_renderers,
             "warnings": warnings,
             "recommendedActions": recommended_actions,
+            "technicalNotes": technical_notes,
         },
     }
 
@@ -10773,6 +10797,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 status["lastUpdateFailed"] = True
             self._send_json(status)
             return
+        if parsed.path == "/api/app/update/progress":
+            # Lock-free on purpose: polled while the install request holds the update lock.
+            self._send_json({"ok": True, **_update_download_progress})
+            return
         if parsed.path == "/api/session/latest":
             self._handle_latest_session()
             return
@@ -12479,25 +12507,32 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         self._send_json({"ok": True, "path": str(target)})
 
     def _handle_open_url(self) -> None:
+        def fail(code: str, error: str, detail: str, status: HTTPStatus) -> None:
+            self._send_json({"ok": False, "code": code, "error": error, "detail": detail}, status=status)
+
         if not _request_is_same_origin(self.headers):
-            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            fail("cross_origin_rejected", "다른 사이트에서 보낸 요청이라 열지 않았어요.",
+                 "cross-origin request rejected", HTTPStatus.FORBIDDEN)
             return
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
-            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            fail("invalid_json", "요청을 읽지 못했어요. 다시 시도해 주세요.", f"invalid JSON: {exc}", HTTPStatus.BAD_REQUEST)
             return
         url = _normalize_update_url(payload.get("url"))
         if not url:
-            self._send_json({"ok": False, "error": "trusted HTTPS URL is required"}, status=HTTPStatus.BAD_REQUEST)
+            fail("open_url_invalid", "열 수 없는 주소예요.", "trusted HTTPS URL is required", HTTPStatus.BAD_REQUEST)
             return
-        if url not in _allowed_update_urls():
-            self._send_json({"ok": False, "error": "URL is not in the configured update metadata"}, status=HTTPStatus.FORBIDDEN)
+        # The fixed help page is checked first so it never waits on an update feed fetch.
+        if url != GEMINI_KEY_HELP_URL and url not in _allowed_update_urls():
+            fail("open_url_forbidden", "열 수 없는 주소예요.",
+                 "URL is not in the configured update metadata", HTTPStatus.FORBIDDEN)
             return
         try:
             opened = webbrowser.open(url)
         except Exception as exc:
-            self._send_json({"ok": False, "error": f"failed to open URL: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            fail("open_url_failed", "인터넷 창을 열지 못했어요.", f"failed to open URL: {exc}",
+                 HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "url": url, "opened": bool(opened)})
 
@@ -13428,6 +13463,7 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
             if not address_in_use or candidate == candidate_ports[-1]:
                 raise
     _run_startup_artifact_cleanup(server)
+    threading.Thread(target=_prune_stale_update_downloads, name="update-prune", daemon=True).start()
     print(f"{APP_NAME} running at {url}")
     if open_browser:
         webbrowser.open(url)

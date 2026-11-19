@@ -10168,7 +10168,8 @@ function HomeDashboard({
 
         <div className="home-dashboard-footer">
           <div className="home-status-pills">
-            <span className={`home-status-pill ${hangulMeta.tone === 'ok' ? 'positive' : hangulMeta.tone === 'warn' || hangulMeta.tone === 'danger' ? 'warning' : 'neutral'}`}>
+            <span className={`home-status-pill ${hangulMeta.tone === 'ok' ? 'positive' : hangulMeta.tone === 'warn' || hangulMeta.tone === 'danger' ? 'warning' : 'neutral'}`}
+              title={hangulDiagnostics?.recommendedActions?.[0]}>
               한글(HWP): {hangulMeta.label}
             </span>
             <span className={`home-status-pill ${aiEnabled && hasApiKey ? 'positive' : 'neutral'}`}>
@@ -10738,7 +10739,7 @@ function SidePanel({
   onClassinReviewComplete,
   onDownloadPublish, publishDownloadBusy,
   onExportImages, exportingImages, canExportImages,
-  updateInfo, updateBusy, updateInstallBusy, updateInstallBlockedReason = '', onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
+  updateInfo, updateBusy, updateInstallBusy, updateInstallProgress = null, updateInstallBlockedReason = '', onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
   view,
   pendingFile, pendingFileKey, processQueuedFiles, queueBusy, onPendingPreviewError,
   triggerUpload, addSample, onRevealPanel, onOpenBugReport,
@@ -10997,6 +10998,9 @@ function SidePanel({
   const updateAutomaticEnabled = Boolean(updateInfo?.automaticUpdateEnabled);
   const updateAutomaticReady = Boolean(updateInfo?.automaticUpdateReady);
   const updateAutomaticBlockedReason = String(updateInfo?.automaticUpdateBlockedReason || '').trim();
+  const updateAutomaticBlockedSteps = Array.isArray(updateInfo?.automaticUpdateBlockedSteps)
+    ? updateInfo.automaticUpdateBlockedSteps.filter(Boolean)
+    : [];
   const updateActionBusy = updateBusy || updateInstallBusy;
   useEffect(() => {
     if (updateInfo?.updateAvailable) return;
@@ -11015,6 +11019,8 @@ function SidePanel({
             ? '수동'
             : updateStatus === 'not_configured'
               ? '미설정'
+              : updateStatus === 'no_release'
+                ? '아직 없음'
               : updateStatus === 'error'
                 ? '오류'
                 : updateStatus === 'invalid_config'
@@ -11188,6 +11194,12 @@ function SidePanel({
       setKeySaveBusy(false);
     }
   };
+  // School PCs may block opening a browser; then the address stays selectable in the note.
+  const openGeminiKeyHelp = async () => {
+    setKeySaveError('');
+    const opened = await postOpenUrl(GEMINI_KEY_HELP_URL).then(result => result?.opened !== false, () => false);
+    if (!opened) setKeySaveError(`인터넷 창을 열지 못했어요. 이 주소를 인터넷 창에 직접 입력해 주세요: ${GEMINI_KEY_HELP_URL}`);
+  };
   const updateCropDraft = (key, value) => {
     setCropDraft(prev => normalizeManualCrop({ ...prev, [key]: value }));
   };
@@ -11233,6 +11245,8 @@ function SidePanel({
           <strong>이 컴퓨터용 업데이트 파일이 아직 없습니다</strong>
           {updateArchitectureSteps.map(step => <small key={step}>{step}</small>)}
         </div>
+      ) : updateStatus === 'no_release' ? (
+        <div className="runtime-note" role="status">아직 받을 수 있는 업데이트가 없어요. 나중에 다시 확인해 주세요.</div>
       ) : updateInfo?.error && (
         <div className="runtime-note warn" role="status">
           {updateInfo.detail ? updateInfo.error : (UPDATE_CHANNEL_ERROR_COPY[updateStatus] || UPDATE_CHANNEL_ERROR_COPY.error)}
@@ -11261,7 +11275,9 @@ function SidePanel({
         </button>
       </div>
       {updateInfo?.updateAvailable && updateAutomaticBlockedReason && <div className="runtime-note warn" role="status">
-        {updateAutomaticBlockedReason} ‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요.
+        {updateAutomaticBlockedReason} {updateAutomaticBlockedSteps.length
+          ? updateAutomaticBlockedSteps.join(' ')
+          : '‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요.'}
       </div>}
       {updateInfo?.updateAvailable && !updateAutomaticBlockedReason && <div className="update-install-card">
         {updateInstallSafetyReason && <div className="runtime-note warn" role="status">{updateInstallSafetyReason}</div>}
@@ -11317,7 +11333,7 @@ function SidePanel({
                 : 'PIN 확인 후 새 버전을 덮어씁니다')}
           onClick={requestUpdateInstall}
         >
-          {updateInstallBusy ? '검증·설치 준비 중...' : '관리자 PIN 확인 후 업데이트'}
+          {updateInstallBusy ? updateInstallProgressLabel(updateInstallProgress) : '관리자 PIN 확인 후 업데이트'}
         </button>
       </div>}
 
@@ -11398,6 +11414,10 @@ function SidePanel({
               <div className="api-key-editor">
                 <small className="api-key-note">
                   키 저장을 누르면 이 앱의 사용자 설정에 저장합니다. AI 실행은 별도 작업에서 시작합니다.
+                </small>
+                <small className="api-key-note">
+                  키는 구글 계정으로 Google AI Studio 화면에서 받을 수 있어요.{' '}
+                  <button className="btn ghost compact" type="button" onClick={() => { void openGeminiKeyHelp(); }}>키 발급 방법</button>
                 </small>
                 <div className="key-input-row">
                   <input
@@ -11489,15 +11509,6 @@ function SidePanel({
             >
               {hangulDiagnostics ? (
                 <div className="runtime-details">
-                    <div className="runtime-tool-grid">
-                      {hangulToolRows.map(row => (
-                        <div key={row.label} className="runtime-tool-row">
-                          <span>{row.label}</span>
-                          <strong>{row.count}</strong>
-                          <small>{row.names || '없음'}</small>
-                        </div>
-                      ))}
-                    </div>
                     {Array.isArray(hangulDiagnostics?.warnings) && hangulDiagnostics.warnings.length > 0 && (
                       <div className="runtime-note warn">
                         {hangulDiagnostics.warnings[0]}
@@ -11508,6 +11519,18 @@ function SidePanel({
                         {hangulDiagnostics.recommendedActions[0]}
                       </div>
                     )}
+                    <details>
+                      <summary>자세한 정보</summary>
+                      <div className="runtime-tool-grid">
+                        {hangulToolRows.map(row => (
+                          <div key={row.label} className="runtime-tool-row">
+                            <span>{row.label}</span>
+                            <strong>{row.count}</strong>
+                            <small>{row.names || '없음'}</small>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
                 </div>
               ) : <p className="placement-control-note">변환 환경 정보를 불러오는 중입니다.</p>}
             </SidebarDisclosure>
@@ -14944,15 +14967,9 @@ function hangulRuntimeStatusMeta(hangul){
 function hangulRuntimeSummary(hangul){
   if (!hangul) return 'HWP/HWPX 변환 환경 확인 중';
   if (hangul.summary) return String(hangul.summary);
-  const pdfCount = (hangul.pdfConverters || []).length;
-  const textCount = (hangul.textExtractors || []).length;
-  const bridgeCount = (hangul.hwpToHwpxConverters || []).length;
-  const rendererCount = (hangul.hwpRenderers || []).length;
-  const parts = [`PDF ${pdfCount}`, `텍스트 ${textCount}`, `브리지 ${bridgeCount}`];
-  if (rendererCount) parts.push(`렌더 ${rendererCount}`);
-  if (hangul.htmlPdfFallbackReady) parts.push('HTML fallback');
-  if (Array.isArray(hangul.warnings) && hangul.warnings.length) parts.push(`주의 ${hangul.warnings.length}`);
-  return parts.join(' · ');
+  // Same plain words as the server summary; tool counts stay in the 자세한 정보 grid.
+  if (hangul.hwpxReady) return '바로 열기 가능';
+  return hangul.hwpReady ? 'HWP 바로 열기 가능 · HWPX는 PDF로 저장해서 사용' : 'PDF로 저장해서 사용';
 }
 
 function hangulRuntimeToolRows(hangul){
@@ -17108,6 +17125,20 @@ async function postAppUpdateInstall(pin, expectedUpdate){
   return expectOkJson(resp, '자동 업데이트 시작 실패');
 }
 
+async function fetchAppUpdateProgress(){
+  const resp = await fetch('/api/app/update/progress');
+  return resp.ok ? resp.json() : null;
+}
+
+// The install request blocks for the whole download; show how far it got, then the check step.
+function updateInstallProgressLabel(progress){
+  const total = Number(progress?.total) || 0;
+  const received = Number(progress?.received) || 0;
+  if (total <= 0 || received >= total) return '검증·설치 준비 중...';
+  const mb = bytes => Math.round(bytes / (1024 * 1024));
+  return `내려받는 중 ${Math.floor((received / total) * 100)}% (${mb(received)}/${mb(total)}MB)`;
+}
+
 // Main copy for failed update checks; the raw status `error` stays in the details.
 const UPDATE_CHANNEL_ERROR_COPY = Object.freeze({
   error: '업데이트 정보를 확인하지 못했습니다. 인터넷 연결을 확인한 뒤 ‘업데이트 확인’을 다시 눌러 주세요.',
@@ -17152,6 +17183,9 @@ async function postShutdown(){
   const json = await expectOkJson(resp, '앱 종료 실패');
   return json;
 }
+
+// Must match GEMINI_KEY_HELP_URL in app_server.py, which allow-lists it for open-url.
+const GEMINI_KEY_HELP_URL = 'https://aistudio.google.com/apikey';
 
 async function postOpenUrl(url){
   const resp = await fetch('/api/system/open-url', {
@@ -17416,6 +17450,7 @@ function App(){
   const updateCheckInFlightRef = useRef(false);
   const [settingsRequest, setSettingsRequest] = useState(0);
   const [updateInstallBusy, setUpdateInstallBusy] = useState(false);
+  const [updateInstallProgress, setUpdateInstallProgress] = useState(null); // {received, total} while the installer downloads
   const [updateRestarting, setUpdateRestarting] = useState(null); // {version, startedAt} once the installer took over
   const [exportingImages, setExportingImages] = useState(false);
   const [downloadingItemId, setDownloadingItemId] = useState(null);
@@ -17906,6 +17941,7 @@ function App(){
     if (info.channelStatus === 'up_to_date') return '현재 최신 버전입니다';
     if (info.channelStatus === 'manual_download') return '다운로드 페이지를 열 수 있습니다';
     if (info.channelStatus === 'not_configured') return '업데이트 채널이 아직 설정되지 않았습니다';
+    if (info.channelStatus === 'no_release') return '아직 받을 수 있는 업데이트가 없어요';
     if (info.channelStatus === 'unsupported_platform') return '이 OS용 업데이트가 아직 없습니다';
     // The server sends a specific Korean sentence (raw text in detail) when it classified the failure.
     if (UPDATE_CHANNEL_ERROR_COPY[info.channelStatus]) return (info.detail && info.error) || UPDATE_CHANNEL_ERROR_COPY[info.channelStatus];
@@ -17992,6 +18028,21 @@ function App(){
     };
   }, [updateRestarting, checkForUpdates]);
 
+  // The PIN install is one long request; poll the server's byte count for the button label.
+  useEffect(() => {
+    setUpdateInstallProgress(null);
+    if (!updateInstallBusy) return undefined;
+    let cancelled = false;
+    const intervalId = window.setInterval(async () => {
+      const progress = await fetchAppUpdateProgress().catch(() => null);
+      if (!cancelled) setUpdateInstallProgress(progress);
+    }, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [updateInstallBusy]);
+
   const installUpdateVersion = useCallback(async (pin, expectedUpdate) => {
     if (updateBusy || updateInstallBusy) {
       showToast('다른 업데이트 작업이 끝난 뒤 다시 눌러 주세요');
@@ -18016,7 +18067,8 @@ function App(){
       return false;
     }
     if (!info?.automaticUpdateReady || info?.automaticUpdateBlockedReason) {
-      showToast(info?.automaticUpdateBlockedReason || '지금은 자동 업데이트를 할 수 없습니다. ‘다운로드 열기’로 새 설치파일을 받아 주세요.', 'error');
+      const blocked = [info?.automaticUpdateBlockedReason, info?.automaticUpdateBlockedSteps?.[0]].filter(Boolean).join(' ');
+      showToast(blocked || '지금은 자동 업데이트를 할 수 없습니다. ‘다운로드 열기’로 새 설치파일을 받아 주세요.', 'error');
       return false;
     }
     if (!expectedUpdate || JSON.stringify(expectedUpdate) !== JSON.stringify(appUpdateArtifactSnapshot(info))) {
@@ -20827,6 +20879,7 @@ function App(){
           selectedIds={selectedProblemIds}
           updateBusy={updateBusy}
           updateInstallBusy={updateInstallBusy}
+          updateInstallProgress={updateInstallProgress}
           updateInstallBlockedReason={updateInstallBlockedReason}
           onCheckUpdate={checkForUpdates}
           onOpenUpdate={openUpdatePage}

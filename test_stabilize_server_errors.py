@@ -30,8 +30,10 @@ def test_update_check_failures_are_korean_with_raw_text_in_detail():
     assert "HTTP Error 404" in missing["detail"]
     assert offline["error"].startswith("업데이트 서버에 연결하지 못했습니다")
     assert broken["error"].startswith("업데이트 정보를 확인하지 못했습니다")
-    for status in (missing, offline, broken):
+    assert missing["channelStatus"] == "no_release", "an unpublished feed is a normal state, not a failure"
+    for status in (offline, broken):
         assert status["channelStatus"] == "error"
+    for status in (missing, offline, broken):
         assert "Error" not in status["error"]
 
 
