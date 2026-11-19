@@ -8643,12 +8643,17 @@ def _mutate_confirm(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]
     for problem in problems:
         if not isinstance(problem, dict) or str(problem.get("id") or "") not in ids:
             continue
+        # The side panel's 변경 저장 also sends problems that were already
+        # normal; saving them is not a 확인 of their crop.
+        awaiting_review = _problem_review_status(problem) != "normal"
         problem["riskFlags"] = []
         problem["risk_flags"] = []
         problem["reviewStatus"] = "normal"
         problem["review_status"] = "normal"
         problem["parseFailed"] = False
         problem["parse_failed"] = False
+        if not awaiting_review:
+            continue
         # Remember which crop the teacher confirmed. The publish overlap and
         # page-decoration checks accept only this exact image and bbox; any
         # later re-crop, enhance or AI regeneration makes the record stale.

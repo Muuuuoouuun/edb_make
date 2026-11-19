@@ -112,7 +112,7 @@
   // records the image path and bbox at 확인, and any re-crop, enhance or AI
   // regeneration changes one of them, which re-arms the check.
   function isReviewConfirmedCrop(item) {
-    if (item?.reviewConfirmedImagePath == null) return false;
+    if (!item?.reviewConfirmedImagePath) return false;
     if (String(item?.reviewStatus || item?.review_status || "").trim() !== "normal") return false;
     if (String(item.reviewConfirmedImagePath) !== String(item?.imagePath || item?.image_path || "")) return false;
     const confirmedBox = bboxFor({ bbox: item.reviewConfirmedBBox });

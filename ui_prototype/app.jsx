@@ -6370,7 +6370,7 @@ function ReviewStage({
             )}
             {reviewSummary.warningPreview && (
               <ul className="review-summary-note">
-                {reviewSummary.warningMessages.map(message => <li key={message}>{message}</li>)}
+                {reviewSummary.warningMessages.map((message, index) => <li key={index}>{message}</li>)}
               </ul>
             )}
             </div>
@@ -14621,8 +14621,8 @@ const RISK_FLAG_META = {
   problem_per_block: '영역별로 나눔',
   sparse_segmentation: '나뉜 문항이 적음',
   source_problem_bbox_overlap: '문항 영역 겹침',
-  step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
-  step3_page_chrome_artifact: '3단계 페이지 장식',
+  step2_page_chrome_artifact_rate: '쪽번호·머리말 많이 섞임',
+  step3_page_chrome_artifact: '쪽번호·머리말 섞임',
   ai_boundary: 'AI 경계 판단',
   ai_partial_retry_failed: '부분 재인식 실패',
   ai_partial_retry_multiple_candidates: '재인식 후보 여러 개',
@@ -14660,8 +14660,8 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   review_flags_remaining: '검수 플래그 남음',
   small_problem_image: '문항 이미지 작음',
   source_problem_bbox_overlap: '문항 영역 겹침',
-  step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
-  step3_page_chrome_artifact: '3단계 페이지 장식',
+  step2_page_chrome_artifact_rate: '쪽번호·머리말 많이 섞임',
+  step3_page_chrome_artifact: '쪽번호·머리말 섞임',
   unreadable_problem_image: '이미지 파일을 열 수 없음',
 };
 const PASSAGE_REVIEW_REASON_LABELS = {
@@ -14912,7 +14912,8 @@ function pageChromePreflightBlockToast(blockedPublish){
     return '3단계 이미지에 분할선·페이지 번호가 남아 제작을 멈췄어요. 빨간 문제를 3단계 재구성으로 다시 뽑아주세요.';
   }
   if (types.includes('step2_page_chrome_artifact_rate')) {
-    return '2단계 페이지 장식 비율이 기준을 넘어 제작을 멈췄어요. 빨간 문제를 재인식하거나 3단계 재구성으로 다시 뽑아주세요.';
+    // 확인 of a stage-2 crop clears this block (stage 3 must still be re-cleaned).
+    return '2단계 문항에 쪽번호·머리말이 많이 섞여 제작을 멈췄어요. 빨간 문제가 원본과 같으면 확인을 누르고, 아니면 재인식하거나 3단계 재구성으로 다시 뽑아주세요.';
   }
   return '';
 }

@@ -185,9 +185,11 @@ CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
 }
 CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "board_placement_overlap": "판서 배치 겹침",
+    "duplicate_problem_id": "문항 ID 중복",
     "duplicate_problem_number": "중복 번호",
     "horizontal_crop_edge_risk": "글자 잘림 확인",
     "low_ink_problem_image": "이미지 내용 부족",
+    "missing_problem_id": "문항 ID 누락",
     "missing_problem_image": "문항 이미지 없음",
     "passage_group_source_reuse": "지문 겹침",
     "passage_missing_child_questions": "문항 누락",
@@ -196,8 +198,8 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "review_flags_remaining": "검수 플래그 남음",
     "small_problem_image": "문항 이미지 작음",
     "source_problem_bbox_overlap": "문항 영역 겹침",
-    "step2_page_chrome_artifact_rate": "2단계 페이지 장식 허용률 초과",
-    "step3_page_chrome_artifact": "3단계 페이지 장식",
+    "step2_page_chrome_artifact_rate": "쪽번호·머리말 많이 섞임",
+    "step3_page_chrome_artifact": "쪽번호·머리말 섞임",
     "unreadable_problem_image": "이미지 파일을 열 수 없음",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
@@ -9218,7 +9220,7 @@ def _session_problem_review_confirmed(problem: dict[str, Any]) -> bool:
     re-crop, enhance or AI regeneration changes one of them, which makes the
     record stale and re-arms the publish checks.
     """
-    if "reviewConfirmedImagePath" not in problem:
+    if not problem.get("reviewConfirmedImagePath"):
         return False
     if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "normal":
         return False

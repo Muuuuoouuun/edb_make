@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -132,6 +133,29 @@ class TestConfirmClearsOnlyThatExactCrop(unittest.TestCase):
                 recropped = json.loads(json.dumps(session))
                 recropped["problems"][1]["imagePath"] = recropped["problems"][1]["imagePath"].replace("p2", "p1")
                 self.assertEqual(1, python_issue_counts(recropped["problems"])[key], "new image re-arms the check")
+                self.assertEqual(1, guard_issue_counts(recropped["problems"])[key])
+
+                flagged = json.loads(json.dumps(session))
+                flagged["problems"][1]["reviewStatus"] = "failed"  # e.g. marked again by a 제작 block
+                self.assertEqual(1, python_issue_counts(flagged["problems"])[key], "a re-flagged crop needs 확인 again")
+                self.assertEqual(1, guard_issue_counts(flagged["problems"])[key])
+
+    def test_saving_an_already_normal_crop_is_not_a_confirmation(self) -> None:
+        # The side panel's 변경 저장 sends the confirm action for items that need no check.
+        stats = {"hasArtifact": True, "artifactTypes": ["bottom_page_line"]}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(
+            board, "_problem_image_page_chrome_artifact_stats", return_value=stats
+        ):
+            session = {"problems": overlapping_pair(Path(tmp)), "pages": []}
+            for problem in session["problems"]:
+                problem.update(riskFlags=[], reviewStatus="normal", processingStep=board.PROCESSING_STEP_CHALK)
+            app_server._mutate_confirm(session, ["p1", "p2"])
+            self.assertNotIn("reviewConfirmedImagePath", session["problems"][0])
+            self.assertEqual(1, python_issue_counts(session["problems"])["overlap"])
+            self.assertEqual(
+                ["step2_page_chrome_artifact_rate"],
+                [issue["type"] for issue in board._classin_page_chrome_artifact_issues(session["problems"])],
+            )
 
     def test_publish_rebuild_keeps_the_confirmation_record(self) -> None:
         prior = {"reviewConfirmedImagePath": "file:///tmp/a.png", "reviewConfirmedBBox": {"left": 1, "top": 2, "width": 3, "height": 4}}
@@ -326,7 +350,7 @@ class TestPreflightNaming(unittest.TestCase):
           { type: 'horizontal_crop_edge_risk', problemIds: ['p3', 'p7'], text: '글자 잘림 확인 · 3., 7.' },
           { type: 'unreadable_problem_image', problemIds: ['p9'], text: '이미지 파일을 열 수 없음 · 9.' },
           { type: 'passage_missing_child_questions', problemIds: ['p31', 'p32'], text: '문항 누락 · 33번 없음' },
-          { type: 'step2_page_chrome_artifact_rate', problemIds: [], text: '2단계 페이지 장식 초과 1' },
+          { type: 'step2_page_chrome_artifact_rate', problemIds: [], text: '쪽번호·머리말 많이 섞임 1' },
         ]);
         assert.equal(sandbox.preflightPairToastLabel([
           { problemTitle: '3.', nextProblemTitle: '4.' }, {}, {},
@@ -345,13 +369,27 @@ class TestPreflightNaming(unittest.TestCase):
         self.assertIn("setReviewFocus({ filter: 'all', problemIds: ids, source: 'publish-result' })", focus)
 
     def test_label_tables_agree(self) -> None:
-        for path in ("ui_prototype/app.jsx", "ui_prototype/publish_summary.js"):
+        def js_table(path: str, start: str) -> dict:
             text = (PROJECT_ROOT / path).read_text(encoding="utf-8")
-            self.assertIn("글자 잘림 확인", text, path)
-            self.assertIn("이미지 파일을 열 수 없음", text, path)
-            self.assertNotIn("문항 이미지 흐림", text, path)
-        self.assertEqual("글자 잘림 확인", board.CLASSIN_PREFLIGHT_ISSUE_LABELS["horizontal_crop_edge_risk"])
-        self.assertEqual("이미지 파일을 열 수 없음", board.CLASSIN_PREFLIGHT_ISSUE_LABELS["unreadable_problem_image"])
+            body = text.split(start, 1)[1].split("}", 1)[0]
+            return dict(re.findall(r"(\w+): ['\"]([^'\"]+)['\"]", body))
+
+        labels = board.CLASSIN_PREFLIGHT_ISSUE_LABELS
+        self.assertEqual(labels, js_table("ui_prototype/app.jsx", "const CLASSIN_PREFLIGHT_ISSUE_LABELS = {"))
+        self.assertEqual(labels, js_table("ui_prototype/publish_summary.js", "CLASSIN_PREFLIGHT_ISSUE_LABELS = {"))
+        self.assertEqual("글자 잘림 확인", labels["horizontal_crop_edge_risk"])
+        self.assertEqual("이미지 파일을 열 수 없음", labels["unreadable_problem_image"])
+        # A question marked by a page-decoration block reads the same as the 제작 result.
+        risk_labels = js_table("ui_prototype/app.jsx", "const RISK_FLAG_META = {")
+        for flag in ("step2_page_chrome_artifact_rate", "step3_page_chrome_artifact"):
+            self.assertEqual(labels[flag], risk_labels[flag])
+
+    def test_stage2_decoration_block_names_the_confirm_way_out(self) -> None:
+        source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
+        toast = source.split("function pageChromePreflightBlockToast(", 1)[1].split("function applyPublishPreflightIssuesToSession(", 1)[0]
+        stage2 = toast.split("step2_page_chrome_artifact_rate", 1)[1]
+        self.assertIn("확인을 누르고", stage2)
+        self.assertNotIn("확인을 누르고", toast.split("step2_page_chrome_artifact_rate", 1)[0], "stage 3 is not cleared by 확인")
 
 
 class TestBoardNextCheckItem(unittest.TestCase):
