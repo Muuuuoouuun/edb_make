@@ -5667,21 +5667,31 @@ _STALE_STAGING_PATTERNS = (
 )
 
 
-def _folder_size_and_newest_mtime(folder: Path) -> tuple[int, float]:
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _scan_work_folder(folder: Path) -> tuple[int, float, bool]:
+    """Size, newest mtime, and whether a finished file (see _is_finished_artifact) sits inside.
+
+    An unreadable subfolder raises instead of being skipped, so a hidden .edb is never missed.
+    """
     size, newest = 0, folder.stat().st_mtime
-    for root, _dirs, files in os.walk(folder):
+    for root, _dirs, files in os.walk(folder, onerror=_raise_walk_error):
         try:
             newest = max(newest, os.stat(root).st_mtime)
         except OSError:
             pass
         for name in files:
+            if _is_finished_artifact(DEFAULT_OUTPUT_ROOT_NAME, Path(root, name).relative_to(folder)):
+                return size, newest, True
             try:
                 entry = os.lstat(os.path.join(root, name))
             except OSError:
                 continue
             newest = max(newest, entry.st_mtime)
             size += entry.st_size
-    return size, newest
+    return size, newest, False
 
 
 def plan_stale_work_folders(
@@ -5696,8 +5706,10 @@ def plan_stale_work_folders(
 
     A preview folder is kept whole when any active/history path lies inside it
     or above it. Staging generations are renamed away before any session commit,
-    so only a reference inside one keeps it. Everything else under outputs/ is
-    left to the opt-in retention cleanup.
+    so only a reference inside one keeps it. A folder holding a finished file is
+    never planned: an adopted preview run is the lesson's output_dir, so publish
+    writes the teacher's EDB to previews/<run>/published/. Everything else under
+    outputs/ is left to the opt-in retention cleanup.
     """
     protected = _session_artifact_protection_paths(active_session) | _history_artifact_protection_paths(history)
     holds_protected = set(protected)
@@ -5716,10 +5728,10 @@ def plan_stale_work_folders(
                 continue
             if any(resolved.is_relative_to(selected) for selected, _ in planned):
                 continue
-            size, newest = _folder_size_and_newest_mtime(resolved)
+            size, newest, holds_finished = _scan_work_folder(resolved)
         except OSError:
             continue
-        if observed_at - newest >= min_age_seconds:
+        if not holds_finished and observed_at - newest >= min_age_seconds:
             planned.append((resolved, size))
     return planned
 
@@ -12464,6 +12476,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 status=HTTPStatus.BAD_REQUEST,
             )
             return
+        if not result.get("ok", True):
+            # Some files were locked (OneDrive, antivirus, an open viewer); the rest were deleted.
+            result = {
+                **result,
+                "code": "artifact_cleanup_partial",
+                "error": "다른 프로그램이 쓰고 있는 파일은 지우지 못했어요. 나머지는 정리했어요.",
+                "detail": "\n".join(f"{item.get('path')}: {item.get('error')}" for item in result.get("errors") or []),
+            }
         self._send_json(result)
 
     def _handle_session_clear(self, parsed=None) -> None:

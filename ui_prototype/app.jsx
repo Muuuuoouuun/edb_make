@@ -10591,6 +10591,7 @@ function StorageCleanupCard({ disabled = false }){
       const result = await requestArtifactCleanup(false);
       await refresh(`${formatBytes(result.deletedBytes)}를 정리했어요.`);
     } catch (error) {
+      await refresh(); // a partial cleanup (artifact_cleanup_partial) still freed space
       setStorage(prev => ({ ...prev, status: 'error', message: userErrorText(error) }));
     }
   };

@@ -122,6 +122,42 @@ class TestRetentionCleanupNeverTakesFinishedFiles(unittest.TestCase):
             self.assertEqual(5, result["selectedBytes"])
             self.assertTrue(crop.exists())
 
+    def test_partial_cleanup_answers_with_korean_error_and_locked_paths(self) -> None:
+        with TemporaryDirectory() as raw, ExitStack() as stack:
+            runtime = Path(raw)
+            _runtime_patches(stack, runtime)
+            freed = _write(runtime / "outputs" / "lesson" / "p1.png")
+            locked = _write(runtime / "outputs" / "lesson" / "locked.png")
+            real_unlink = Path.unlink
+
+            def unlink(path, *args, **kwargs):
+                if path.name == locked.name:
+                    raise PermissionError(13, "file is in use", str(path))
+                return real_unlink(path, *args, **kwargs)
+
+            server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+            try:
+                handler = object.__new__(app_server.AppRequestHandler)
+                handler.server = server
+                handler.headers = {}
+                handler._read_json_body = lambda: {"dryRun": False}
+                responses = []
+                handler._send_json = lambda payload, **kwargs: responses.append((payload, kwargs))
+                with patch.object(app_server, "_request_is_same_origin", return_value=True), \
+                        patch.object(Path, "unlink", unlink):
+                    handler._handle_runtime_artifact_cleanup()
+            finally:
+                server.server_close()
+            payload, kwargs = responses[0]
+            self.assertFalse(payload["ok"])
+            self.assertEqual("artifact_cleanup_partial", payload["code"])
+            self.assertRegex(payload["error"], "[가-힣]")
+            self.assertIn("locked.png", payload["detail"])
+            self.assertNotIn("status", kwargs, "partial success stays HTTP 200")
+            self.assertEqual(1, payload["deletedFileCount"])
+            self.assertFalse(freed.exists())
+            self.assertTrue(locked.exists())
+
 
 class TestStaleWorkFolders(unittest.TestCase):
     def test_plan_selects_only_old_unreferenced_preview_and_staging_folders(self) -> None:
@@ -140,12 +176,22 @@ class TestStaleWorkFolders(unittest.TestCase):
             _write(touched_preview / "pages" / "page1.png")
             _write(touched_preview / "crops" / "new.png", mtime=None)
             leftover_staging = outputs / "lesson" / ".publish-staging" / "gen1"
-            _write(leftover_staging / "lesson.edb", b"halfway")
+            _write(leftover_staging / "classin_handoff.json", b"halfway")
             export_staging = outputs / "previews" / "quiz_2" / ".export-staging" / "gen2"
             _write(export_staging / "crops" / "p1.png")
             published = outputs / "lesson" / "published" / "gen0"
             _write(published / "lesson.edb")
-            for folder in (stale_preview, adopted_preview, history_preview, leftover_staging, export_staging, published):
+            # Finished files keep the whole folder, referenced or not: an adopted preview run
+            # is the lesson's output_dir, so publish writes the teacher's EDB inside it.
+            published_preview = outputs / "previews" / "quiz_6"
+            _write(published_preview / "pages" / "page1.png")
+            _write(published_preview / "published" / "gen1" / "lesson.edb")
+            edb_preview = outputs / "previews" / "quiz_7"
+            _write(edb_preview / "lesson.edb")
+            edb_staging = outputs / "lesson" / ".publish-staging" / "gen2"
+            _write(edb_staging / "lesson.edb")
+            for folder in (stale_preview, adopted_preview, history_preview, leftover_staging, export_staging, published,
+                           published_preview, edb_preview, edb_staging):
                 _age_tree(folder)
             _age_tree(touched_preview / "pages")
 
@@ -161,6 +207,26 @@ class TestStaleWorkFolders(unittest.TestCase):
             )
             self.assertEqual(3, dict(planned)[stale_preview.resolve()])
 
+    def test_unreadable_subfolder_keeps_the_whole_folder(self) -> None:
+        with TemporaryDirectory() as raw:
+            outputs = Path(raw) / "outputs"
+            run = outputs / "previews" / "locked_run"
+            _write(run / "pages" / "page1.png")
+            _write(run / "locked" / "lesson.edb")
+            _age_tree(run)
+            real_scandir = os.scandir
+
+            def scandir(path):
+                if os.path.basename(path) == "locked":
+                    raise PermissionError(13, "Access is denied", str(path))
+                return real_scandir(path)
+
+            with patch.object(app_server.os, "scandir", scandir):
+                planned = app_server.plan_stale_work_folders(
+                    output_root=outputs, active_session={}, history=[], now=time.time(),
+                )
+            self.assertEqual([], planned, "a finished file hidden in an unreadable folder must not be missed")
+
     def test_server_pass_deletes_garbage_and_logs_counts(self) -> None:
         with TemporaryDirectory() as raw, ExitStack() as stack:
             runtime = Path(raw)
@@ -168,7 +234,8 @@ class TestStaleWorkFolders(unittest.TestCase):
             stale = runtime / "outputs" / "previews" / "old_run"
             _write(stale / "pages" / "page1.png", b"1234")
             _age_tree(stale)
-            kept_edb = _write(runtime / "outputs" / "lesson" / "published" / "g" / "lesson.edb")
+            kept_edb = _write(runtime / "outputs" / "previews" / "adopted_run" / "published" / "g" / "lesson.edb")
+            _age_tree(runtime / "outputs" / "previews" / "adopted_run")
             server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
             try:
                 server.begin_artifact_job()
@@ -316,7 +383,8 @@ class TestStorageSettingsUi(unittest.TestCase):
           { ok: true, selectedBytes: 2 * 1024 * 1024 },
           { ok: true, deletedBytes: 2 * 1024 * 1024 },
           { ok: true, selectedBytes: 0 },
-          { ok: false, code: 'artifact_cleanup_busy', error: '다른 작업이 진행 중이라 지금은 정리할 수 없어요.' },
+          { ok: false, code: 'artifact_cleanup_partial', error: '다른 프로그램이 쓰고 있는 파일은 지우지 못했어요. 나머지는 정리했어요.' },
+          { ok: true, selectedBytes: 3 * 1024 },
         ];
         const store = [], effects = [];
         let cursor = 0;
@@ -354,10 +422,14 @@ class TestStorageSettingsUi(unittest.TestCase):
           assert.match(text(render()), /정리할 오래된 작업 파일이 없어요/);
           assert.equal(button().props.disabled, true);
 
-          store[0] = { status: 'ready', bytes: 10, message: '' };
-          button().props.onClick(); await flush(); await flush();
-          assert.match(text(render()), /다른 작업이 진행 중/);
+          // Partial cleanup: the size is measured again and the reason stays visible as a warning.
+          store[0] = { status: 'ready', bytes: 10 * 1024, message: '' };
+          button().props.onClick(); await flush(); await flush(); await flush();
+          assert.deepEqual(requests.slice(3).map(([, body]) => body), [{ dryRun: false }, { dryRun: true }]);
+          assert.match(text(render()), /다른 프로그램이 쓰고 있는 파일은 지우지 못했어요/);
+          assert.match(text(render()), /3KB 있어요/);
           assert.ok(walk(render()).some(node => String(node.props.className || '').includes('warn')));
+          assert.equal(button().props.disabled, false, 'the teacher can try again');
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 
