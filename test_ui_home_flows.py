@@ -332,9 +332,9 @@ class TestUiHomeFlows(unittest.TestCase):
         const base = { recentSessions: [], runtimeDiagnostics: { hangul: { status: 'ready' } } };
         for (const [aiEnabled, hasApiKey, expected] of [
           [true, true, 'AI 설정 준비됨 · 실행할 때 사용'],
-          [true, false, '로컬 처리 · AI 연결 설정 필요'],
-          [false, true, '로컬 처리 · AI 사용 꺼짐'],
-          [false, false, '로컬 처리 · AI 사용 꺼짐'],
+          [true, false, '이 컴퓨터에서 처리 · AI 연결 설정 필요'],
+          [false, true, '이 컴퓨터에서 처리 · AI 사용 꺼짐'],
+          [false, false, '이 컴퓨터에서 처리 · AI 사용 꺼짐'],
         ]) {
           const rendered = text(sandbox.HomeDashboard({ ...base, aiEnabled, hasApiKey }));
           assert.ok(rendered.replace(/\s+/g, ' ').includes('한글(HWP): 준비됨'), 'the existing label field must be displayed');

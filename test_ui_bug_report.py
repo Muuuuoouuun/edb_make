@@ -37,7 +37,7 @@ class BugReportUiTests(unittest.TestCase):
         self.assertEqual(1, self.app.count('<form className="bug-report-form"'))
         self.assertIn("이 문제에 관한 회신에 동의", settings)
         self.assertIn("진단 정보 포함", settings)
-        self.assertIn("리포트 보내기", settings)
+        self.assertIn("신고 보내기", settings)
         self.assertIn("원본 시험지, 작업 내용, API 키, 컴퓨터 안의 전체 파일 경로", settings)
 
     def test_submit_posts_only_allowlisted_context_to_local_endpoint(self):
@@ -108,7 +108,7 @@ class BugReportUiTests(unittest.TestCase):
             self.assertIn(label, banner)
         self.assertIn("편집 내용은 안전합니다", banner)
         self.assertIn("초기화 후 원본 PDF를 다시 등록", banner)
-        self.assertIn("설정 → 도움말 및 문제 신고", banner)
+        self.assertIn("아래 <b>문제 신고 열기</b>로 오류를 보내 주세요", banner)
         self.assertIn("operationRecoverySummary(error)", banner)
         self.assertIn("onReset", banner)
         self.assertIn("onReport", banner)
@@ -129,7 +129,7 @@ class BugReportUiTests(unittest.TestCase):
             "function LoadingOverlay", 1
         )[0]
         for label in (
-            "ClassIn EDB 앱을 다시 실행해 주세요",
+            "`${APP_LAUNCH_NAME} 앱을 다시 실행해 주세요`",
             "앱 재실행 후 연결 확인",
             "앱 연결됨 · 작업을 다시 시작할 수 있습니다",
             "연결이 돌아오면 자동으로 알려드립니다",
@@ -340,7 +340,7 @@ process.stdout.write(JSON.stringify({ history, latest }));
         self.assertIn("clearOperationRecovery()", restore)
         self.assertIn("const restoreInFlightRef = useRef(false);", self.app)
         self.assertIn("restoreInFlightRef.current || restoringSessionId", restore)
-        self.assertIn("이미 최근 작업을 여는 중입니다", restore)
+        self.assertIn("이미 최근 수업을 여는 중입니다", restore)
         self.assertIn("restoreInFlightRef.current = true;", restore)
         self.assertIn("restoreInFlightRef.current = false;", restore)
         self.assertLess(restore.index("restoreInFlightRef.current = true;"), restore.index("postRestoreSessionHistory(id)"))

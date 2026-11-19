@@ -241,7 +241,7 @@ class TestUiPreviewSummary(unittest.TestCase):
         assert.equal(state.undoCount, 2);
         assert.equal(toasts.length, 2);
         assert.equal(toasts[1].message, '뒤 여백을 줄였어요');
-        assert.equal(toasts[1].label, '되돌리기');
+        assert.equal(toasts[1].label, '실행 취소');
         state.activeId = 'third';
         state.setPlacement('first', { xRatio: 0.37 });
         toasts[1].onAction();

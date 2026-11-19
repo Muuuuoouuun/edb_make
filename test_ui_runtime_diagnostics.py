@@ -559,8 +559,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("ClassIn {band.page}쪽", board_stage)
         self.assertIn("Math.max(1, previewEstimate.classinPageCount)", board_stage)
         self.assertIn(">ClassIn</span>", board_stage)
-        self.assertIn("C{tileClassinStartPage}–C{tileClassinEndPage}", board_stage)
-        self.assertIn("`예상 C${previewEstimate.classinPageCount}`", board_stage)
+        self.assertIn("{tileClassinStartPage}–{tileClassinEndPage}쪽", board_stage)
+        self.assertIn("`예상 ${previewEstimate.classinPageCount}쪽`", board_stage)
         self.assertIn(".page-divider .label .classin-page", board)
 
     def test_board_preview_exposes_estimate_and_active_gap_guides(self) -> None:
@@ -603,7 +603,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
 
         self.assertIn("문항 사이 여백", layout_controls)
-        self.assertIn("1.2 맞춤", layout_controls)
+        self.assertIn("쪽 맞춤", layout_controls)
         self.assertIn("빈틈 없이", layout_controls)
         self.assertIn("1.2p는 ClassIn 한 페이지입니다", layout_controls)
         self.assertIn("최대 6% 이내", layout_controls)
@@ -618,7 +618,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertNotIn("<BoardLayoutControls", item_tab)
         self.assertNotIn("<BoardLayoutControls", settings_tab)
         self.assertNotIn("칠판 동작", settings_tab)
-        self.assertIn("window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요?", source)
+        self.assertIn("window.confirm('전체 문항 사이의 쪽 맞춤 여백을 제거할까요?", source)
         self.assertIn("snapshot.layoutGapMode = normalizedGapMode", materialize)
         self.assertIn("snapshot.layout_gap_mode = normalizedGapMode", materialize)
         self.assertIn("const strandedProblems = snapshot.problems.filter", materialize)
