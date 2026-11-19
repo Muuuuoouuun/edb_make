@@ -9487,7 +9487,7 @@ function BoardStage({
             {boardKeysOpen && (
               <div className="manual-split-shortcut-guide board-shortcut-guide" role="region" aria-label="칠판 단축키 목록">
                 <span><kbd>F2</kbd> 수업 이름 바꾸기</span>
-                <span><kbd>{PRIMARY_MODIFIER_LABEL} Z</kbd> 되돌리기</span>
+                <span><kbd>{PRIMARY_MODIFIER_LABEL} Z</kbd> 실행 취소</span>
                 <span><kbd>{ALTERNATE_MODIFIER_LABEL} 1·2·3</kbd> 오른쪽 편집 · 크기·배치 · 설정</span>
                 <span><kbd>{ALTERNATE_MODIFIER_LABEL} 드래그</kbd> 칠판에서 순서 이동</span>
                 <span><kbd>Esc</kbd> 칠판 드래그 취소</span>
