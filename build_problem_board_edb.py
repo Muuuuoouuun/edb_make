@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
@@ -60,7 +60,7 @@ from edb_builder import (
     write_edb,
 )
 from layout_template_schema import LayoutTemplate, ProblemLayoutInput
-from image_reconstruction_backend import board_render_has_missing_tail, clean_problem_image_transparency
+from image_reconstruction_backend import board_render_has_missing_tail, channel_max, channel_spread, clean_problem_image_transparency
 from page_repair import AIFallbackConfig, build_ai_fallback_config as build_page_ai_fallback_config
 from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from page_tiling import PageTilingOptions, tile_page_columns
@@ -585,7 +585,7 @@ def _trim_edge_attached_page_chrome(image: Image.Image) -> Image.Image:
             + 0.587 * rgb_float[..., 1]
             + 0.114 * rgb_float[..., 2]
         )
-        saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
+        saturation = channel_spread(rgb_float)
         foreground = (luminance <= 246.0) | (saturation >= 24.0)
 
         def is_foreground(x: int, y: int) -> bool:
@@ -715,7 +715,7 @@ def _trim_bottom_blue_watermark(image: Image.Image) -> Image.Image:
         red = lower[..., 0]
         green = lower[..., 1]
         blue = lower[..., 2]
-        saturation = lower.max(axis=2) - lower.min(axis=2)
+        saturation = channel_spread(lower)
         blue_mask = (
             (blue >= red + BOTTOM_WATERMARK_BLUE_DELTA)
             & (blue >= green + 8)
@@ -984,7 +984,7 @@ def _erase_corner_page_badges(image: Image.Image) -> Image.Image:
             + 0.587 * rgb_float[..., 1]
             + 0.114 * rgb_float[..., 2]
         )
-        saturation = rgb_float.max(axis=2) - rgb_float.min(axis=2)
+        saturation = channel_spread(rgb_float)
         alpha = arr[..., 3]
         foreground = (alpha > 24) & ((luminance <= 246.0) | (saturation >= 24.0))
 
@@ -1737,7 +1737,7 @@ def _extract_problem_cutout(
     alpha_strength = np.clip((darkness - noise_floor) / max(1.0, 255.0 - noise_floor), 0.0, 1.0)
     alpha_strength = np.power(np.clip(alpha_strength * 1.45, 0.0, 1.0), 0.7)
 
-    max_channel = rgb_array.max(axis=2)
+    max_channel = channel_max(rgb_array)
     whiteness = gray_array / 255.0
     color_distance = np.linalg.norm(1.0 - rgb_array, axis=2) / np.sqrt(3.0)
     keep_color = np.clip((color_distance - 0.035) / 0.42, 0.0, 1.0)
@@ -2129,6 +2129,19 @@ def _record_ms(timings: dict[str, int] | None, key: str, started_at: float) -> N
     """Store a stage duration when the caller asked for timings; no-op otherwise."""
     if timings is not None:
         timings[key] = int(round((time.perf_counter() - started_at) * 1000))
+
+
+ExportProgress = Callable[[str, int, int], None]
+
+
+def _report_progress(progress: ExportProgress | None, stage: str, done: int = 0, total: int = 0) -> None:
+    """Tell the caller which stage is running; a broken callback never fails the export."""
+    if progress is None:
+        return
+    try:
+        progress(stage, done, total)
+    except Exception:  # noqa: BLE001 - progress is display-only
+        pass
 
 
 def _resolve_problem_asset_worker_count(task_count: int) -> int:
@@ -2870,8 +2883,25 @@ def _render_problem_assets(tasks: list[_ProblemAssetTask]) -> list[tuple[int, in
         canonical_index_by_task.append(canonical_index)
 
     worker_count = _resolve_problem_asset_worker_count(len(canonical_tasks))
-    if any(task.source_image_path for task in canonical_tasks):
-        worker_count = min(worker_count, 2)
+    source_paths = {task.source_image_path for task in canonical_tasks if task.source_image_path}
+    if source_paths and worker_count > 1:
+        # Each worker decodes a whole disk-backed page, so add workers (up to 4)
+        # only when the largest page (headers only) fits the memory budget.
+        # Never below the previous fixed cap of 2, which is also the fallback
+        # when a page size cannot be read.
+        largest_source_pixels = 0
+        try:
+            for source_path in source_paths:
+                with Image.open(source_path) as source:
+                    largest_source_pixels = max(largest_source_pixels, source.width * source.height)
+        except (OSError, ValueError, Image.DecompressionBombError):
+            largest_source_pixels = 0
+        memory_cap = 2
+        if largest_source_pixels > 0:
+            memory_cap = max(2, _resolve_image_record_worker_count(
+                len(canonical_tasks), source_pixels=largest_source_pixels,
+            ))
+        worker_count = min(worker_count, memory_cap)
     if worker_count <= 1:
         canonical_sizes = [_render_problem_asset(task) for task in canonical_tasks]
     else:
@@ -3002,6 +3032,7 @@ def build_pages(
     global_ocr_worker_limit: int | None = None,
     timings: dict[str, int] | None = None,
     page_id_namespace: str | None = None,
+    progress: ExportProgress | None = None,
 ) -> tuple[list[PreparedPage], list[PageModel]]:
     render_started_at = time.perf_counter()
     prepared_pages = prepare_source_pages(
@@ -3032,6 +3063,18 @@ def build_pages(
 
     page_ai_config = _to_page_ai_config(ai_fallback_config)
     segment_started_at = time.perf_counter()
+    total_pages = len(prepared_pages)
+    pages_done = 0
+    pages_done_lock = threading.Lock()
+
+    def page_done() -> None:
+        nonlocal pages_done
+        with pages_done_lock:
+            pages_done = min(pages_done + 1, total_pages)
+            _report_progress(progress, "segment", pages_done, total_pages)
+
+    segment_kwargs = {"on_page_done": page_done} if progress is not None else {}
+    _report_progress(progress, "segment", 0, total_pages)
 
     def segment_batch(batch: list[PreparedPage]) -> list[PageModel]:
         try:
@@ -3042,6 +3085,7 @@ def build_pages(
                 ai_config=page_ai_config,
                 ocr_semaphore=ocr_semaphore,
                 global_ocr_worker_limit=global_ocr_worker_limit,
+                **segment_kwargs,
             )
         except Exception as exc:
             if not _is_pdf_resource_error(exc):
@@ -3061,6 +3105,7 @@ def build_pages(
     page_models: list[PageModel] = []
     for first in range(0, len(prepared_pages), PDF_PROCESSING_BATCH_PAGES):
         page_models.extend(segment_batch(prepared_pages[first:first + PDF_PROCESSING_BATCH_PAGES]))
+        pages_done = len(page_models)  # a resource-error retry counts its pages twice
     _record_ms(timings, "segment", segment_started_at)
     if debug_segments_dir is not None:
         for prepared_page, page in zip(prepared_pages, page_models):
@@ -5383,7 +5428,7 @@ def _passage_foreground_row_counts(image: Image.Image) -> list[int]:
         alpha = arr[..., 3]
         rgb = arr[..., :3].astype(np.float32)
         luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
-        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        saturation = channel_spread(rgb)
         has_transparency = bool(int(alpha.min()) < 245)
         foreground = (
             alpha > 24
@@ -5439,7 +5484,7 @@ def _passage_foreground_x_span(
         alpha = arr[..., 3]
         rgb = arr[..., :3].astype(np.float32)
         luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
-        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        saturation = channel_spread(rgb)
         has_transparency = bool(int(alpha.min()) < 245)
         foreground = (
             alpha > 24
@@ -5569,7 +5614,7 @@ def _passage_band_has_substantive_ink(image: Image.Image, *, top: int, bottom: i
         rgb = pixels[..., :3].astype(np.float32)
         luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
         foreground = (alpha > 0 if transparent
-                      else (luminance <= 246.0) | ((rgb.max(axis=2) - rgb.min(axis=2)) >= 24.0))
+                      else (luminance <= 246.0) | (channel_spread(rgb) >= 24.0))
         if guide_columns:
             foreground[:, sorted(guide_columns)] = False
         return bool(foreground.any())
@@ -5753,7 +5798,7 @@ def _passage_box_horizontal_bounds(image: Image.Image) -> tuple[int, int] | None
         alpha = arr[..., 3]
         rgb = arr[..., :3].astype(np.float32)
         luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
-        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        saturation = channel_spread(rgb)
         has_transparency = bool(int(alpha.min()) < 245)
         foreground = (
             alpha > 48
@@ -5885,7 +5930,7 @@ def _erase_passage_outer_margin_page_guides(image: Image.Image) -> Image.Image:
         alpha = arr[..., 3]
         rgb = arr[..., :3].astype(np.float32)
         luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
-        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        saturation = channel_spread(rgb)
         has_transparency = bool(int(alpha.min()) < 245)
         foreground = (
             alpha > 48
@@ -6147,7 +6192,7 @@ def _passage_frame_has_horizontal_closure(
         alpha = arr[..., 3]
         rgb = arr[..., :3].astype(np.float32)
         luminance = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
-        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        saturation = channel_spread(rgb)
         has_transparency = bool(int(alpha.min()) < 245)
         foreground = (
             alpha > 48
@@ -8757,7 +8802,7 @@ def _problem_image_page_chrome_artifact_stats(image: Image.Image) -> dict[str, A
         green = rgb[..., 1]
         blue = rgb[..., 2]
         luminance = (0.299 * red + 0.587 * green + 0.114 * blue).astype(np.float32)
-        saturation = rgb.max(axis=2) - rgb.min(axis=2)
+        saturation = channel_spread(rgb)
         has_transparency = int(alpha.min()) < 245
         if has_transparency:
             foreground = alpha >= 48
@@ -12821,6 +12866,7 @@ def run_problem_export(
     ai_fallback_timeout_ms: int = 30000,
     ai_fallback_save_debug: bool = False,
     fail_on_ai_error: bool = False,
+    progress: ExportProgress | None = None,
 ) -> dict[str, Any]:
     run_started_at = time.perf_counter()
     timing_ms: dict[str, int] = {}
@@ -12872,6 +12918,24 @@ def run_problem_export(
         stem = source_path.stem.casefold()
         stem_counts[stem] = stem_counts.get(stem, 0) + 1
 
+    # Page counts summed over every source file seen so far, so a multi-file
+    # import never shows its page number going backwards.
+    pages_by_source: dict[Path, tuple[int, int]] = {}
+    pages_by_source_lock = threading.Lock()
+
+    def _source_progress(source_path: Path) -> ExportProgress:
+        def report(stage: str, done: int, total: int) -> None:
+            with pages_by_source_lock:
+                pages_by_source[source_path] = (done, total)
+                _report_progress(
+                    progress, stage,
+                    sum(count for count, _ in pages_by_source.values()),
+                    sum(count for _, count in pages_by_source.values()),
+                )
+        return report
+
+    _report_progress(progress, "read")
+
     def _build_source_pages(source_path: Path) -> tuple[list[PreparedPage], list[PageModel]]:
         namespace = None
         if stem_counts[source_path.stem.casefold()] > 1:
@@ -12891,6 +12955,7 @@ def run_problem_export(
             ocr_semaphore=shared_ocr_semaphore,
             global_ocr_worker_limit=global_ocr_worker_limit,
             **({"page_id_namespace": namespace} if namespace else {}),
+            **({"progress": _source_progress(source_path)} if progress is not None else {}),
         )
 
     source_worker_count = resolve_source_build_worker_count(
@@ -12938,6 +13003,7 @@ def run_problem_export(
             "ocr='gemini') to enable Gemini OCR.",
             flush=True,
         )
+    _report_progress(progress, "problem_assets")
     problem_assets_started_at = time.perf_counter()
     problem_entries = build_problem_entries(
         prepared_pages,
@@ -12971,6 +13037,7 @@ def run_problem_export(
     # (e.g. 44 problems -> pages_hint=88); keep 50 as the floor for short boards.
     template.board_page_count = max(50, len(problem_entries) * 2)
     resolved_crop_format = crop_format if crop_format in (CROP_FORMAT_V1, CROP_FORMAT_V2) else DEFAULT_CROP_FORMAT
+    _report_progress(progress, "records")
     records_started_at = time.perf_counter()
     records, placements, header_flag = build_records(
         problem_entries,
@@ -13024,6 +13091,7 @@ def run_problem_export(
     edb_path: Path | None = None
     edb_parts: list[dict[str, Any]] = []
     if export_edb:
+        _report_progress(progress, "edb_write")
         edb_write_started_at = time.perf_counter()
         edb_parts = write_classin_limited_edb_files(
             problem_entries,
