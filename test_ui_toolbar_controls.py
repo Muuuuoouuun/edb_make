@@ -98,13 +98,13 @@ class TestUiToolbarControls(unittest.TestCase):
         const order = tree => {
           const actions = walk(tree).find(node => node.props?.className === 'topbar-actions');
           return walk(actions.props.children).filter(node => node && node.props && (
-            node.props.className === 'editor-mode-control' || node.props['aria-label'] === '되돌리기'
+            node.props.className === 'editor-mode-control' || node.props['aria-label'] === '실행 취소'
             || /(^|\s)topbar-(reset|update)(\s|$)/.test(String(node.props.className || '')) || node.props.id === 'topbar-more'
           )).map(node => node.props.id || node.props['aria-label']
             || String(node.props.className).match(/topbar-(reset|update)(?=\s|$)|editor-mode-control/)[0]);
         };
         assert.deepEqual(order(sandbox.TopBar({ ...base, canChangeFocusMode: true })),
-          ['초기화', '편집기 보기 모드', '되돌리기', 'topbar-more']);
+          ['초기화', '편집기 보기 모드', '실행 취소', 'topbar-more']);
         // Empty home with history to clear: no material controls, reset still leads.
         assert.deepEqual(order(sandbox.TopBar({ ...base, total: 0, hasMaterials: false, canUndo: false })),
           ['초기화', 'topbar-more']);

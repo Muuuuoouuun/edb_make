@@ -4914,7 +4914,7 @@
     flex: 0 0 auto;
     background: var(--ok);
   }
-  .status-dot.status-check-needed{ background: #d97757; }
+  .status-dot.status-check-needed{ background: var(--warn-solid); }
   .status-dot.status-failed{ background: var(--danger); }
   .status-badge{
     display: inline-flex;
@@ -4933,8 +4933,12 @@
   .tag.status-tag.status-check-needed{
     background: rgba(217,119,87,.13);
     border-color: rgba(217,119,87,.26);
-    color: #b85737;
+    color: #9a4a2c;
   }
+  /* The light-theme warm text above drops to ~2.3:1 on the dark tint. */
+  body.dark .status-badge.status-check-needed,
+  body.dark .tag.status-tag.status-check-needed,
+  body.dark .recognition-summary span.warn{ color: #e8956f; }
   .status-badge.status-failed,
   .tag.status-tag.status-failed{
     background: rgba(213,72,72,.12);
@@ -5738,9 +5742,9 @@
     z-index: 2;
     pointer-events: none;
   }
-  .review-bbox.risky .review-bbox-label{ background: #d97757; }
-  .review-bbox.status-failed .review-bbox-label{ background: var(--danger); }
-  .review-bbox.page-chrome-artifact .review-bbox-label{ background: var(--danger); }
+  .review-bbox.risky .review-bbox-label{ background: var(--warn-solid); }
+  .review-bbox.status-failed .review-bbox-label{ background: var(--danger-solid); }
+  .review-bbox.page-chrome-artifact .review-bbox-label{ background: var(--danger-solid); }
   .review-bbox.active .review-bbox-label{ background: var(--chalk-warm); color: #2c1d00; }
   .review-bbox.page-chrome-artifact.active .review-bbox-label{ background: var(--danger-solid); color: #ffffff; }
   .review-bbox-risk{
@@ -7509,7 +7513,7 @@
     font-weight: 700;
   }
   .recognition-summary span.warn{
-    color: #aa6516;
+    color: #8f4a10;
     border-color: rgba(217,119,87,.35);
     background: rgba(217,119,87,.12);
   }
@@ -7707,8 +7711,8 @@
     font-size: var(--text-2xs);
     font-weight: 800;
   }
-  .recognition-box.status-check-needed span{ background: #d97757; }
-  .recognition-box.status-failed span{ background: var(--danger); }
+  .recognition-box.status-check-needed span{ background: var(--warn-solid); }
+  .recognition-box.status-failed span{ background: var(--danger-solid); }
   .recognition-page-stepper{
     position: sticky;
     bottom: 0;
@@ -8036,8 +8040,12 @@
     bottom: 24px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: var(--on-ink);
     padding: 10px 16px;
-    border-radius: 999px;
+    border-radius: 18px;
+    width: max-content;
+    max-width: min(560px, calc(100vw - 32px));
     font-size: var(--text-sm); font-weight: 500;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
     box-shadow: 0 8px 24px rgba(0,0,0,.25);
     display: flex; align-items: center; gap: 8px;
     z-index: var(--z-toast);
@@ -8105,6 +8113,7 @@
     border: 1px solid rgba(248, 113, 113, 0.4);
     box-shadow: 0 8px 24px rgba(185, 28, 28, 0.28);
   }
+  .toast > .ic{ flex: none; }
   .toast.toast-error .ic{
     color: #f87171;
   }

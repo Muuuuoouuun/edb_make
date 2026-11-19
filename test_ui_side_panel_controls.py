@@ -64,13 +64,13 @@ class TestSidePanelControls(unittest.TestCase):
         let toggle = walk(tree).find(node => node.type === 'input');
         assert.equal(toggle.props['aria-label'], 'AI 기능 사용 허용');
         assert.equal(toggle.props.checked, true, 'permission can be enabled before a key is entered');
-        assert.ok(text(tree).includes('로컬 처리 중 · AI 연결 설정 필요'));
+        assert.ok(text(tree).includes('이 컴퓨터에서 처리 중 · AI 연결 설정 필요'));
         toggle.props.onChange({ target: { checked: false } });
         assert.deepEqual(choices, [false], 'changing permission must not run recognition');
         sandbox.userSettings = { hasGeminiApiKey: true };
         assert.ok(text(render()).includes('AI 설정 준비됨'));
         sandbox.aiEnabled = false;
-        assert.ok(text(render()).includes('로컬 처리 중 · AI 사용 꺼짐'));
+        assert.ok(text(render()).includes('이 컴퓨터에서 처리 중 · AI 사용 꺼짐'));
         sandbox.aiToggleBusy = true;
         tree = render();
         assert.equal(walk(tree).find(node => node.type === 'input').props.disabled, true);
