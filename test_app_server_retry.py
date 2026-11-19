@@ -5929,8 +5929,8 @@ class TestRuntimeDiagnostics(unittest.TestCase):
             },
             hangul["toolCounts"],
         )
-        self.assertIn("PDF 1", hangul["summary"])
-        self.assertIn("텍스트 2", hangul["summary"])
+        self.assertEqual("바로 열기 가능", hangul["summary"])
+        self.assertEqual([], hangul["warnings"])
 
     def test_runtime_diagnostics_treats_rhwp_core_renderer_as_hangul_ready(self):
         with (
@@ -5954,8 +5954,9 @@ class TestRuntimeDiagnostics(unittest.TestCase):
         self.assertTrue(hangul["hwpRendererReady"])
         self.assertEqual("ready", hangul["status"])
         self.assertEqual("rhwp-core", hangul["hwpRenderers"][0]["name"])
-        self.assertIn("렌더 1", hangul["summary"])
-        self.assertFalse(any("PDF converter was not found" in warning for warning in hangul["warnings"]))
+        self.assertEqual("바로 열기 가능", hangul["summary"])
+        self.assertEqual([], hangul["warnings"], "a working renderer must not tell teachers to save as PDF")
+        self.assertEqual([], hangul["recommendedActions"])
 
     def test_runtime_diagnostics_reports_actionable_hangul_warning_when_missing_pdf_converter(self):
         with (
@@ -5973,11 +5974,16 @@ class TestRuntimeDiagnostics(unittest.TestCase):
         self.assertFalse(hangul["hwpReady"])
         self.assertFalse(hangul["hwpxReady"])
         self.assertEqual("blocked", hangul["status"])
-        self.assertEqual("확인 필요", hangul["label"])
-        self.assertIn("주의", hangul["summary"])
-        self.assertTrue(any("rhwp" in warning for warning in hangul["warnings"]))
-        self.assertTrue(any("PDF" in step for step in hangul["recommendedActions"]))
-        self.assertTrue(any("Chrome" in warning or "LibreOffice" in warning for warning in hangul["warnings"]))
+        self.assertEqual("PDF로 저장 필요", hangul["label"])
+        self.assertEqual("PDF로 저장해서 사용", hangul["summary"])
+        self.assertEqual("한글 파일을 바로 열 수 없어요.", hangul["warnings"][0])
+        self.assertEqual("한글 프로그램에서 PDF로 저장한 뒤 그 PDF를 넣어 주세요.", hangul["recommendedActions"][0])
+        teacher_copy = " ".join(hangul["warnings"] + hangul["recommendedActions"])
+        self.assertNotRegex(teacher_copy, r"LibreOffice|rhwp|hwp5|airun|pyhwp|Chrome|EDB_|found")
+        notes = " ".join(hangul["technicalNotes"])
+        self.assertIn("rhwp", notes)
+        self.assertIn("LibreOffice", notes)
+        self.assertIn("EDB_CHROME", notes)
 
     def test_runtime_diagnostics_labels_node_wrapped_hwpilot_bridge(self):
         with (

@@ -845,8 +845,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         tool_rows = source.split("function hangulRuntimeToolRows", 1)[1]
         tool_rows = tool_rows.split("function listUnique", 1)[0]
 
-        self.assertIn("hangul.hwpRenderers", summary_helper)
-        self.assertIn("렌더 ${rendererCount}", summary_helper)
+        # The summary is teacher copy; tool counts live only in the 자세한 정보 grid.
+        self.assertIn("PDF로 저장해서 사용", summary_helper)
+        self.assertNotIn("렌더 ${rendererCount}", summary_helper)
         self.assertIn("HWP 렌더", tool_rows)
         self.assertIn("hangul.hwpRenderers || []", tool_rows)
 
