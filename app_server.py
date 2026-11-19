@@ -352,6 +352,24 @@ def run_problem_export(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "run_problem_export", *args, **kwargs)
 
 
+# Live conversion stage per client progressId. Each entry is replaced whole and
+# dict get/set/pop are atomic, so the progress poll never waits on the export.
+_EXPORT_PROGRESS: dict[str, dict[str, Any]] = {}
+
+
+def _run_with_export_progress(progress_id: str, run: Any, *args: Any, **kwargs: Any) -> Any:
+    if not progress_id:
+        return run(*args, **kwargs)
+
+    def report(stage: str, done: int, total: int) -> None:
+        _EXPORT_PROGRESS[progress_id] = {"stage": str(stage), "done": int(done), "total": int(total)}
+
+    try:
+        return run(*args, progress=report, **kwargs)
+    finally:
+        _EXPORT_PROGRESS.pop(progress_id, None)
+
+
 def write_classin_handoff_manifest(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "write_classin_handoff_manifest", *args, **kwargs)
 
@@ -10728,6 +10746,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             payload = health_builder() if callable(health_builder) else {"ok": True, "app": APP_NAME}
             self._send_json(payload)
             return
+        if parsed.path == "/api/export/progress":
+            # Not behind the artifact lock: it must answer while an export runs.
+            progress_id = parse_qs(parsed.query).get("id", [""])[0]
+            self._send_json({"ok": True, **_EXPORT_PROGRESS.get(progress_id, {})})
+            return
         if parsed.path == "/generated_session.js":
             self._send_text(read_generated_session_js(), content_type="application/javascript; charset=utf-8")
             return
@@ -13153,7 +13176,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     **common_kwargs,
                 )
             else:
-                result = run_problem_export(
+                result = _run_with_export_progress(
+                    str(payload.get("progressId") or "")[:64],
+                    run_problem_export,
                     source_paths[0] if len(source_paths) == 1 else source_paths,
                     record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "image-only"),
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),

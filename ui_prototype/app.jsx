@@ -16673,6 +16673,35 @@ async function expectOkJson(resp, fallbackMessage){
   return captureSessionRevision(checked);
 }
 
+const EXPORT_STAGE_HINTS = {
+  read: '원본 파일 여는 중',
+  segment: '문항 찾는 중',
+  problem_assets: '칠판용 이미지 만드는 중',
+  records: '칠판에 배치하는 중',
+  edb_write: 'EDB 파일 만드는 중',
+};
+
+function exportProgressHint(progress){
+  const text = EXPORT_STAGE_HINTS[progress?.stage];
+  if (!text) return '';
+  const total = Math.max(0, Number(progress.total) || 0);
+  const done = Math.min(total, Math.max(0, Number(progress.done) || 0));
+  return progress.stage === 'segment' && total ? `${done}/${total}쪽 ${text}` : text;
+}
+
+// Progress is only a hint: poll errors are ignored and never fail the export.
+function pollExportProgress(progressId, onProgress){
+  let stopped = false;
+  const timer = setInterval(async () => {
+    try {
+      const resp = await fetch(`/api/export/progress?id=${encodeURIComponent(progressId)}`);
+      const json = await resp.json();
+      if (!stopped && json?.stage) onProgress(json);
+    } catch (_) {}
+  }, 1500);
+  return () => { stopped = true; clearInterval(timer); };
+}
+
 async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT, options = {}){
   const resolvedInputIntent = normalizeInputIntent(inputIntent);
   const resolvedContentTarget = normalizeContentTarget(options.contentTarget);
@@ -16680,11 +16709,16 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
   assertExportPayloadFits(files);
   const filesPayload = await uploadSourceFiles(files, options);
   const edbName = edbFileNameFromSessionName(options.edbName, files[0]?.name || 'classin');
+  const progressId = typeof options.onProgress === 'function'
+    ? `export-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    : '';
+  const stopProgress = progressId ? pollExportProgress(progressId, options.onProgress) : () => {};
   const resp = await fetch('/api/export', {
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(withExpectedSessionRevision({
+      ...(progressId ? { progressId } : {}),
       files: filesPayload,
       preview: !!options.preview,
       exportMode: inputIntentConfig.exportMode,
@@ -16717,7 +16751,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
       aiEnabled: options.aiEnabled !== false,
       aiFallback: aiFallback || AI_FALLBACK_OFF,
     })),
-  });
+  }).finally(stopProgress);
   const json = await readJsonResponse(resp, '파싱 실행 실패');
   if (!resp.ok || !json.ok) {
     throw operationErrorFromResponse(json, resp, 'session_export', `파싱 실행 실패 (${resp.status})`);
@@ -19213,6 +19247,9 @@ function App(){
           onUploadProgress: ({ completed, total, fileName: uploadingName }) => setBackgroundJobs(prev => prev.map(entry => entry.id === job.id
             ? { ...entry, hint: completed < total ? `파일 업로드 ${completed + 1}/${total} · ${uploadingName}` : '업로드 완료 · PDF를 나누어 차례로 처리합니다' }
             : entry)),
+          onProgress: progress => setBackgroundJobs(prev => prev.map(entry => entry.id === job.id && entry.status === 'running'
+            ? { ...entry, hint: exportProgressHint(progress) || entry.hint }
+            : entry)),
           preserveMediaMode: keepAttachedFigures ? 'auto' : 'off',
           signal: job.controller.signal,
           preview: true,
@@ -19290,6 +19327,9 @@ function App(){
       const s = await postExport(files, aiFallback, resolvedInputIntent, {
         onUploadProgress: ({ completed, total, fileName: uploadingName }) => setBackgroundJobs(prev => prev.map(entry => entry.id === job.id
           ? { ...entry, hint: completed < total ? `파일 업로드 ${completed + 1}/${total} · ${uploadingName}` : '업로드 완료 · 자료를 차례로 처리합니다' }
+          : entry)),
+        onProgress: progress => setBackgroundJobs(prev => prev.map(entry => entry.id === job.id && entry.status === 'running'
+          ? { ...entry, hint: exportProgressHint(progress) || entry.hint }
           : entry)),
         signal: job.controller.signal,
         preserveMediaMode: keepAttachedFigures ? 'auto' : 'off',

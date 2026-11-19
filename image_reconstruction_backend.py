@@ -931,6 +931,18 @@ def clean_problem_image_transparency(
     return rgba, stats
 
 
+# Bit-identical to rgb.max(axis=2) and rgb.max(axis=2) - rgb.min(axis=2) on an
+# (H, W, 3) array (same dtype); numpy reduces a length-3 last axis ~5x slower.
+# Only pass 3 channels: axis=2 on RGBA would also have included alpha.
+def channel_max(rgb: Any) -> Any:
+    return np.maximum(np.maximum(rgb[..., 0], rgb[..., 1]), rgb[..., 2])
+
+
+def channel_spread(rgb: Any) -> Any:
+    red, green, blue = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    return np.maximum(np.maximum(red, green), blue) - np.minimum(np.minimum(red, green), blue)
+
+
 def _remove_background_with_numpy(
     image: Any,
     *,
@@ -950,7 +962,7 @@ def _remove_background_with_numpy(
     background = np.asarray(background_color, dtype=np.float32)
 
     luminance = (0.299 * rgb[..., 0]) + (0.587 * rgb[..., 1]) + (0.114 * rgb[..., 2])
-    saturation = rgb.max(axis=2) - rgb.min(axis=2)
+    saturation = channel_spread(rgb)
     distance = np.sqrt(np.sum((rgb - background) ** 2, axis=2))
     visible = original_alpha > 0
 
@@ -1029,16 +1041,18 @@ def _box_mean(values: Any, window: int) -> Any:
     """Mean over a window x window neighbourhood (edge-padded), via an integral image."""
     pad = window // 2
     padded = np.pad(values.astype(np.float64), pad, mode="edge")
-    integral = np.cumsum(np.cumsum(padded, axis=0), axis=1)
-    integral = np.pad(integral, ((1, 0), (1, 0)))
+    # Cumulative sums written in place into a zero-bordered integral image.
+    integral = np.zeros((padded.shape[0] + 1, padded.shape[1] + 1), dtype=np.float64)
+    inner = integral[1:, 1:]
+    np.cumsum(padded, axis=0, out=inner)
+    np.cumsum(inner, axis=1, out=inner)
     height, width = values.shape
-    total = (
-        integral[window : window + height, window : window + width]
-        - integral[:height, window : window + width]
-        - integral[window : window + height, :width]
-        + integral[:height, :width]
-    )
-    return (total / float(window * window)).astype(np.float32)
+    # Keep the a - b - c + d order: regrouping changes float rounding.
+    total = integral[window : window + height, window : window + width] - integral[:height, window : window + width]
+    total -= integral[window : window + height, :width]
+    total += integral[:height, :width]
+    total /= float(window * window)
+    return total.astype(np.float32)
 
 
 def _label_mask_components(mask: Any) -> tuple[Any, int]:

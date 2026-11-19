@@ -10,7 +10,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ai_usage import (
     aggregate_token_usage,
@@ -524,6 +524,7 @@ def build_page_models_for_prepared_pages(
     ai_config: AIFallbackConfig | None = None,
     ocr_semaphore: threading.BoundedSemaphore | None = None,
     global_ocr_worker_limit: int | None = None,
+    on_page_done: Callable[[], None] | None = None,
 ) -> list[PageModel]:
     resolved_backend_name = preferred_ocr_backend_name(ocr_mode)
     worker_count = resolve_recognition_worker_count(
@@ -554,41 +555,28 @@ def build_page_models_for_prepared_pages(
         if source_path not in source_identities:
             source_identities[source_path] = _file_identity(source_path)
 
-    if worker_count <= 1:
-        pages = [
-            build_page_model(
-                prepared_page,
-                subject=subject,
-                ocr_mode=ocr_mode,
-                ai_config=ai_config,
-                ocr_semaphore=shared_ocr_semaphore,
-                global_ocr_worker_limit=resolved_global_ocr_worker_limit,
-                source_identity=source_identities[
-                    str(
-                        prepared_page.metadata.get("original_source_path")
-                        or prepared_page.source_path
-                    )
-                ],
-            )
-            for prepared_page in prepared_pages
-        ]
-    else:
-        def _build(prepared_page: PreparedPage) -> PageModel:
-            return build_page_model(
-                prepared_page,
-                subject=subject,
-                ocr_mode=ocr_mode,
-                ai_config=ai_config,
-                ocr_semaphore=shared_ocr_semaphore,
-                global_ocr_worker_limit=resolved_global_ocr_worker_limit,
-                source_identity=source_identities[
-                    str(
-                        prepared_page.metadata.get("original_source_path")
-                        or prepared_page.source_path
-                    )
-                ],
-            )
+    def _build(prepared_page: PreparedPage) -> PageModel:
+        page = build_page_model(
+            prepared_page,
+            subject=subject,
+            ocr_mode=ocr_mode,
+            ai_config=ai_config,
+            ocr_semaphore=shared_ocr_semaphore,
+            global_ocr_worker_limit=resolved_global_ocr_worker_limit,
+            source_identity=source_identities[
+                str(
+                    prepared_page.metadata.get("original_source_path")
+                    or prepared_page.source_path
+                )
+            ],
+        )
+        if on_page_done is not None:
+            on_page_done()
+        return page
 
+    if worker_count <= 1:
+        pages = [_build(prepared_page) for prepared_page in prepared_pages]
+    else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
             pages = list(executor.map(_build, prepared_pages))
 
