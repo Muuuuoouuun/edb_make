@@ -10307,9 +10307,9 @@ class AppHTTPServer(ThreadingHTTPServer):
         self._active_artifact_jobs = 0
         # Jobs that write files (exclusive or not). Quitting now would lose them.
         self._active_writer_jobs = 0
-        # Bumped by POST /api/jobs/cancel. A job compares it with the value it
-        # saw at start, so a cancel sent while nothing ran cannot stop a later job.
-        self._cancel_generation = 0
+        # UI job ids sent to POST /api/jobs/cancel. Each AI job watches only its
+        # own id, so cancelling one job never stops another or a later one.
+        self._cancelled_job_ids: set[str] = set()
         # Encode process start order into the epoch so a browser can reject a
         # delayed response from a server incarnation it never observed.  The
         # UUID keeps concurrently-started processes unique.
@@ -10505,16 +10505,16 @@ class AppHTTPServer(ThreadingHTTPServer):
         with self._state_lock:
             return self._active_writer_jobs
 
-    def cancel_checker(self):
-        """Return a callable that turns true once a cancel arrives after this call."""
-        with self._state_lock:
-            generation = self._cancel_generation
-        return lambda: self._cancel_generation != generation
+    def cancel_checker(self, job_id: Any = None):
+        """Return a callable that turns true once the UI cancels this job id."""
+        key = str(job_id or "").strip()
+        return lambda: bool(key) and key in self._cancelled_job_ids
 
-    def request_job_cancel(self) -> None:
-        # ponytail: one cancel stops every running AI job; per-job ids if the UI ever runs two at once.
-        with self._state_lock:
-            self._cancel_generation += 1
+    def request_job_cancel(self, job_id: Any = None) -> None:
+        key = str(job_id or "").strip()
+        if key:
+            # ponytail: one short id per cancel click, never pruned; drop it at job end if that ever matters.
+            self._cancelled_job_ids.add(key)
 
     def begin_artifact_read(self) -> None:
         # Reads may run concurrently with each other and with immutable
@@ -10838,9 +10838,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         finally:
             finisher(exclusive=exclusive)
 
-    def _cancel_checker(self):
+    def _cancel_checker(self, job_id: Any = None):
         checker = getattr(getattr(self, "server", None), "cancel_checker", None)
-        return checker() if callable(checker) else (lambda: False)
+        return checker(job_id) if callable(checker) else (lambda: False)
 
     def _send_job_cancelled(self) -> None:
         self._send_json(
@@ -10852,6 +10852,30 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             },
             status=HTTPStatus.CONFLICT,
         )
+
+    def _send_cross_origin_rejected(self) -> None:
+        self._send_json(
+            {
+                "ok": False,
+                "code": "cross_origin_rejected",
+                "error": "이 작업은 앱 화면에서만 할 수 있어요.",
+                "detail": "cross-origin request rejected",
+            },
+            status=HTTPStatus.FORBIDDEN,
+        )
+
+    def _handle_job_cancel(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_cross_origin_rejected()
+            return
+        try:
+            job_id = self._read_json_body().get("jobId")
+        except json.JSONDecodeError:
+            job_id = None
+        canceller = getattr(self.app_server, "request_job_cancel", None)
+        if callable(canceller):
+            canceller(job_id)
+        self._send_json({"ok": True})
 
     def _run_artifact_read(self, handler) -> None:
         server = getattr(self, "server", None)
@@ -11059,10 +11083,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._run_artifact_job(self._handle_session_enhance_image, exclusive=False)
             return
         if parsed.path == "/api/jobs/cancel":
-            canceller = getattr(self.app_server, "request_job_cancel", None)
-            if callable(canceller):
-                canceller()
-            self._send_json({"ok": True})
+            self._handle_job_cancel()
             return
         if parsed.path == "/api/session/restore":
             self._run_artifact_job(self._handle_session_restore)
@@ -12219,9 +12240,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
         base_session = _clone_jsonish(session)
-        should_cancel = self._cancel_checker()
         try:
             payload = self._read_json_body()
+            should_cancel = self._cancel_checker(payload.get("jobId"))
             if not self._validate_expected_session_revision(payload, current_revision):
                 return
             preview_only = _coerce_bool(
@@ -12317,9 +12338,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
         base_session = _clone_jsonish(session)
-        should_cancel = self._cancel_checker()
         try:
             payload = self._read_json_body()
+            should_cancel = self._cancel_checker(payload.get("jobId"))
             if not self._validate_expected_session_revision(payload, current_revision):
                 return
             new_session = _mutate_enhance_image(session, payload, should_cancel=should_cancel)
@@ -12760,15 +12781,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_shutdown(self) -> None:
         if not _request_is_same_origin(self.headers):
-            self._send_json(
-                {
-                    "ok": False,
-                    "code": "cross_origin_rejected",
-                    "error": "앱 화면에서만 앱을 종료할 수 있어요.",
-                    "detail": "cross-origin request rejected",
-                },
-                status=HTTPStatus.FORBIDDEN,
-            )
+            self._send_cross_origin_rejected()
             return
         try:
             force = _coerce_bool(self._read_json_body().get("force"))

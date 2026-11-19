@@ -102,12 +102,15 @@ def test_ai_output_paths_are_unique_per_run():
 
 # C23 ------------------------------------------------------------------------
 
-def test_cancel_before_a_job_starts_does_not_stop_it(server):
-    server.request_job_cancel()
-    cancelled = server.cancel_checker()
-    assert not cancelled()
-    server.request_job_cancel()
-    assert cancelled()
+def test_cancel_stops_only_the_job_it_names(server):
+    enhance, recognition = server.cancel_checker("job-enhance"), server.cancel_checker("job-recognition")
+    server.request_job_cancel(None)  # a cancel without a job id stops nothing
+    server.request_job_cancel("job-recognition")
+    assert (enhance(), recognition()) == (False, True)
+    assert not server.cancel_checker("job-later")(), "an old cancel never stops a later job"
+    assert not server.cancel_checker(None)()
+    server.request_job_cancel("job-early")  # the cancel overtook its own request
+    assert server.cancel_checker("job-early")()
 
 
 def _png(path: Path, size=(64, 40)) -> Path:
@@ -151,12 +154,14 @@ def test_cancel_stops_enhance_before_the_next_api_call_and_before_saving(server,
         assert release.wait(5)
         return _fake_ai_result(source_path, output_path, **kwargs)
 
-    handler = make_handler(server, "/api/session/enhance-image", {"problemIds": ["p1", "p2", "p3"], "mode": "ai"})
+    handler = make_handler(
+        server, "/api/session/enhance-image", {"problemIds": ["p1", "p2", "p3"], "mode": "ai", "jobId": "job-1"},
+    )
     with patch.object(app_server, "reconstruct_problem_image", side_effect=blocking_reconstruct):
         worker = threading.Thread(target=handler._dispatch_post)
         worker.start()
         assert started.wait(10)
-        canceller = make_handler(server, "/api/jobs/cancel")
+        canceller = make_handler(server, "/api/jobs/cancel", {"jobId": "job-1"})
         canceller._dispatch_post()
         release.set()
         worker.join(10)
@@ -245,14 +250,18 @@ def test_quit_is_refused_while_a_job_writes_files_unless_forced(server):
         server.end_artifact_read()
 
 
-def test_quit_from_another_site_is_refused_in_korean(server):
-    handler = make_handler(server, "/api/system/shutdown")
-    handler.headers = {"Host": "127.0.0.1:8765", "Origin": "https://example.test"}
-    handler._handle_shutdown()
+@pytest.mark.parametrize("path", ["/api/system/shutdown", "/api/jobs/cancel"])
+def test_quit_and_cancel_from_another_site_are_refused_in_korean(server, path):
+    stopped = threading.Event()
+    server.request_shutdown = lambda reason: stopped.set()
+    cancelled = server.cancel_checker("job-1")
+    handler = make_handler(server, path, {"jobId": "job-1"})
+    handler.headers = {"Host": "127.0.0.1:8765", "Referer": "https://example.test/page"}
+    handler._dispatch_post()
     body, status = handler.responses[0]
-    assert status == HTTPStatus.FORBIDDEN
-    assert body["code"] == "cross_origin_rejected"
-    assert "앱" in body["error"] and body["detail"]
+    assert (body["code"], status) == ("cross_origin_rejected", HTTPStatus.FORBIDDEN)
+    assert body["error"] == "이 작업은 앱 화면에서만 할 수 있어요." and body["detail"]
+    assert not stopped.wait(0.2) and not cancelled()
 
 
 def test_update_install_is_refused_before_the_installer_starts_while_busy(server):
@@ -346,16 +355,15 @@ def test_app_log_is_rotated_in_place_while_the_app_runs(tmp_path, monkeypatch):
     log = tmp_path / "app.log"
     original = (sys.stdout, sys.stderr)
     monkeypatch.setattr(app_server, "APP_LOG_MAX_BYTES", 200)
+    monkeypatch.setattr(app_server, "_app_log_stream", None)  # teardown puts the old value back
     try:
         app_server.configure_app_logging(log)
-        stream = sys.stdout
         print("x" * 300)
         app_server._rotate_app_log_if_large()
         print("after rotation")
     finally:
         sys.stdout, sys.stderr = original
-        monkeypatch.setattr(app_server, "_app_log_stream", None)
-    stream.close()
+    app_server._app_log_stream.close()
     assert "x" * 300 in (tmp_path / "app.log.1").read_text(encoding="utf-8")
     assert log.read_text(encoding="utf-8") == "after rotation\n"
 
@@ -368,6 +376,10 @@ def test_successful_reads_are_not_logged_but_writes_and_failures_are():
     handler.command = "GET"
     handler.log_request(HTTPStatus.OK)
     handler.log_request(304)
+    # Export and update progress are polled every 1-1.5 s.
+    for path in ("/api/export/progress?id=abc", "/api/app/update/progress"):
+        handler.requestline = f"GET {path} HTTP/1.1"
+        handler.log_request(HTTPStatus.OK)
     assert logged == []
     handler.log_request(HTTPStatus.NOT_FOUND)
     handler.command = "POST"
@@ -412,7 +424,7 @@ def test_cancel_also_stops_the_apps_ai_work() -> None:
     const posts = [];
     const sandbox = {
       useCallback: fn => fn, jobControllersRef: { current: new Map() }, settleBackgroundJob() {}, showToast() {},
-      fetch: async (url, options) => { posts.push([url, options.method]); return { ok: true }; },
+      fetch: async (url, options) => { posts.push([url, options.method, JSON.parse(options.body).jobId]); return { ok: true }; },
       backgroundJobs: [{ id: 'a', scope: 'image-enhance' }, { id: 'b', scope: 'queue-recognition' }, { id: 'c', scope: 'session-recognition' }],
     };
     vm.createContext(sandbox);
@@ -421,13 +433,34 @@ def test_cancel_also_stops_the_apps_ai_work() -> None:
     sandbox.cancelBackgroundJob('a');
     sandbox.cancelBackgroundJob('b');
     sandbox.cancelBackgroundJob('c');
-    assert.deepEqual(posts, [['/api/jobs/cancel', 'POST'], ['/api/jobs/cancel', 'POST']]);
+    // Each cancel names its own job, so a second running AI job keeps going.
+    assert.deepEqual(posts, [['/api/jobs/cancel', 'POST', 'a'], ['/api/jobs/cancel', 'POST', 'c']]);
+    """)
+
+
+def test_ai_requests_carry_the_job_id_their_cancel_names() -> None:
+    run_node(NODE_SETUP + r"""
+    const bodies = [];
+    const sandbox = {
+      fetch: async (url, options) => { bodies.push([url, JSON.parse(options.body).jobId]); return {}; },
+      withExpectedSessionRevision: payload => payload, expectOkJson: async () => ({ ok: true }),
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(section('async function postRetryAi(', '\n// AI jobs do not hold up board edits')
+      + '\nglobalThis.postRetryAi = postRetryAi; globalThis.postEnhanceImage = postEnhanceImage;', sandbox);
+    assert.match(section('  const retryAiSession = useCallback(', '  const recognizeCurrentSession = useCallback('),
+      /postRetryAi\(args, \{[^}]*jobId: job\.id \}\)/);
+    (async () => {
+      await sandbox.postRetryAi({ pageIds: ['page-1'] }, { preview: true, jobId: 'job-r' });
+      await sandbox.postEnhanceImage({ problemIds: ['p1'] }, { jobId: 'job-e' });
+      assert.deepEqual(bodies, [['/api/session/retry-ai', 'job-r'], ['/api/session/enhance-image', 'job-e']]);
+    })().catch(error => { console.error(error); process.exitCode = 1; });
     """)
 
 
 def test_enhance_summary_counts_fallbacks_as_text_preserve_and_explains_conflicts() -> None:
     run_node(NODE_SETUP + r"""
-    const toasts = [], settled = [];
+    const toasts = [], settled = [], jobIds = [];
     let reply;
     const sandbox = {
       useCallback: fn => fn, session: { problems: [] }, aiEnabled: true, userSettings: { hasGeminiApiKey: true },
@@ -437,7 +470,7 @@ def test_enhance_summary_counts_fallbacks_as_text_preserve_and_explains_conflict
       settleBackgroundJob: (_id, patch) => settled.push(patch), setHistoryStack() {}, appendBoundedHistory: list => list,
       adoptMutatedSession() {}, showToast: (message, type) => toasts.push([message, type || 'info']),
       showSimpleErrorToast() { throw new Error('no generic error toast'); },
-      postEnhanceImage: async () => reply(),
+      postEnhanceImage: async (_args, options) => { jobIds.push(options.jobId); return reply(); },
     };
     vm.createContext(sandbox);
     vm.runInContext(section('const AI_RESULT_BOARD_CHANGED_MESSAGE', 'async function postRestore(')
@@ -449,6 +482,7 @@ def test_enhance_summary_counts_fallbacks_as_text_preserve_and_explains_conflict
         { status: 'applied', resolvedMode: 'ai', deliveryMode: 'ai_primary' },
       ] });
       await sandbox.enhanceImageSession(['p1', 'p2'], { mode: 'ai' });
+      assert.deepEqual(jobIds, ['job'], 'the request names the job a cancel would stop');
       assert.deepEqual(toasts.pop(), ['Gemini 사용량 한도에 걸려 AI 대신 글자 보존 방식으로 처리했어요.', 'error']);
       assert.equal(settled.pop().hint, '글자 보존 1 · AI 1 완료');
 

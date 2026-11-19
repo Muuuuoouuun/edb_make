@@ -17235,7 +17235,7 @@ async function postRetryAi(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), preview: !!options.preview })),
+    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), preview: !!options.preview, jobId: options.jobId })),
   });
   const json = await expectOkJson(resp, 'AI 재인식 실패');
   return json;
@@ -17246,7 +17246,7 @@ async function postEnhanceImage(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(withExpectedSessionRevision(args || {})),
+    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), jobId: options.jobId })),
   });
   const json = await expectOkJson(resp, '고화질 처리 실패');
   return json;
@@ -18120,9 +18120,13 @@ function App(){
     const isRecognition = String(job?.scope || '').includes('recognition');
     const controller = jobControllersRef.current.get(id);
     if (controller) controller.abort();
-    // Aborting only stops the browser; this also stops the app's AI work before it saves.
+    // Aborting only stops the browser; this also stops the app's AI work for this job before it saves.
     if (job?.scope === 'image-enhance' || job?.scope === 'session-recognition') {
-      fetch('/api/jobs/cancel', { method: 'POST' }).catch(() => {});
+      fetch('/api/jobs/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: id }),
+      }).catch(() => {});
     }
     settleBackgroundJob(id, {
       status: 'canceled',
@@ -18384,7 +18388,7 @@ function App(){
     });
     try {
       await postRestore(snapshotBefore);
-      const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
+      const result = await postRetryAi(args, { signal: job.controller.signal, preview: true, jobId: job.id });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       settleBackgroundJob(job.id, {
@@ -18818,7 +18822,7 @@ function App(){
     });
     try {
       const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
-      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal });
+      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal, jobId: job.id });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       const appliedRows = (result.enhance || []).filter(row => row.status === 'applied');
