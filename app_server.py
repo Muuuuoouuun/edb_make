@@ -636,6 +636,15 @@ class SessionRevisionConflict(RuntimeError):
     """Raised when a destructive request no longer targets the current session."""
 
 
+class JobCancelled(Exception):
+    """The teacher cancelled an AI job; stop before calling the API again or saving."""
+
+
+def _stop_if_cancelled(should_cancel) -> None:
+    if should_cancel is not None and should_cancel():
+        raise JobCancelled()
+
+
 class SessionWritePathTooLong(OSError):
     """Raised when a session's configured write root cannot safely be extended."""
 
@@ -672,9 +681,17 @@ def _is_windows_file_busy(exc: OSError) -> bool:
     return getattr(exc, "winerror", None) in {5, 32, 33}
 
 
-def _replace_file_with_retry(source: Path, target: Path) -> None:
+# A finished publish folder is renamed into place in one step. OneDrive and
+# virus scanners can hold a file inside it for a few seconds after the write.
+_DIR_REPLACE_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.5, 2.0)
+
+
+def _replace_file_with_retry(
+    source: Path,
+    target: Path,
+    delays: tuple[float, ...] = (0.05, 0.1, 0.2, 0.4, 0.8),
+) -> None:
     """Keep atomic replacement, allowing short-lived Windows scanner/sync locks."""
-    delays = (0.05, 0.1, 0.2, 0.4, 0.8)
     for attempt in range(len(delays) + 1):
         try:
             os.replace(source, target)
@@ -2376,10 +2393,15 @@ def read_generated_session_js() -> str:
     return EMPTY_GENERATED_SESSION_JS
 
 
+APP_LOG_MAX_BYTES = 10 * 1024 * 1024
+_app_log_stream: Any = None
+_app_log_rotate_lock = threading.Lock()
+
+
 def configure_app_logging(log_file: str | Path | None = None) -> None:
+    global _app_log_stream
     target = Path(log_file).expanduser() if log_file else APP_LOG_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
-    # ponytail: rotates only at launch (print/faulthandler need one fixed file); a weeks-long session can exceed 5 MB.
     try:
         if target.stat().st_size > 5 * 1024 * 1024:
             os.replace(target, target.with_name(target.name + ".1"))
@@ -2388,7 +2410,32 @@ def configure_app_logging(log_file: str | Path | None = None) -> None:
     stream = target.open("a", encoding="utf-8", buffering=1)
     sys.stdout = stream
     sys.stderr = stream
+    _app_log_stream = stream
     print(f"\n[{datetime.now().isoformat(timespec='seconds')}] {APP_NAME} starting")
+
+
+def _rotate_app_log_if_large() -> None:
+    """Copy a too-large app.log to app.log.1 and empty it, keeping the open stream.
+
+    print() and faulthandler write through the one handle opened at launch, and
+    Windows cannot rename a file that is open, so the file is copied and then
+    truncated. The stream is in append mode, so later writes start at the new end.
+    """
+    # ponytail: lines written between the copy and the truncate are lost; fine for a diagnostic log.
+    stream = _app_log_stream
+    if stream is None or not _app_log_rotate_lock.acquire(blocking=False):
+        return
+    try:
+        if os.fstat(stream.fileno()).st_size <= APP_LOG_MAX_BYTES:
+            return
+        stream.flush()
+        target = Path(stream.name)
+        shutil.copyfile(target, target.with_name(target.name + ".1"))
+        stream.truncate(0)
+    except (OSError, ValueError):
+        pass
+    finally:
+        _app_log_rotate_lock.release()
 
 
 def enable_fatal_error_logging() -> None:
@@ -5271,7 +5318,23 @@ def save_latest_session(session: dict[str, Any], path: Path | None = None) -> No
         _atomic_write_text(target, payload)
 
 
-def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
+def _read_text_retrying_busy(path: Path) -> str:
+    """Read a small state file, waiting out short Windows scanner/sync locks."""
+    for delay in (0.1, 0.3, 0.8, None):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if delay is None or not _is_windows_file_busy(exc):
+                raise
+            time.sleep(delay)
+
+
+def load_session_history(path: Path | None = None, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Return saved history. ``strict`` raises when an existing file cannot be read.
+
+    Writers use ``strict`` so a locked or offline file is never replaced by a
+    history that only holds the current lesson.
+    """
     target = path or SESSION_HISTORY_JSON
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
@@ -5279,8 +5342,12 @@ def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
         if not target.exists():
             return []
         try:
-            payload = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(_read_text_retrying_busy(target) if strict else target.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return []
+        except OSError as exc:
+            if strict and not isinstance(exc, FileNotFoundError):
+                raise
             return []
     if not isinstance(payload, list):
         return []
@@ -5309,8 +5376,13 @@ def remember_session_history(
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
             _recover_interrupted_session_reset()
+        try:
+            existing = load_session_history(target, strict=True)
+        except OSError as exc:
+            print(f"[app-server] session history unreadable, left unchanged: {exc}", file=sys.stderr)
+            return []
         history = _session_history_with_session(
-            load_session_history(target),
+            existing,
             session,
             updated_at=updated_at,
             limit=limit,
@@ -5337,8 +5409,15 @@ def persist_latest_session_with_history(
         # save_latest_session call can restore an OLD history tombstone after
         # this merge was already calculated, then overwrite it with [NEW].
         _recover_interrupted_session_reset()
+        try:
+            existing = load_session_history(strict=True)
+        except OSError as exc:
+            # Keep the unreadable history file as it is; overwriting it would
+            # wipe the teacher's recent lessons.
+            save_latest_session(session)
+            return [], exc
         history = _session_history_with_session(
-            load_session_history(),
+            existing,
             session,
             updated_at=updated_at,
             limit=limit,
@@ -9172,7 +9251,26 @@ def _active_image_enhance_size(provider: str, requested_size: str) -> tuple[str,
     return ACTIVE_IMAGE_ENHANCE_SIZE, high_resolution_skipped
 
 
-def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+_IMAGE_API_UNAVAILABLE_MESSAGES = {
+    "key": "Gemini API 키를 사용할 수 없어 AI 대신 글자 보존 방식으로 처리했어요. 설정 → AI 사용·연결에서 키를 확인해 주세요.",
+    "quota": "Gemini 사용량 한도에 걸려 AI 대신 글자 보존 방식으로 처리했어요. 잠시 뒤 다시 하거나 Gemini 사용량을 확인해 주세요.",
+    "network": "인터넷 연결 문제로 AI에 연결하지 못해 글자 보존 방식으로 처리했어요. 연결을 확인한 뒤 다시 시도해 주세요.",
+}
+
+
+def _image_api_unavailable_message(exc: BaseException) -> str | None:
+    """Korean notice when Gemini cannot serve any image now (key, quota or network)."""
+    if not isinstance(exc, _lazy_attr("image_reconstruction_backend", "ImageApiUnavailable")):
+        return None
+    return _IMAGE_API_UNAVAILABLE_MESSAGES.get(exc.reason, _IMAGE_API_UNAVAILABLE_MESSAGES["network"])
+
+
+def _mutate_enhance_image(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    should_cancel=None,
+) -> dict[str, Any]:
     requested_mode = _normalize_image_enhance_mode(
         payload.get("mode") or payload.get("enhanceMode") or payload.get("enhance_mode") or "auto"
     )
@@ -9223,8 +9321,12 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         transparent_background=transparent_background,
         sharpen=sharpen,
     )
+    # After a key/quota/network failure every later call would fail the same
+    # way (and could hang for the full timeout), so the rest use the local fallback.
+    ai_unavailable: str | None = None
 
     for problem_id in problem_ids:
+        _stop_if_cancelled(should_cancel)
         _index, problem = _find_problem(session, problem_id)
         subject, resolved_mode = enhance_plan[problem_id]
         if resolved_mode == "preserve":
@@ -9285,6 +9387,16 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                     "model": "content-safe-lanczos",
                     "error": str(exc),
                 })
+        elif ai_unavailable is not None:
+            final_error = RuntimeError(ai_unavailable)
+            attempts.append({
+                "attempt": 1,
+                "mode": "ai_primary",
+                "status": "skipped",
+                "provider": provider,
+                "model": model,
+                "error": ai_unavailable,
+            })
         else:
             try:
                 result = reconstruct_problem_image(
@@ -9303,6 +9415,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 attempts.append(_image_attempt_summary(result, attempt=1, mode="ai_primary"))
             except Exception as exc:  # noqa: BLE001 - automatically fall back below
                 final_error = exc
+                ai_unavailable = _image_api_unavailable_message(exc)
                 attempts.append({
                     "attempt": 1,
                     "mode": "ai_primary",
@@ -9340,6 +9453,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                     auto_recovered = True
             except Exception as exc:  # noqa: BLE001 - deterministic fallback remains available
                 final_error = exc
+                ai_unavailable = _image_api_unavailable_message(exc)
                 attempts.append({
                     "attempt": 2,
                     "mode": "ai_content_retry",
@@ -9493,6 +9607,10 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         })
 
     session["ai_image_reconstruction_summary"] = summaries
+    if ai_unavailable:
+        session["ai_image_reconstruction_unavailable"] = ai_unavailable
+    else:
+        session.pop("ai_image_reconstruction_unavailable", None)
     _adopt_recovered_output_dir_after_success(
         session,
         selected_output_dir,
@@ -9679,7 +9797,13 @@ def _payload_crop_box_for_problem(payload: dict[str, Any], problem_id: str) -> A
     return payload.get("cropBox") or payload.get("crop_box")
 
 
-def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], problem_ids: list[str]) -> dict[str, Any]:
+def _mutate_retry_ai_partial(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+    problem_ids: list[str],
+    *,
+    should_cancel=None,
+) -> dict[str, Any]:
     stamp = _unique_artifact_stamp()
     selected_output_dir, recovered_output = _select_session_write_root(
         session,
@@ -9690,6 +9814,7 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
     summaries: list[dict[str, Any]] = []
 
     for job_index, problem_id in enumerate(problem_ids, start=1):
+        _stop_if_cancelled(should_cancel)
         try:
             _problem_index, problem = _find_problem(session, problem_id)
             page = _page_for_problem(session, problem)
@@ -9907,7 +10032,12 @@ def _mutate_classify_many(
     return session
 
 
-def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _mutate_retry_ai(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    should_cancel=None,
+) -> dict[str, Any]:
     if not _global_ai_enabled():
         raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
     if not os.environ.get("GEMINI_API_KEY", "").strip():
@@ -9917,7 +10047,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
         problem_ids = _retry_target_problem_ids(payload)
         if not problem_ids:
             raise ValueError("부분 재인식할 문항이 없습니다")
-        return _mutate_retry_ai_partial(session, payload, problem_ids)
+        return _mutate_retry_ai_partial(session, payload, problem_ids, should_cancel=should_cancel)
 
     page_ids = _retry_target_page_ids(session, payload)
     if not page_ids:
@@ -9952,6 +10082,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
 
     def _run_retry_job(job: dict[str, Any]) -> dict[str, Any]:
         page_id = str(job["pageId"])
+        _stop_if_cancelled(should_cancel)
         try:
             result = run_problem_export(
                 job["sourcePath"],
@@ -10174,6 +10305,11 @@ class AppHTTPServer(ThreadingHTTPServer):
         # overwrite the winner's files before its commit is rejected.
         self._artifact_job_lock = threading.Lock()
         self._active_artifact_jobs = 0
+        # Jobs that write files (exclusive or not). Quitting now would lose them.
+        self._active_writer_jobs = 0
+        # Bumped by POST /api/jobs/cancel. A job compares it with the value it
+        # saw at start, so a cancel sent while nothing ran cannot stop a later job.
+        self._cancel_generation = 0
         # Encode process start order into the epoch so a browser can reject a
         # delayed response from a server incarnation it never observed.  The
         # UUID keeps concurrently-started processes unique.
@@ -10319,12 +10455,12 @@ class AppHTTPServer(ThreadingHTTPServer):
             final_dir.parent.mkdir(parents=True, exist_ok=True)
             if final_dir.exists():
                 raise FileExistsError(f"publish generation already exists: {final_dir}")
-            os.replace(staging_dir, final_dir)
+            _replace_file_with_retry(staging_dir, final_dir, _DIR_REPLACE_DELAYS)
             try:
                 history, history_error = persist_latest_session_with_history(updated_snapshot)
             except BaseException:
                 try:
-                    os.replace(final_dir, staging_dir)
+                    _replace_file_with_retry(final_dir, staging_dir, _DIR_REPLACE_DELAYS)
                 except OSError as rollback_exc:
                     print(
                         f"[app-server] publish adoption rollback failed: {rollback_exc}",
@@ -10342,21 +10478,43 @@ class AppHTTPServer(ThreadingHTTPServer):
                 )
             return self._session_revision
 
-    def begin_artifact_job(self) -> None:
-        self._artifact_job_lock.acquire()
+    def begin_artifact_job(self, *, exclusive: bool = True) -> None:
+        # Non-exclusive jobs may run next to others only because they write
+        # fresh stamped files and commit through the revision CAS.
+        if exclusive:
+            self._artifact_job_lock.acquire()
         try:
             with self._state_lock:
                 self._active_artifact_jobs += 1
+                self._active_writer_jobs += 1
         except BaseException:
-            self._artifact_job_lock.release()
+            if exclusive:
+                self._artifact_job_lock.release()
             raise
 
-    def end_artifact_job(self) -> None:
+    def end_artifact_job(self, *, exclusive: bool = True) -> None:
         try:
             with self._state_lock:
                 self._active_artifact_jobs = max(0, self._active_artifact_jobs - 1)
+                self._active_writer_jobs = max(0, self._active_writer_jobs - 1)
         finally:
-            self._artifact_job_lock.release()
+            if exclusive:
+                self._artifact_job_lock.release()
+
+    def active_writer_jobs(self) -> int:
+        with self._state_lock:
+            return self._active_writer_jobs
+
+    def cancel_checker(self):
+        """Return a callable that turns true once a cancel arrives after this call."""
+        with self._state_lock:
+            generation = self._cancel_generation
+        return lambda: self._cancel_generation != generation
+
+    def request_job_cancel(self) -> None:
+        # ponytail: one cancel stops every running AI job; per-job ids if the UI ever runs two at once.
+        with self._state_lock:
+            self._cancel_generation += 1
 
     def begin_artifact_read(self) -> None:
         # Reads may run concurrently with each other and with immutable
@@ -10379,8 +10537,8 @@ class AppHTTPServer(ThreadingHTTPServer):
             with _session_storage_lock:
                 if not LATEST_SESSION_JSON.exists():
                     save_latest_session(snapshot)
-                history = _session_history_with_session(load_session_history(), snapshot)
                 try:
+                    history = _session_history_with_session(load_session_history(strict=True), snapshot)
                     save_session_history(history)
                 except OSError as exc:
                     print(
@@ -10473,6 +10631,25 @@ class AppHTTPServer(ThreadingHTTPServer):
                     cleared_revision,
                 )
         return None, cleared_revision
+
+
+def _shutdown_busy_payload(server: Any, *, force: bool) -> dict[str, Any] | None:
+    """Refuse to quit or update while a job is still writing files, unless the teacher insisted.
+
+    Image and file reads are not counted, so an open thumbnail never blocks quitting.
+    """
+    counter = getattr(server, "active_writer_jobs", None)
+    running = counter() if callable(counter) and not force else 0
+    if not running:
+        return None
+    return {
+        "ok": False,
+        "code": "shutdown_busy",
+        "error": "아직 진행 중인 작업이 있어요. 지금 끄면 그 작업은 저장되지 않아요.",
+        "detail": f"{running} file-writing job(s) still running",
+        "retryable": True,
+        "recoverySteps": ["진행 중인 작업이 끝난 뒤 다시 시도해 주세요."],
+    }
 
 
 def _uncaught_errors_as_json(method):
@@ -10612,7 +10789,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # Compatibility for lightweight embedding hosts. The generation path
         # is unique, so exposing it cannot overwrite an older successful EDB.
         final_dir.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staging_dir, final_dir)
+        _replace_file_with_retry(staging_dir, final_dir, _DIR_REPLACE_DELAYS)
         try:
             committed = self._remember_session_if_current(
                 expected_session,
@@ -10620,11 +10797,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 expected_revision=expected_revision,
             )
         except BaseException:
-            os.replace(final_dir, staging_dir)
+            _replace_file_with_retry(final_dir, staging_dir, _DIR_REPLACE_DELAYS)
             raise
         if not committed[0]:
             try:
-                os.replace(final_dir, staging_dir)
+                _replace_file_with_retry(final_dir, staging_dir, _DIR_REPLACE_DELAYS)
             except OSError:
                 _discard_staged_publish(final_dir)
         return committed
@@ -10648,18 +10825,33 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             status=HTTPStatus.CONFLICT,
         )
 
-    def _run_artifact_job(self, handler) -> None:
+    def _run_artifact_job(self, handler, *, exclusive: bool = True) -> None:
         server = getattr(self, "server", None)
         starter = getattr(server, "begin_artifact_job", None)
         finisher = getattr(server, "end_artifact_job", None)
         if not callable(starter) or not callable(finisher):
             handler()
             return
-        starter()
+        starter(exclusive=exclusive)
         try:
             handler()
         finally:
-            finisher()
+            finisher(exclusive=exclusive)
+
+    def _cancel_checker(self):
+        checker = getattr(getattr(self, "server", None), "cancel_checker", None)
+        return checker() if callable(checker) else (lambda: False)
+
+    def _send_job_cancelled(self) -> None:
+        self._send_json(
+            {
+                "ok": False,
+                "code": "job_cancelled",
+                "error": "작업을 취소했습니다.",
+                "detail": "cancelled by POST /api/jobs/cancel before the result was saved",
+            },
+            status=HTTPStatus.CONFLICT,
+        )
 
     def _run_artifact_read(self, handler) -> None:
         server = getattr(self, "server", None)
@@ -10687,9 +10879,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return bool(checker(path))
         return path in self.app_server.allowed_files
 
+    def log_request(self, code="-", size="-") -> None:
+        # Status polling, page files and thumbnails are most requests; a
+        # successful read tells nothing a bug report needs.
+        if self.command in {"GET", "HEAD"} and isinstance(code, int) and code < 400:
+            return
+        super().log_request(code, size)
+
     def log_message(self, format: str, *args) -> None:
         client = self.client_address[0] if self.client_address else "-"
         print(f"[app-server] {client} - {format % args}")
+        _rotate_app_log_if_large()
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, max-age=0")
@@ -10849,11 +11049,20 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/session/problem-image":
             self._run_artifact_read(self._handle_session_problem_image_post)
             return
+        # AI jobs run for minutes. They write only fresh stamped files and commit
+        # through the revision CAS, so board edits need not wait behind them;
+        # a result whose base changed meanwhile is rejected as session_conflict.
         if parsed.path == "/api/session/retry-ai":
-            self._run_artifact_job(self._handle_session_retry_ai)
+            self._run_artifact_job(self._handle_session_retry_ai, exclusive=False)
             return
         if parsed.path == "/api/session/enhance-image":
-            self._run_artifact_job(self._handle_session_enhance_image)
+            self._run_artifact_job(self._handle_session_enhance_image, exclusive=False)
+            return
+        if parsed.path == "/api/jobs/cancel":
+            canceller = getattr(self.app_server, "request_job_cancel", None)
+            if callable(canceller):
+                canceller()
+            self._send_json({"ok": True})
             return
         if parsed.path == "/api/session/restore":
             self._run_artifact_job(self._handle_session_restore)
@@ -12010,6 +12219,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
         base_session = _clone_jsonish(session)
+        should_cancel = self._cancel_checker()
         try:
             payload = self._read_json_body()
             if not self._validate_expected_session_revision(payload, current_revision):
@@ -12023,7 +12233,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 default=False,
             )
             working_session = json.loads(json.dumps(session)) if preview_only else session
-            new_session = _mutate_retry_ai(working_session, payload)
+            new_session = _mutate_retry_ai(working_session, payload, should_cancel=should_cancel)
+            _stop_if_cancelled(should_cancel)
+        except JobCancelled:
+            self._send_job_cancelled()
+            return
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -12103,11 +12317,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
             return
         base_session = _clone_jsonish(session)
+        should_cancel = self._cancel_checker()
         try:
             payload = self._read_json_body()
             if not self._validate_expected_session_revision(payload, current_revision):
                 return
-            new_session = _mutate_enhance_image(session, payload)
+            new_session = _mutate_enhance_image(session, payload, should_cancel=should_cancel)
+            _stop_if_cancelled(should_cancel)
+        except JobCancelled:
+            self._send_job_cancelled()
+            return
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -12136,6 +12355,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "enhance": new_session.get("ai_image_reconstruction_summary") or [],
+            "aiUnavailable": new_session.get("ai_image_reconstruction_unavailable") or None,
         }
         if committed_revision is not None:
             response["sessionRevision"] = committed_revision
@@ -12504,6 +12724,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 status=HTTPStatus.CONFLICT,
             )
             return
+        # The installer stops this app, so check before it is launched.
+        busy = _shutdown_busy_payload(getattr(self, "server", None), force=_coerce_bool(payload.get("force")))
+        if busy is not None:
+            self._send_json(busy, status=HTTPStatus.CONFLICT)
+            return
         try:
             result = begin_app_update(payload.get("pin"), expected_update=payload["expectedUpdate"])
         except AppUpdateError as exc:
@@ -12535,7 +12760,23 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_shutdown(self) -> None:
         if not _request_is_same_origin(self.headers):
-            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "cross_origin_rejected",
+                    "error": "앱 화면에서만 앱을 종료할 수 있어요.",
+                    "detail": "cross-origin request rejected",
+                },
+                status=HTTPStatus.FORBIDDEN,
+            )
+            return
+        try:
+            force = _coerce_bool(self._read_json_body().get("force"))
+        except json.JSONDecodeError:
+            force = False
+        busy = _shutdown_busy_payload(getattr(self, "server", None), force=force)
+        if busy is not None:
+            self._send_json(busy, status=HTTPStatus.CONFLICT)
             return
         self._send_json({"ok": True})
         request_shutdown = getattr(self.app_server, "request_shutdown", None)
