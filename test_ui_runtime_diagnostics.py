@@ -605,7 +605,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("문항 사이 여백", layout_controls)
         self.assertIn("쪽 맞춤", layout_controls)
         self.assertIn("빈틈 없이", layout_controls)
-        self.assertIn("1.2p는 ClassIn 한 페이지입니다", layout_controls)
+        self.assertIn("문항을 ClassIn 쪽 경계에 맞춰 배치합니다", layout_controls)
         self.assertIn("최대 6% 이내", layout_controls)
         self.assertIn("사용자가 조절한 배율은 유지", layout_controls)
         self.assertIn("ClassIn 화면 경계를 걸칠 수", layout_controls)

@@ -60,14 +60,14 @@ class TestDevUiCopy(unittest.TestCase):
             "EDB 만들기", "리포트 보내기", "리포트를 보내지", "리포트 전송", "리포트를 전송",
             'aria-label="되돌리기"', "'되돌리기'", "이름 없는 작업", "작업 이름으로", "최근 작업",
             "ID, 번호", "고객을 확인할 수 있는 ID", "'OCR 미사용'", "로컬 2K",
-            "<code>{errorSnapshot.code || 'unknown'}</code>",
+            "<code>{errorSnapshot.code || 'unknown'}</code>", "배포 서버", "1.2p는", "1.2p 경계",
         ):
             self.assertNotIn(gone, APP, gone)
         for kept in (
             "{smartMove ? '켜짐' : '꺼짐'}", "스마트 이동을 켜면:", "`예상 ${previewEstimate.classinPageCount}쪽`",
             "{tileClassinStartPage}–{tileClassinEndPage}쪽", "it.step === 's3' ? '고화질'",
             ">쪽 맞춤</button>", "<strong>EDB 제작</strong>", "'신고 보내기'", 'aria-label="실행 취소"',
-            "'이름 없는 수업'", 'placeholder="수업 이름으로 검색"',
+            "'이름 없는 수업'", 'placeholder="수업 이름으로 검색"', "'기본 간격은 ClassIn 쪽 경계에 맞춥니다.'",
         ):
             self.assertIn(kept, APP, kept)
 

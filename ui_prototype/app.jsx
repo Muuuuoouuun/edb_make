@@ -10605,7 +10605,7 @@ function BoardLayoutControls({
           ) : (
             <p className="layout-gap-hint">
               <strong>가능하면 한 페이지에 문제 하나</strong>
-              1.2p는 ClassIn 한 페이지입니다. 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 긴 문제와 원본 페이지는 자르지 않고 이어서 표시하며, 사용자가 조절한 배율은 유지합니다.
+              문항을 ClassIn 쪽 경계에 맞춰 배치합니다. 쪽 경계를 최대 6% 이내로 넘는 100% 문항만 자동 축소합니다. 긴 문제와 원본 페이지는 자르지 않고 이어서 표시하며, 사용자가 조절한 배율은 유지합니다.
             </p>
           )}
 
@@ -12281,7 +12281,7 @@ function SidePanel({
                     ? '이어붙임 자료는 높이에 맞춰 연속 배치합니다.'
                     : normalizeLayoutGapMode(layoutGapMode) === LAYOUT_GAP_MODE_COMPACT
                       ? '기본 간격은 자료 높이에 맞춥니다.'
-                      : '기본 간격은 1.2p 경계에 맞춥니다.'}
+                      : '기본 간격은 ClassIn 쪽 경계에 맞춥니다.'}
                     {' '}개별 여백 설정을 우선합니다.</dd>
                 </div>
                 <div>
@@ -16991,7 +16991,7 @@ function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
     update_disk_full: '업데이트 저장 공간 부족 · 드라이브 공간을 확보해 주세요',
     update_storage_permission_denied: '업데이트 저장 권한 오류 · 폴더 권한과 보안 프로그램을 확인해 주세요',
     update_staging_failed: '업데이트 파일 준비 오류 · 작업 폴더와 드라이브를 확인해 주세요',
-    update_download_failed: '업데이트 다운로드 실패 · 인터넷 연결과 배포 서버를 확인해 주세요',
+    update_download_failed: '업데이트 다운로드 실패 · 인터넷 연결을 확인한 뒤 다시 시도해 주세요',
     update_target_changed: '업데이트 정보가 바뀌었습니다 · 다시 확인한 뒤 설치해 주세요',
     update_confirmation_required: '업데이트 정보를 다시 확인한 뒤 설치해 주세요',
     update_installer_launch_failed: '업데이트 설치기 실행 오류 · 오류 상세를 복사해 신고해 주세요',

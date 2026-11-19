@@ -93,7 +93,7 @@ class TestUiUpdateEntry(unittest.TestCase):
           ['update_disk_full', '저장 공간 부족', '공간을 확보'],
           ['update_storage_permission_denied', '저장 권한 오류', '보안 프로그램'],
           ['update_staging_failed', '파일 준비 오류', '작업 폴더'],
-          ['update_download_failed', '다운로드 실패', '배포 서버'],
+          ['update_download_failed', '다운로드 실패', '인터넷 연결을 확인'],
           ['update_target_changed', '정보가 바뀌었습니다', '다시 확인'],
           ['update_confirmation_required', '업데이트 정보', '다시 확인'],
           ['update_installer_launch_failed', '설치기 실행 오류', '신고'],
