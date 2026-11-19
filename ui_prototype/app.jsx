@@ -1014,6 +1014,14 @@ function resolveSmartBoardDropTarget(candidates, clientX, clientY, sourceId){
   return neighbours.length ? { id: neighbours[0].id, mode: 'gap', position: 'gap' } : null;
 }
 
+// Reordering a selected problem on the board moves the whole selection in board
+// order, like the left list. Returns null for a single-problem move.
+function boardDragGroupIds(items, selectedIds, id){
+  if (!selectedIds?.has?.(String(id)) || selectedIds.size < 2) return null;
+  const ids = (items || []).map(item => String(item.id)).filter(itemId => selectedIds.has(itemId));
+  return ids.length > 1 ? ids : null;
+}
+
 function derivePlacementGapActionFromLayout(layoutItems, activeId){
   const layout = Array.isArray(layoutItems) ? layoutItems : [];
   const selected = layout.find(item => String(item.id) === String(activeId));
@@ -2637,7 +2645,8 @@ function ManualSplitEditor({
                           key={mode}
                           type="button"
                           className={`crop-frame-handle ${mode}`}
-                          aria-label={`수동 자르기 영역 ${mode}`}
+                          tabIndex={-1}
+                          aria-hidden="true"
                           onMouseDown={(evt) => onHandleMouseDown?.(region.id, mode, evt)}
                           onClick={(evt) => evt.stopPropagation()}
                         />
@@ -5330,6 +5339,7 @@ function ReviewStage({
     if (reviewEditorActive || reviewFlow.complete) return undefined;
     const onReviewConfirmKey = (evt) => {
       if (evt.defaultPrevented || evt.repeat || mutating || isEditableKeyboardTarget(evt.target)) return;
+      if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
       if (evt.key !== 'Enter' || (!evt.metaKey && !evt.ctrlKey) || evt.altKey) return;
       evt.preventDefault();
       evt.stopPropagation();
@@ -5356,19 +5366,21 @@ function ReviewStage({
   ]);
 
   useEffect(() => {
-    if (manualSplit || selectedActionIds.length === 0) return undefined;
+    // 영역 조정 owns Delete/Backspace (it removes one area, never the problem).
+    if (manualSplit || boxEdit || selectedActionIds.length === 0) return undefined;
     const onReviewDeleteKey = (evt) => {
       if (evt.defaultPrevented || evt.repeat || mutating) return;
       if (evt.key !== 'Delete' && evt.key !== 'Backspace') return;
       if (evt.ctrlKey || evt.metaKey || evt.altKey) return;
       if (isEditableKeyboardTarget(evt.target)) return;
+      if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
       evt.preventDefault();
       evt.stopPropagation();
       void doExclude();
     };
     window.addEventListener('keydown', onReviewDeleteKey);
     return () => window.removeEventListener('keydown', onReviewDeleteKey);
-  }, [manualSplit, selectedActionIds, mutating, doExclude]);
+  }, [manualSplit, !!boxEdit, selectedActionIds, mutating, doExclude]);
 
   useEffect(() => {
     const onMove = (evt) => {
@@ -5473,6 +5485,11 @@ function ReviewStage({
         evt.preventDefault();
         void applyBoxEdit();
       } else if (!primaryModifier && !evt.altKey) {
+        if (evt.key === 'Delete' || evt.key === 'Backspace') {
+          evt.preventDefault();
+          if (boxEdit.multi && (boxEdit.segments || []).length > 1) deleteBoxEditSegment(boxEdit.selectedSegmentId);
+          return;
+        }
         const arrowDelta = {
           ArrowLeft: [-1, 0],
           ArrowRight: [1, 0],
@@ -6611,7 +6628,8 @@ function ReviewStage({
                                 key={mode}
                                 type="button"
                                 className={`crop-frame-handle ${mode}`}
-                                aria-label={`자르기 틀 ${mode}`}
+                                tabIndex={-1}
+                                aria-hidden="true"
                                 onMouseDown={(evt) => beginBoxDrag(evt, mode, page, boxEdit.multi ? segment.id : null)}
                                 onClick={(evt) => evt.stopPropagation()}
                               />
@@ -8405,6 +8423,7 @@ function BoardStage({
   const [manualPreviewZoom, setPreviewZoom] = useState(1);
   const [previewFitActive, setPreviewFitActive] = useState(false);
   const [estimateDetailsOpen, setEstimateDetailsOpen] = useState(false);
+  const [boardKeysOpen, setBoardKeysOpen] = useState(false);
   const [fileDropActive, setFileDropActive] = useState(false);
   const acceptsFileDrag = event => Boolean(handleFiles && event.dataTransfer?.types?.includes('Files'));
   const estimateToggleRef = useRef(null);
@@ -8595,10 +8614,14 @@ function BoardStage({
   // put them, and the moved problem drops its own offsets (no stale gap).
   const reorderPreviewShifts = useMemo(() => {
     if (!positioningId || boardDropTarget?.mode !== 'reorder') return null;
-    const reordered = reorderItemsForDrop(items, positioningId, boardDropTarget.id, boardDropTarget.position);
+    const groupIds = boardDragGroupIds(items, selectedIds, positioningId);
+    const movedIds = new Set(groupIds || [String(positioningId)]);
+    const reordered = groupIds
+      ? reorderItemGroupForDrop(items, groupIds, boardDropTarget.id, boardDropTarget.position)
+      : reorderItemsForDrop(items, positioningId, boardDropTarget.id, boardDropTarget.position);
     if (reordered === items) return null;
     const preview = reflowItemsForBoardOrder(
-      reordered.map(item => String(item.id) === String(positioningId) ? resetItemVerticalOffset(item) : item),
+      reordered.map(item => movedIds.has(String(item.id)) ? resetItemVerticalOffset(item) : item),
       DEFAULT_SLOT_HEIGHT_PAGES,
       columnCount,
       layoutGapMode
@@ -8607,14 +8630,15 @@ function BoardStage({
     const shifts = new Map();
     layout.items.forEach(item => {
       const id = String(item.id);
-      if (id === String(positioningId)) return;
+      // Moved problems are not neighbours; the others in a group settle on drop.
+      if (movedIds.has(id)) return;
       const next = nextStart.get(id);
       if (!Number.isFinite(next)) return;
       const delta = (next - item.startYPages) * pageH;
       if (Math.abs(delta) > 0.5) shifts.set(id, delta);
     });
     return shifts.size ? shifts : null;
-  }, [positioningId, boardDropTarget, items, layout, columnCount, layoutGapMode, pageH]);
+  }, [positioningId, boardDropTarget, items, selectedIds, layout, columnCount, layoutGapMode, pageH]);
   const reorderPreviewShiftsRef = useRef(null);
   reorderPreviewShiftsRef.current = reorderPreviewShifts;
   const [currentPage, setCurrentPage] = useState(1);
@@ -8738,6 +8762,16 @@ function BoardStage({
     // Intermediate frames of a selection-driven scroll must keep its target
     // selected; direct wheel or pointer input cancels that scroll below.
     if (positionDragRef.current || previewFitActive || c.__scrollResolve || boardSelectionIntentRef.current) return;
+    // 나누기 keeps its target, and the panel stays on the chosen problem while
+    // any part of it is still on screen; only then does selection follow.
+    if (splitTargetId) return;
+    const activeTile = layout.positions[items.findIndex(x => x.id === activeId)];
+    if (activeTile) {
+      const tileTop = activeTile.top + (activeTile.yRatio || 0)
+        * Math.max(0, (activeTile.rowHeightPages || 0) - (activeTile.renderedHeightPages || 0)) * pageH;
+      const tileBottom = tileTop + (activeTile.renderedHeightPages || 0) * pageH;
+      if (tileBottom >= c.scrollTop && tileTop <= c.scrollTop + (c.clientHeight || 0)) return;
+    }
     const nearestIdx = nearestPlacementIndex(layout.positions, c.scrollTop + 24);
     const id = items[nearestIdx]?.id;
     if (id && id !== activeId){
@@ -8839,6 +8873,8 @@ function BoardStage({
   }, [pageH, boardOrderSignature, activeId, previewFitActive, layout.positions, contentW]);
 
   const setCurrentBoardDropTarget = (target) => {
+    // A group drag never lands on one of its own problems (that drop does nothing).
+    if (target && target.mode !== 'gap' && positionDragRef.current?.groupIds?.includes(String(target.id))) target = null;
     boardDropTargetRef.current = target;
     setBoardDropTarget(prev => (
       prev?.id === target?.id && prev?.position === target?.position
@@ -9132,6 +9168,7 @@ function BoardStage({
     );
     const drag = {
       id: item.id,
+      groupIds: boardDragGroupIds(items, selectedIds, item.id),
       pointerId: evt.pointerId,
       captureTarget: evt.currentTarget,
       tile,
@@ -9227,9 +9264,10 @@ function BoardStage({
     const target = drag.smartMode && drag.moved
       ? findSmartBoardDropTarget(evt.clientX, evt.clientY, drag)
       : canReorder ? findBoardDropTarget(evt.clientX, evt.clientY, drag.id) : null;
-    const reorderedPreview = target?.id && target.mode !== 'gap'
-      ? reorderItemsForDrop(items, drag.id, target.id, target.position)
-      : items;
+    // A drop on another selected problem leaves the order unchanged (no-op).
+    const reorderedPreview = !target?.id || target.mode === 'gap' ? items
+      : drag.groupIds ? reorderItemGroupForDrop(items, drag.groupIds, target.id, target.position)
+      : reorderItemsForDrop(items, drag.id, target.id, target.position);
     const orderChanged = reorderedPreview !== items
       && reorderedPreview.map(item => String(item.id)).join('|') !== boardOrderSignature;
     if (drag.moved) {
@@ -9247,7 +9285,9 @@ function BoardStage({
           element.style.transition = 'none';
           window.requestAnimationFrame(() => window.requestAnimationFrame(() => { element.style.transition = ''; }));
         });
-        reorder?.(drag.id, target.id, target.position, { resetPlacement: false, resetVerticalOffset: drag.smartMode });
+        reorder?.(drag.id, target.id, target.position, {
+          resetPlacement: false, resetVerticalOffset: drag.smartMode, sourceIds: drag.groupIds || undefined,
+        });
       } else if (!drag.reorderMode && !target && drag.pendingPlacement) {
         setPlacement?.(drag.id, drag.pendingPlacement);
       }
@@ -9437,11 +9477,28 @@ function BoardStage({
                   description: !canRecognizeSession && recognitionDisabledReason ? recognitionDisabledReason
                     : `원본 ${sourcePageCount}페이지 전체 · ${sessionEditState?.dirty ? '변경한 수업을 먼저 저장합니다' : '현재 수업을 저장한 뒤 인식 결과를 확인합니다'}`,
                   onSelect: onRecognizeSession }] : []),
+                { id: 'keys', icon: Icon.keyboard, label: boardKeysOpen ? '단축키 닫기' : '단축키 보기',
+                  description: '칠판과 왼쪽 목록에서 쓰는 키', onSelect: () => setBoardKeysOpen(open => !open) },
               ]} />
               {focusMode && panelCollapsed && <button ref={panelReopenRef} className="btn ghost focus-panel-reopen"
                 type="button" aria-controls="workspace-panel" aria-expanded="false" aria-label="편집·설정 펼치기"
                 onClick={onOpenPanel}>{Icon.align}<span>편집·설정</span></button>}
             </div>
+            {boardKeysOpen && (
+              <div className="manual-split-shortcut-guide board-shortcut-guide" role="region" aria-label="칠판 단축키 목록">
+                <span><kbd>F2</kbd> 수업 이름 바꾸기</span>
+                <span><kbd>{PRIMARY_MODIFIER_LABEL} Z</kbd> 되돌리기</span>
+                <span><kbd>{ALTERNATE_MODIFIER_LABEL} 1·2·3</kbd> 오른쪽 편집 · 크기·배치 · 설정</span>
+                <span><kbd>{ALTERNATE_MODIFIER_LABEL} 드래그</kbd> 칠판에서 순서 이동</span>
+                <span><kbd>Esc</kbd> 칠판 드래그 취소</span>
+                <span><kbd>{ALTERNATE_MODIFIER_LABEL} ↑↓</kbd> 목록 순서 이동 (필터 중 제외)</span>
+                <span><kbd>Shift ↑↓</kbd> 목록 범위 선택</span>
+                <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 목록 전체 선택</span>
+                <span><kbd>Delete</kbd> 목록에서 선택한 문제 삭제</span>
+                <span><kbd>Esc</kbd> 목록 선택 해제</span>
+                <span className="board-shortcut-note">목록 단축키는 왼쪽 목록에서 문제를 클릭한 뒤 쓸 수 있어요.</span>
+              </div>
+            )}
             {estimateDetailsOpen && ReactDOM.createPortal(
               <div
                 className="stage-estimate-details"
@@ -10862,8 +10919,11 @@ function SidePanel({
     if (!settingsRequest || consumedSettingsRequestRef.current === settingsRequest) return;
     consumedSettingsRequestRef.current = settingsRequest;
     setTab('board');
-    if (emptyHome) setHomeSettingsOpen(true);
-    else if (typeof onRevealPanel === 'function') onRevealPanel();
+    if (emptyHome) {
+      setHomeSettingsOpen(true);
+      // Keyboard users land in the settings they asked for, not back on ⋯.
+      window.requestAnimationFrame(() => document.getElementById('side-panel-board')?.focus({ preventScroll: true }));
+    } else if (typeof onRevealPanel === 'function') onRevealPanel();
   }, [settingsRequest, setTab, emptyHome, onRevealPanel]);
   useEffect(() => {
     if (!emptyHome) setHomeSettingsOpen(false);
@@ -10871,6 +10931,8 @@ function SidePanel({
   const closeHomeSettings = () => {
     setHomeSettingsOpen(false);
     setTab('item');
+    // The panel holding focus unmounts; return focus to the ⋯ menu that opened it.
+    window.requestAnimationFrame(() => document.querySelector('[aria-controls="topbar-more-menu"]')?.focus({ preventScroll: true }));
   };
   const panelVisible = !emptyHome || homeSettingsOpen;
   const settingsTabActive = tab === 'board';
@@ -11007,18 +11069,22 @@ function SidePanel({
       ? items
       : placementScope === 'group' && selectedPassageGroupId
         ? selectedGroupItems
-        : item
-          ? [item]
-          : [];
+        : placementScope === 'selected' && multiSelectionCount
+          ? selectedPanelItems
+          : item
+            ? [item]
+            : [];
   const placementTargetLabel = placementPreset === 'passage-only' && selectedPassageFragments.length
     ? `지문 본문 ${placementTargets.length}개`
     : placementScope === 'all'
       ? `전체 자료 ${placementTargets.length}개`
       : placementScope === 'group' && selectedPassageGroupId
         ? `지문 묶음 ${placementTargets.length}개`
-        : item
-          ? '현재 자료 1개'
-          : '선택된 자료 없음';
+        : placementScope === 'selected' && multiSelectionCount
+          ? `선택 ${multiSelectionCount}개`
+          : item
+            ? '현재 자료 1개'
+            : '선택된 자료 없음';
   const passageFragmentCount = selectedPassageFragments.length;
   const passageQuestionCount = Math.max(0, selectedGroupItems.length - passageFragmentCount);
   const placementGroupLayoutItems = useMemo(() => {
@@ -11150,9 +11216,10 @@ function SidePanel({
     if (target?.id) setActive?.(target.id);
   };
   useEffect(() => {
+    // '선택 N개' stays opt-in: a multi-selection never widens the edit scope by itself.
     setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
-  }, [item?.id, selectedPassageGroupId]);
+  }, [item?.id, selectedPassageGroupId, multiSelectionCount]);
 
   const updatePlacementTargets = (patchForTarget) => {
     if (panelBusy) return;
@@ -12212,6 +12279,13 @@ function SidePanel({
                 >이 문항</button>
                 <button
                   type="button"
+                  className={placementScope === 'selected' && multiSelectionCount ? 'on' : ''}
+                  aria-pressed={Boolean(placementScope === 'selected' && multiSelectionCount)}
+                  disabled={!multiSelectionCount || panelBusy}
+                  onClick={() => selectPlacementScope('selected')}
+                >{multiSelectionCount ? `선택 ${multiSelectionCount}개` : '선택한 문항'}</button>
+                <button
+                  type="button"
                   className={placementScope === 'group' ? 'on' : ''}
                   aria-pressed={placementScope === 'group'}
                   disabled={!selectedPassageGroupId || panelBusy}
@@ -12563,6 +12637,9 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context, envi
   if (!request) return null;
 
   const handleKeyDown = event => {
+    // Keys typed in the report must not reach the lesson's window shortcuts
+    // (Delete excludes problems, Ctrl/⌘+Enter confirms, Ctrl/⌘+Z undoes).
+    event.stopPropagation();
     if (event.key === 'Escape' && !busy) {
       event.preventDefault();
       event.stopPropagation();
@@ -18453,7 +18530,14 @@ function App(){
     if (!nextProblemsById.has(activeId)) {
       const replacementActiveId = (replacementsBySourceId.get(activeId) || [])
         .find(id => nextProblemsById.has(id));
-      setActiveId(replacementActiveId || mapped[0]?.id || null);
+      // A deleted problem hands the selection to its next surviving neighbour
+      // (then the previous one), like the no-file delete path, not problem 1.
+      const oldIndex = prevItemIds.indexOf(activeId);
+      const neighbourId = oldIndex < 0 ? null : [
+        ...prevItemIds.slice(oldIndex + 1),
+        ...prevItemIds.slice(0, oldIndex).reverse(),
+      ].find(id => nextProblemsById.has(id));
+      setActiveId(replacementActiveId || neighbourId || mapped[0]?.id || null);
     }
   }, [items, activeId, boardColumns, layoutGapMode]);
 
@@ -18868,6 +18952,7 @@ function App(){
       if (evt.shiftKey) return;  // reserve Ctrl/Cmd+Shift+Z for future redo
       const target = evt.target;
       if (isEditableKeyboardTarget(target)) return;
+      if (evt.target?.closest?.('dialog[open], [role="dialog"][aria-modal="true"]')) return;
       if (historyStack.length === 0 || mutating || reviewEditorActive) return;
       evt.preventDefault();
       undoMutation();

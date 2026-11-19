@@ -43,6 +43,8 @@ Object.assign(sandbox, {
   captureBoardTileRects() {}, findBoardDropTarget: () => sandbox.dropTarget || null,
   findSmartBoardDropTarget: () => sandbox.smartDropTarget || null,
   reorderItemsForDrop: require('./ui_prototype/reorder.js').reorderItemsForDrop,
+  reorderItemGroupForDrop: require('./ui_prototype/reorder.js').reorderItemGroupForDrop,
+  selectedIds: new Set(),
   reorder: (...args) => reorders.push(args),
   reducePlacementGap: id => gaps.push(id),
   setPlacement: (id, patch) => saved.push({ id, patch }),
@@ -66,9 +68,9 @@ SCROLL_SELECTION_SETUP = NODE_SETUP + r"""
 const sandbox = placementSandbox();
 const selectionEffects = [], scrollCalls = [], selectionCalls = [];
 let now = 10000;
-const container = { scrollTop: 0 };
+const container = { scrollTop: 0, clientHeight: 600 };
 Object.assign(sandbox, {
-  activeId: 'p1', previewFitActive: false, pageH: 400, columnCount: 1,
+  activeId: 'p1', previewFitActive: false, pageH: 400, columnCount: 1, splitTargetId: null,
   boardOrderSignature: 'p1|p2|p3', syncLock: { current: 0 },
   syncLockOriginIdRef: { current: null }, boardSelectionIntentRef: { current: null }, restoredScrollRef: { current: false },
   scrollRef: { current: container }, boardScrollTopRef: { current: 0 },
