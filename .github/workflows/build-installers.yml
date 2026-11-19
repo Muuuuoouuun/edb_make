@@ -26,10 +26,10 @@ on:
         type: boolean
         default: true
       verify_native_update:
-        description: "Verify native PIN/install/restart (Windows fixed-updater test bootstrap; macOS original 0.2.8)"
+        description: "Verify native PIN/install/restart (Windows fixed-updater test bootstrap; macOS original 0.2.8); stage_draft_release.py requires it"
         required: false
         type: boolean
-        default: false
+        default: true
       license_compliance_approved:
         description: "Confirm distribution rights/notices were reviewed for AGPL and other bundled dependencies"
         required: true
@@ -91,10 +91,16 @@ jobs:
           MACOS_DOWNLOAD_URL: ${{ env.MACOS_ARM64_DOWNLOAD_URL }}
           UPDATE_CHANNEL: ${{ inputs.update_channel }}
           MACOS_ARCH: ${{ inputs.macos_arch }}
+          HAS_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN != '' }}
         run: |
           # The update feed needs both Macs, so stop public runs before the long build.
           if [[ "$RELEASE_MODE" == "public" && ( "$UPDATE_CHANNEL" != "true" || "$MACOS_ARCH" != "both" ) ]]; then
             echo "Public releases need update_channel=true and macos_arch=both." >&2
+            exit 1
+          fi
+          # Public releases already need update_channel=true, so this covers them too.
+          if [[ "$UPDATE_CHANNEL" == "true" && "$HAS_UPDATE_PIN" != "true" ]]; then
+            echo "EDB_UPDATE_PIN is required when update_channel=true or production_release=true; without it installed apps can never update themselves. Register the secret or set update_channel=false." >&2
             exit 1
           fi
           license_args=()
@@ -437,8 +443,8 @@ jobs:
             --download-url "$MACOS_DOWNLOAD_URL" \
             --release-notes-url "$RELEASE_NOTES_URL")
 
-          if [[ "$PRODUCTION_RELEASE" == "true" && -z "$EDB_PACKAGE_UPDATE_PIN" ]]; then
-            echo "Production release requires EDB_UPDATE_PIN." >&2
+          if [[ ( "$PRODUCTION_RELEASE" == "true" || -n "$UPDATE_FEED_URL" ) && -z "$EDB_PACKAGE_UPDATE_PIN" ]]; then
+            echo "EDB_UPDATE_PIN is required when update_channel=true or production_release=true; without it installed apps can never update themselves. Register the secret or set update_channel=false." >&2
             exit 1
           fi
 
@@ -738,8 +744,8 @@ jobs:
           PRODUCTION_RELEASE: ${{ inputs.production_release }}
           EDB_PACKAGE_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}
         run: |
-          if ($env:PRODUCTION_RELEASE -eq "true" -and -not $env:EDB_PACKAGE_UPDATE_PIN) {
-            throw "Production release requires EDB_UPDATE_PIN."
+          if (($env:PRODUCTION_RELEASE -eq "true" -or $env:UPDATE_FEED_URL) -and -not $env:EDB_PACKAGE_UPDATE_PIN) {
+            throw "EDB_UPDATE_PIN is required when update_channel=true or production_release=true; without it installed apps can never update themselves. Register the secret or set update_channel=false."
           }
           # Named hashtable splatting prevents pwsh from binding the version
           # token positionally as OutputDir on Windows runners.

@@ -240,6 +240,7 @@ ZIP에는 원본 파일명·페이지·문항 번호·좌표·확인 표시와 �
 - macOS: `~/Documents/ClassInEDBMVP/.app_runtime/app.log` (`.app_runtime`은 숨김 폴더라 Finder에서 `⌘+Shift+.`을 눌러야 보입니다)
 - `문서` 폴더에 쓸 수 없는 PC(Windows 랜섬웨어 방지 기능, Mac의 문서 폴더 접근 거부)에서는 같은 이름의 폴더를 대신 사용합니다. Windows는 `%LOCALAPPDATA%\ClassInEDBMVP`(`C:\Users\<사용자>\AppData\Local\ClassInEDBMVP`), Mac은 `~/Library/Application Support/ClassInEDBMVP`입니다.
 - 업데이트 설치 파일과 업데이트 기록은 Windows의 `%LOCALAPPDATA%\ClassInEDBMVP\updates`에 저장되며, 일주일이 지난 폴더는 다음 업데이트 때 정리됩니다.
+- 앱이 아예 열리지 않았을 때의 기록은 `ClassInEDBMVP-startup.log` 파일에 남습니다. Windows는 파일 탐색기 주소창에 `%TEMP%`를 입력하면 나오는 임시 폴더에, Mac은 Finder의 `이동 → 폴더로 이동`에 `~/Library/Logs`를 입력하면 나오는 폴더에 있습니다. 앱이 열리지 않으면 문제 신고 창을 쓸 수 없으니 이 파일을 담당자에게 보내 주세요.
 
 로그나 원본 시험지를 직접 전달하기보다는 앱의 문제 신고 기능을 먼저 사용하세요. 전송 전 진단 정보 포함 여부와 회신 연락처 동의를 선택할 수 있습니다.
 
@@ -266,7 +267,7 @@ ZIP에는 원본 파일명·페이지·문항 번호·좌표·확인 표시와 �
 3. `리포트 보내기`를 누릅니다.
 4. 화면에 표시되는 `EDB-...` 접수 번호를 메모합니다.
 
-진단 정보에는 앱 버전, 운영체제, 오류 로그 일부가 포함될 수 있습니다.
+진단 정보에는 앱 버전, 운영체제, Mac의 칩 종류(Apple 칩/인텔), 오류 로그와 최근 업데이트·시작 기록 일부가 포함될 수 있습니다.
 원본 시험지, 작업 세션 내용, API 키, 전체 로컬 경로는 전송하지 않습니다.
 진단 정보를 보내고 싶지 않으면 체크를 끈 뒤 설명만 보낼 수 있습니다.
 

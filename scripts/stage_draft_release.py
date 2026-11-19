@@ -59,6 +59,31 @@ def validate_draft(release: dict, commit: str, version: str) -> None:
     require(release.get("target_commitish") == commit, "Draft target does not match the built commit")
 
 
+def version_key(tag: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", tag or "")
+    return tuple(map(int, match.groups())) if match else None
+
+
+def validate_version_increase(releases: list[dict], version: str) -> None:
+    # Installed apps read a lower Latest as "up to date" and stop updating.
+    published = [key for release in releases if not release.get("draft") and not release.get("prerelease")
+                 if (key := version_key(release.get("tag_name", "")))]
+    if published:
+        newest = max(published)
+        require(version_key(version) > newest, f"Version {version} must be higher than the published release v{'.'.join(map(str, newest))}")
+
+
+def check_update_smoke(directory: Path, platform: str, arch: str, version: str, commit: str, installer_sha256: str) -> None:
+    """Require proof that this exact installer passed the real PIN install-and-relaunch update."""
+    path = directory / "update-smoke.json"
+    require(path.is_file(), f"Missing native update proof in {directory.name}: run Build Installers with verify_native_update=true")
+    proof = json.loads(path.read_text(encoding="utf-8"))
+    expected = {"platform": platform, "arch": arch, "targetVersion": version, "targetSha256": installer_sha256,
+                "targetSourceCommit": commit, "wrongPinRejected": True}
+    for key, value in expected.items():
+        require(proof.get(key) == value, f"Native update proof mismatch: {directory.name}/{key}")
+
+
 def verify_artifacts(root: Path, commit: str, version: str, repository: str) -> tuple[list[Path], dict]:
     feed_dir = root / "update-feed"
     feed = json.loads((feed_dir / "update.json").read_text())
@@ -91,7 +116,9 @@ def verify_artifacts(root: Path, commit: str, version: str, repository: str) -> 
         require(not errors, "\n".join(errors))
         path = root / filename
         (directory / built_name).rename(path)
-        expected = {"version": version, "arch": arch, "fileName": filename, "sizeBytes": path.stat().st_size, "sha256": sha256(path), "downloadUrl": f"{base}/download/v{version}/{filename}"}
+        digest = sha256(path)
+        check_update_smoke(directory, evidence_platform, arch, version, commit, digest)
+        expected = {"version": version, "arch": arch, "fileName": filename, "sizeBytes": path.stat().st_size, "sha256": digest, "downloadUrl": f"{base}/download/v{version}/{filename}"}
         entry = feed["platforms"][platform]
         rows = [row for row in manifest["artifacts"] if row.get("platform") == platform]
         require(len(rows) == 1, "Duplicate/missing manifest platform")
@@ -131,6 +158,7 @@ def main() -> None:
     require(len(matches) == 1, "An existing draft release is required")
     release = matches[0]
     validate_draft(release, commit, args.version)
+    validate_version_increase(releases, args.version)
     root = args.output_dir.resolve()
     require(not root.exists(), "Use a fresh artifact output directory")
     subprocess.run(["gh", "run", "download", args.run_id, "--repo", args.repository, "--dir", str(root)], check=True)

@@ -1,6 +1,6 @@
 # GitHub 업데이트 배포 연결
 
-갱신일: 2026-11-03. 업데이트 채널은 공개 저장소 `Muuuuoouuun/edb_make`의
+갱신일: 2026-11-19. 업데이트 채널은 공개 저장소 `Muuuuoouuun/edb_make`의
 GitHub Releases입니다. 설치된 앱은 로그인 없이 피드를 읽습니다. 그래서 게시된
 설치 파일은 누구나 받을 수 있습니다. GitHub Actions 산출물과 Draft 릴리스는
 앱이 읽을 수 없으므로 업데이트 주소로 쓰지 않습니다.
@@ -37,10 +37,13 @@ Prerelease는 이 주소에 나오지 않습니다. 설치 파일과 manifest는
 1. 저장소 **Settings → Secrets and variables → Actions**에 `EDB_UPDATE_PIN`을
    등록합니다. PIN은 영문·숫자 4~12자리(대소문자 구분)이고, 저장소나 문서에 평문으로 적지 않습니다.
    이 PIN이 없는 설치본은 자동 설치를 할 수 없고 `다운로드 열기`만 됩니다.
+   그래서 `update_channel=true`인데 이 secret이 없으면 빌드가 첫 단계(Release quality gate)에서 멈춥니다.
    PIN은 수업 중 실수로 업데이트하는 일을 막는 잠금입니다. 보안 장치는 아닙니다.
 2. `Build Installers`를 master에서 실행합니다. `version`은 기본값이 없습니다.
    이미 설치된 어떤 버전보다 높은 번호를 넣습니다. `update_channel=true`,
-   `macos_arch=both`로 둡니다. 내부 배포는 `production_release=false`로 합니다.
+   `macos_arch=both`, `verify_native_update=true`(모두 기본값)로 둡니다.
+   `verify_native_update`를 끄면 실제 PIN 업데이트·재실행 확인이 빠지고, 3단계 스크립트가 멈춥니다.
+   내부 배포는 `production_release=false`로 합니다.
    공개 서명·공증·라이선스 게이트는 [PACKAGING_MVP.md](PACKAGING_MVP.md)를 따릅니다.
 3. 빌드 커밋을 대상으로 Draft Release `v<version>`을 만들고 다음 명령을 실행합니다.
 
@@ -51,6 +54,8 @@ Prerelease는 이 주소에 나오지 않습니다. 설치 파일과 manifest는
    이 스크립트는 같은 실행의 설치 파일 세 개(`ClassInEDBMVP-macOS-arm64.dmg`,
    `ClassInEDBMVP-macOS-x64.dmg`, `ClassInEDBMVP-Setup.exe`)와 `update.json`,
    `manifest.json`, `checksums.txt`가 버전·커밋·크기·SHA-256과 맞는지 확인합니다.
+   설치 파일마다 실제 업데이트 확인 기록(`update-smoke.json`)이 같은 플랫폼·아키텍처·버전·커밋·SHA-256으로
+   남아 있는지, `version`이 이미 게시된 어떤 정식 릴리스(Draft·Prerelease 제외)보다 높은지도 확인합니다. 하나라도 어긋나면 멈춥니다.
    확인이 끝나면 Draft에 첨부만 하고 게시하지 않습니다.
 4. 게시가 승인되면 Draft를 게시하고 **Latest**로 지정합니다. 피드, manifest,
    설치 파일 주소가 로그인 없이 HTTP 200으로 열리는지 확인합니다.
