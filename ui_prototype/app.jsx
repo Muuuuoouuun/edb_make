@@ -17374,8 +17374,12 @@ async function clearSession(){
   return json;
 }
 
-async function postShutdown(){
-  const resp = await fetch('/api/system/shutdown', { method: 'POST' });
+async function postShutdown(force = false){
+  const resp = await fetch('/api/system/shutdown', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ force: !!force }),
+  });
   const json = await expectOkJson(resp, '앱 종료 실패');
   return json;
 }
@@ -17477,7 +17481,7 @@ async function postRetryAi(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), preview: !!options.preview })),
+    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), preview: !!options.preview, jobId: options.jobId })),
   });
   const json = await expectOkJson(resp, 'AI 재인식 실패');
   return json;
@@ -17488,11 +17492,14 @@ async function postEnhanceImage(args, options = {}){
     method: 'POST',
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(withExpectedSessionRevision(args || {})),
+    body: JSON.stringify(withExpectedSessionRevision({ ...(args || {}), jobId: options.jobId })),
   });
   const json = await expectOkJson(resp, '고화질 처리 실패');
   return json;
 }
+
+// AI jobs do not hold up board edits, so an edit made meanwhile rejects the AI result.
+const AI_RESULT_BOARD_CHANGED_MESSAGE = '작업하는 동안 칠판이 바뀌어서 결과를 적용하지 않았어요. 다시 실행해 주세요.';
 
 async function postRestore(snapshot){
   const resp = await fetch('/api/session/restore', {
@@ -18382,6 +18389,14 @@ function App(){
     const isRecognition = String(job?.scope || '').includes('recognition');
     const controller = jobControllersRef.current.get(id);
     if (controller) controller.abort();
+    // Aborting only stops the browser; this also stops the app's AI work for this job before it saves.
+    if (job?.scope === 'image-enhance' || job?.scope === 'session-recognition') {
+      fetch('/api/jobs/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: id }),
+      }).catch(() => {});
+    }
     settleBackgroundJob(id, {
       status: 'canceled',
       label: isRecognition ? 'AI 인식 취소됨' : '작업 취소됨',
@@ -18553,7 +18568,7 @@ function App(){
       showToast('이전 변경을 적용하는 중입니다');
       return;
     }
-    // AI recognition holds the server's job lock; an edit now would hang behind it.
+    // An edit now would make the running AI job's result be rejected when it finishes.
     if (hasRunningBackgroundJobs) {
       showToast('진행 중인 작업이 끝난 뒤 다시 시도해 주세요');
       return null;
@@ -18649,7 +18664,7 @@ function App(){
     });
     try {
       await postRestore(snapshotBefore);
-      const result = await postRetryAi(args, { signal: job.controller.signal, preview: true });
+      const result = await postRetryAi(args, { signal: job.controller.signal, preview: true, jobId: job.id });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       settleBackgroundJob(job.id, {
@@ -18678,12 +18693,14 @@ function App(){
         });
         return;
       }
+      const boardChanged = e?.code === 'session_conflict';
       settleBackgroundJob(job.id, {
         status: 'failed',
         label: 'AI 인식 실패',
-        hint: e.message,
+        hint: boardChanged ? AI_RESULT_BOARD_CHANGED_MESSAGE : e.message,
       }, 5000);
-      showSimpleErrorToast(e, 'AI 재인식 실패');
+      if (boardChanged) showToast(AI_RESULT_BOARD_CHANGED_MESSAGE, 'error');
+      else showSimpleErrorToast(e, 'AI 재인식 실패');
     } finally {
       sessionRecognitionInFlightRef.current = false;
     }
@@ -19084,13 +19101,14 @@ function App(){
     });
     try {
       const effectiveMode = !aiEnabled && mode === 'auto' ? 'preserve' : mode;
-      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal });
+      const result = await postEnhanceImage({ problemIds: ids, provider: 'gemini', mode: effectiveMode, size: '1K' }, { signal: job.controller.signal, jobId: job.id });
       if (job.controller.signal.aborted) return;
       const next = result.session;
       const appliedRows = (result.enhance || []).filter(row => row.status === 'applied');
       const applied = appliedRows.length;
-      const preserved = appliedRows.filter(row => row.resolvedMode === 'preserve').length;
-      const generated = appliedRows.filter(row => row.resolvedMode === 'ai').length;
+      // Count AI only when Gemini's image was used; a local fallback is 글자 보존.
+      const generated = appliedRows.filter(row => row.deliveryMode === 'ai_primary' || row.deliveryMode === 'ai_content_retry').length;
+      const preserved = applied - generated;
       const resultHint = [preserved ? `글자 보존 ${preserved}` : '', generated ? `AI ${generated}` : ''].filter(Boolean).join(' · ');
       setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
       adoptMutatedSession(next, snapshotBefore);
@@ -19099,7 +19117,8 @@ function App(){
         label: '고화질 처리 완료',
         hint: applied ? `${resultHint || `${applied}개 적용`} 완료` : '적용된 문항이 없습니다. 결과를 확인해 주세요.',
       });
-      showToast(applied ? `고화질 적용 · ${resultHint || `${applied}개 문항`}` : '고화질 처리 결과를 확인해 주세요');
+      if (result.aiUnavailable) showToast(result.aiUnavailable, 'error');
+      else showToast(applied ? `고화질 적용 · ${resultHint || `${applied}개 문항`}` : '고화질 처리 결과를 확인해 주세요');
     } catch (e) {
       if (e?.name === 'AbortError') {
         settleBackgroundJob(job.id, {
@@ -19109,12 +19128,14 @@ function App(){
         });
         return;
       }
+      const boardChanged = e?.code === 'session_conflict';
       settleBackgroundJob(job.id, {
         status: 'failed',
         label: '고화질 처리 실패',
-        hint: e.message,
+        hint: boardChanged ? AI_RESULT_BOARD_CHANGED_MESSAGE : e.message,
       }, 5000);
-      showSimpleErrorToast(e, '고화질 처리 실패');
+      if (boardChanged) showToast(AI_RESULT_BOARD_CHANGED_MESSAGE, 'error');
+      else showSimpleErrorToast(e, '고화질 처리 실패');
     }
   }, [session, userSettings, aiEnabled, items, fileName, boardColumns, layoutGapMode, startBackgroundJob, settleBackgroundJob, adoptMutatedSession, showSimpleErrorToast, showToast]);
 
@@ -19201,7 +19222,15 @@ function App(){
         : '앱을 종료할까요? 브라우저 창은 직접 닫아 주세요.';
     if (!window.confirm(message)) return;
     try {
-      await postShutdown();
+      const done = await postShutdown().catch(e => {
+        if (e?.code === 'shutdown_busy') return null;
+        throw e;
+      });
+      if (!done) {
+        // The app is still writing files this screen does not know about (e.g. a cancelled conversion).
+        if (!window.confirm('앱에서 아직 작업이 진행 중이에요. 지금 종료하면 그 작업은 저장되지 않아요. 그래도 종료할까요?')) return;
+        await postShutdown(true);
+      }
       leavingAppRef.current = true;
       showToast('앱을 종료합니다. 브라우저 창을 닫아도 됩니다.');
     } catch (e) {

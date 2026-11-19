@@ -36,6 +36,23 @@ def load_user_settings(runtime_dir: Path) -> dict[str, Any]:
         return payload if isinstance(payload, dict) else {}
 
 
+def _read_settings_strict(path: Path) -> dict[str, Any]:
+    """Like load_user_settings, but a locked file raises instead of reading as empty.
+
+    A save built on an empty read would drop the stored API key.
+    """
+    for delay in (0.1, 0.3, 0.8, None):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            return payload if isinstance(payload, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeError):
+            return {}
+        except OSError as exc:
+            if delay is None or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                raise
+            time.sleep(delay)
+
+
 def ai_enabled_from_settings(
     settings: dict[str, Any] | None,
     *,
@@ -204,7 +221,7 @@ def update_api_keys(
     the stored key for that provider.
     """
     with _SETTINGS_LOCK:
-        settings = load_user_settings(runtime_dir)
+        settings = _read_settings_strict(settings_path(runtime_dir))
         env_overwrites = gemini_api_key is not None
         if gemini_api_key is not None:
             _store_key(settings, "gemini_api_key", gemini_api_key)

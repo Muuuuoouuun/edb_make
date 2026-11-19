@@ -282,6 +282,18 @@ def build_content_safe_upscale(
     )
 
 
+class ImageApiUnavailable(RuntimeError):
+    """Gemini cannot serve any image right now: bad key, quota, or no network.
+
+    Unlike a per-image failure, every later call would fail the same way.
+    ``reason`` is "key", "quota" or "network".
+    """
+
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
 def _reconstruct_with_gemini(
     source_path: str | Path,
     output_path: str | Path,
@@ -347,9 +359,18 @@ def _reconstruct_with_gemini(
             response_payload = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Gemini image reconstruction failed ({exc.code}): {detail}") from exc
+        message = f"Gemini image reconstruction failed ({exc.code}): {detail}"
+        if exc.code == 429:
+            raise ImageApiUnavailable(message, "quota") from exc
+        if exc.code in (401, 403) or (
+            exc.code == 400 and ("API_KEY_INVALID" in detail or "API key not valid" in detail)
+        ):
+            raise ImageApiUnavailable(message, "key") from exc
+        raise RuntimeError(message) from exc
     except error.URLError as exc:
-        raise RuntimeError(f"Gemini image reconstruction failed: {exc.reason}") from exc
+        raise ImageApiUnavailable(f"Gemini image reconstruction failed: {exc.reason}", "network") from exc
+    except TimeoutError as exc:  # resp.read() timing out is not wrapped in URLError
+        raise ImageApiUnavailable(f"Gemini image reconstruction failed: {exc}", "network") from exc
 
     image_b64, mime_type, response_text = _extract_gemini_image(response_payload)
     if not image_b64:
