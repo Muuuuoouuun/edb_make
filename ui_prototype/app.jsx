@@ -9371,6 +9371,7 @@ function BoardStage({
             aiEnabled={aiEnabled}
             hasApiKey={Boolean(userSettings?.hasGeminiApiKey)}
             splitMode={splitMode} setSplitMode={setSplitMode}
+            dataFolder={userSettings?.dataFolderFallback ? userSettings.dataFolder : ''}
           />
         ) : (
           <>
@@ -9962,6 +9963,7 @@ function HomeDashboard({
   onUpload, onFilesDropped, onAddMockSample, canAddDummy,
   recentSessions, onRestoreRecentSession, restoringSessionId,
   recentSessionRestoreBlocked, runtimeDiagnostics, aiEnabled, hasApiKey, onOpenGallery, splitMode = 'recognize', setSplitMode,
+  dataFolder = '',
 }){
   const [dropActive, setDropActive] = useState(false);
   const [recentLimit, setRecentLimit] = useState(6);
@@ -10175,9 +10177,26 @@ function HomeDashboard({
               {!aiEnabled ? '로컬 처리 · AI 사용 꺼짐' : hasApiKey ? 'AI 설정 준비됨 · 실행할 때 사용' : '로컬 처리 · AI 연결 설정 필요'}
             </span>
           </div>
+          <DataFolderFallbackNote folder={dataFolder} />
         </div>
       </div>
     </div>
+  );
+}
+
+// Shown when the app could not use the Documents folder and saves work elsewhere,
+// so an empty recent list and a missing AI key are explained instead of looking lost.
+function DataFolderFallbackNote({ folder }){
+  if (!folder) return null;
+  return (
+    <p className="runtime-note warn data-folder-fallback-note" role="status">
+      <strong>문서 폴더를 쓸 수 없어 작업을 다른 폴더에 저장하고 있어요.</strong>{' '}
+      지금 저장하는 폴더: {folder}.{' '}
+      {IS_MAC_PLATFORM
+        ? '예전 작업이나 AI 설정이 보이지 않으면 시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더에서 ClassInEDBMVP의 문서 폴더 접근을 켠 뒤 앱을 다시 열어 주세요.'
+        : '예전 작업이나 AI 설정이 보이지 않으면 Windows 보안 → 바이러스 및 위협 방지 → 랜섬웨어 방지 → 제어된 폴더 액세스에서 ClassInEDBMVP를 허용한 뒤 앱을 다시 열어 주세요.'}
+      {' '}허용한 뒤에는 문서 폴더의 작업이 다시 보이고, 그동안 만든 작업은 이 폴더에 그대로 남아요.
+    </p>
   );
 }
 
@@ -10540,6 +10559,58 @@ function SidebarDisclosure({ title, summary, badge, tone = 'neutral', className 
       </summary>
       <div className="sidebar-disclosure-body">{children}</div>
     </details>
+  );
+}
+
+async function requestArtifactCleanup(dryRun){
+  const resp = await fetch('/api/runtime/artifacts/cleanup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dryRun }),
+  });
+  return expectOkJson(resp, dryRun ? '저장 공간을 확인하지 못했어요' : '작업 파일을 정리하지 못했어요');
+}
+
+// Old work files = 30-day-old crops, page images and upload copies. The server never selects
+// finished .edb/.zip files, published folders or anything a recent lesson still uses.
+function StorageCleanupCard({ disabled = false }){
+  const [storage, setStorage] = useState({ status: 'loading', bytes: null, message: '' });
+  const refresh = async (message = '') => {
+    try {
+      const plan = await requestArtifactCleanup(true);
+      setStorage({ status: 'ready', bytes: Number(plan.selectedBytes) || 0, message });
+    } catch (error) {
+      setStorage(prev => ({ ...prev, status: 'error', message: userErrorText(error) }));
+    }
+  };
+  useEffect(() => { void refresh(); }, []);
+  const cleanUp = async () => {
+    if (!window.confirm(`30일이 지난 작업 파일 ${formatBytes(storage.bytes)}를 지울까요?\n완성한 .edb 파일과 최근 작업 이력에 있는 수업 자료는 그대로 남아요.`)) return;
+    setStorage(prev => ({ ...prev, status: 'busy', message: '' }));
+    try {
+      const result = await requestArtifactCleanup(false);
+      await refresh(`${formatBytes(result.deletedBytes)}를 정리했어요.`);
+    } catch (error) {
+      setStorage(prev => ({ ...prev, status: 'error', message: userErrorText(error) }));
+    }
+  };
+  const { status, bytes, message } = storage;
+  return (
+    <div className="storage-cleanup-card">
+      <p className="placement-control-note">
+        {bytes === null
+          ? (status === 'loading' ? '오래된 작업 파일 용량을 확인하는 중이에요.' : '오래된 작업 파일 용량을 확인하지 못했어요.')
+          : bytes > 0
+            ? `30일이 지난 작업 파일(페이지 그림, 자른 문제 그림, 올린 자료 사본)이 ${formatBytes(bytes)} 있어요.`
+            : '지금은 정리할 오래된 작업 파일이 없어요.'}
+      </p>
+      <button className="btn" type="button" onClick={() => { void cleanUp(); }}
+        disabled={disabled || status === 'loading' || status === 'busy' || !(bytes > 0)}>
+        {status === 'busy' ? '정리 중…' : '오래된 작업 파일 정리'}
+      </button>
+      {message && <p className={`runtime-note ${status === 'error' ? 'warn' : ''}`} role="status">{message}</p>}
+      <p className="bug-report-privacy">완성한 .edb 파일과 최근 작업 이력의 수업 자료는 지우지 않아요.</p>
+    </div>
   );
 }
 
@@ -11520,6 +11591,17 @@ function SidePanel({
               className="settings-update-disclosure"
             >
             <button className="btn" type="button" aria-haspopup="dialog" onClick={onOpenUpdateSettings}>업데이트 창 열기</button>
+            </SidebarDisclosure>
+
+            <SidebarDisclosure
+              title="저장 공간"
+              summary="오래된 작업 파일 정리"
+              badge={userSettings?.dataFolderFallback ? '다른 폴더에 저장 중' : ''}
+              tone="warn"
+              className="settings-storage-disclosure"
+            >
+              <DataFolderFallbackNote folder={userSettings?.dataFolderFallback ? userSettings.dataFolder : ''} />
+              <StorageCleanupCard disabled={panelBusy} />
             </SidebarDisclosure>
           </div>
         </>
