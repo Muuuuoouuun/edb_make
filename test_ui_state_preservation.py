@@ -16,7 +16,9 @@ function stateSandbox() {
     usingMock: false, initialSessionLoaded: true, initialSessionError: null, loading: null,
     hasRunningBackgroundJobs: false, hasPendingSessionConflict: false, restoringSessionId: null,
     view: 'board', activeId: 'p2', reviewEditorActive: false, mutating: false, published: true, refreshing: false,
-    historyStack: [], historyStackRef: { current: [] },
+    historyStack: [], historyStackRef: { current: [] }, sessionEditState: { dirty: false },
+    localEditHistoryRef: { current: { stack: [], burstKey: '', burstAt: 0 } }, setLocalEditUndoCount() {},
+    redoStackRef: { current: [] }, redoAnchorRef: { current: null }, setRedoCount() {},
     useCallback: fn => fn, LAYOUT_GAP_MODE_GRID: 'classin-grid', UNDO_HISTORY_LIMIT: 20,
     appendBoundedHistory: require('./ui_prototype/reorder.js').appendBoundedHistory,
     window: { confirm() { state.confirms += 1; return state.confirmed !== false; } },
@@ -55,6 +57,7 @@ function stateSandbox() {
     sandbox.historyStackRef.current = sandbox.historyStack;
   };
   vm.runInContext(section('function assertPlacementSaveSession(', 'async function postRestoreBoardLayoutWithConflictRetry('), sandbox);
+  vm.runInContext(section('function pushUndoEntry(', 'const adjacentReorderCommand ='), sandbox);
   const load = (start, end, name) => vm.runInContext(section(start, end) + `\nglobalThis.${name} = ${name};`, sandbox);
   load('  const refreshSession = useCallback(', '  const restoreRecentSession =', 'refreshSession');
   load('  const restoreRecentSession = useCallback(', '  const triggerUpload =', 'restoreRecentSession');
@@ -249,6 +252,7 @@ class TestUiBulkStepInvalidatesPublish(unittest.TestCase):
           setItems: update => { sandbox.items = update(sandbox.items); },
           setPublished: value => { sandbox.published = value; },
           stepLabel: step => step, showToast: message => { sandbox.toasts.push(message); }, toasts: [],
+          pushLocalEdit() {}, PRIMARY_MODIFIER_LABEL: 'Ctrl',
         });
         vm.runInContext(section('  const applyToAll =', '  const setPlacements =') + '\nglobalThis.applyToAll = applyToAll;', sandbox);
         sandbox.applyToAll('s2', { silent: true });

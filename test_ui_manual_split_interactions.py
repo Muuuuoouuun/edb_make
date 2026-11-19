@@ -42,6 +42,8 @@ class TestManualSplitInteractions(unittest.TestCase):
     def test_repeated_keyboard_nudges_at_the_edge_do_not_shrink_a_crop(self):
         run_node(GEOMETRY_SETUP + r"""
         sandbox.manualSplitPage = { width: 1000, height: 800 };
+        sandbox.manualSplitRef = { current: null };
+        sandbox.pushManualSplitUndo = () => {};
         let state = { selectedRegionIds: ['a'], regions: [
           { id: 'a', bbox: { left: 675, top: 555, width: 320, height: 240 } },
           { id: 'b', bbox: { left: 10, top: 10, width: 50, height: 50 } },
