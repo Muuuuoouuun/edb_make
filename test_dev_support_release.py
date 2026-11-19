@@ -105,6 +105,18 @@ class BugReportExtraDiagnosticsTests(unittest.TestCase):
         self.assertLessEqual(len(json.dumps(diagnostics, ensure_ascii=False, separators=(",", ":"))), 24_000)
         self.assertTrue(diagnostics["logTail"].endswith("끝"))
 
+    def test_nul_heavy_log_is_trimmed_to_the_limit_not_emptied(self):
+        # A BOM-less UTF-16LE log decodes as UTF-8 with a NUL (6 JSON chars) after every letter.
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            install = tmp / "update-install.log"
+            install.write_bytes("Setup failed\n".encode("utf-16-le") * 1_000)
+            report = _report(tmp, extra_logs={"updateInstall": install}, extra={})
+        tail = report["diagnostics"]["extraLogs"]["updateInstall"]
+        size = len(json.dumps(tail, ensure_ascii=False))
+        self.assertLessEqual(size, bug_reporting.MAX_EXTRA_LOG_CHARS)
+        self.assertGreater(size, bug_reporting.MAX_EXTRA_LOG_CHARS - 6)
+
     def test_server_attaches_newest_update_attempt_and_remembers_consumed_failure(self):
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
@@ -138,6 +150,17 @@ class BugReportExtraDiagnosticsTests(unittest.TestCase):
         self.assertIs(True, diagnostics["lastUpdateFailed"])
         self.assertIs(False, diagnostics["dataFolderFallback"])
         self.assertEqual(app_server._app_arch_key(), diagnostics["arch"])
+
+    def test_data_folder_fallback_flags_an_installed_app_off_its_documents_folder(self):
+        with tempfile.TemporaryDirectory() as raw:
+            tmp = Path(raw)
+            with patch.object(app_server, "_update_root", return_value=tmp / "updates"), \
+                    patch.object(app_server, "is_frozen_app", return_value=True), \
+                    patch.object(app_server, "BASE_DIR", tmp / "fallback"), \
+                    patch.object(app_server, "default_frozen_app_home", return_value=tmp / "documents") as home:
+                self.assertIs(True, app_server._bug_report_diagnostics()[1]["dataFolderFallback"])
+                home.return_value = tmp / "fallback"
+                self.assertIs(False, app_server._bug_report_diagnostics()[1]["dataFolderFallback"])
 
     def test_copied_report_names_app_version_and_computer(self):
         source = (ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")

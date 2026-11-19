@@ -442,8 +442,9 @@ def _json_tail(text: str, limit: int) -> str:
     """Return the newest part of ``text`` whose JSON string form fits in ``limit``."""
 
     while text and _json_length(text) > limit:
-        # Escapes (CRLF, quotes) make JSON longer than the text; trim half the excess per pass.
-        text = text[max(1, (_json_length(text) - limit) // 2):]
+        # One character becomes at most 6 JSON characters (NUL -> \u0000), so cutting
+        # excess // 6 never trims past the limit.
+        text = text[max(1, (_json_length(text) - limit) // 6):]
     return text
 
 
@@ -503,9 +504,9 @@ def build_bug_report(
             if flag in extra:
                 diagnostics[flag] = bool(extra[flag])
         extra_tails = {
-            name: _json_tail(tail, MAX_EXTRA_LOG_CHARS)
+            name: tail
             for name in EXTRA_LOG_NAMES
-            if (tail := _read_log_tail((extra_logs or {}).get(name), MAX_EXTRA_LOG_CHARS))
+            if (tail := _json_tail(_read_log_tail((extra_logs or {}).get(name), MAX_EXTRA_LOG_CHARS), MAX_EXTRA_LOG_CHARS))
         }
         if extra_tails:
             diagnostics["extraLogs"] = extra_tails
