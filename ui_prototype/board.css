@@ -2391,7 +2391,8 @@
     gap: 6px;
     min-width: 0;
   }
-  .publish-result-metrics span{
+  .publish-result-metrics span,
+  .publish-result-metrics .publish-result-issue{
     min-height: 22px;
     display: inline-flex;
     align-items: center;
@@ -2403,6 +2404,14 @@
     font-size: var(--text-2xs);
     font-family: var(--font-mono);
     font-weight: 700;
+  }
+  .publish-result-metrics .publish-result-issue{
+    color: var(--ink-2);
+    cursor: pointer;
+    text-align: left;
+  }
+  .publish-result-metrics .publish-result-issue:hover{
+    border-color: var(--accent-ink);
   }
   .publish-result-actions{
     display: grid;
@@ -6295,6 +6304,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  ul.review-summary-note{
+    flex-basis: 100%;
+    margin: 0;
+    padding-left: 18px;
+    white-space: normal;
   }
   .review-bbox.selected{
     border-color: var(--accent-ink);

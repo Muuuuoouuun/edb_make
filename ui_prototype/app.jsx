@@ -5169,6 +5169,16 @@ function ReviewStage({
     setReviewFilter('all');
     setSelectedIds(new Set());
   };
+  const focusOverlapProblems = (issues) => {
+    const ids = listUnique((issues || []).flatMap(preflightIssueProblemIds));
+    if (!ids.length) return;
+    setReviewScopeProblemIds([]);
+    setReviewScopePageIds([]);
+    setReviewRiskFilter(null);
+    setReviewFilter('all');
+    setSelectedIds(new Set(ids));
+    if (setActive) setActive(ids[0]);
+  };
   const selectVisibleProblems = () => {
     if (!visibleReviewScope.problemIds.length) return;
     setSelectedIds(new Set(visibleReviewScope.problemIds));
@@ -6162,7 +6172,7 @@ function ReviewStage({
                 <button
                   type="button"
                   className={`review-summary-chip warn risk-filter-chip ${reviewFilter === 'passage-review' ? 'on' : ''}`}
-                  title="확인이 필요한 지문만 보기"
+                  title={['확인이 필요한 지문만 보기', reviewSummary.passageMissingChildLabel].filter(Boolean).join(' · ')}
                   aria-pressed={reviewFilter === 'passage-review'}
                   onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
                 >
@@ -6170,7 +6180,16 @@ function ReviewStage({
                 </button>
               )}
               {reviewSummary.warningCount > 0 && (
-                <span className="review-summary-chip warn">주의 {reviewSummary.warningCount}</span>
+                <button
+                  type="button"
+                  className="review-summary-chip warn risk-filter-chip"
+                  title={reviewSummary.warningMessages.join('\n') || '주의 내용 보기'}
+                  aria-expanded={reviewDiagnosticsOpen}
+                  aria-controls="review-diagnostics-detail"
+                  onClick={() => setReviewDiagnosticsOpen(true)}
+                >
+                  주의 {reviewSummary.warningCount}
+                </button>
               )}
               <div className="spacer" />
               <button
@@ -6233,31 +6252,31 @@ function ReviewStage({
               </span>
             )}
             {reviewSummary.sourceProblemOverlapGroups.length > 0 && (
-              <span
-                className="review-summary-chip warn"
+              <button
+                type="button"
+                className="review-summary-chip warn risk-filter-chip"
                 title={[
-                  '문항 영역 겹침: 같은 원본 페이지에서 인식 영역이 크게 겹칩니다.',
+                  '문항 영역 겹침: 같은 원본 페이지에서 인식 영역이 크게 겹칩니다. 누르면 해당 문항을 선택합니다.',
                   reviewSummary.sourceProblemOverlapDetailLabel
                     ? `세부: ${reviewSummary.sourceProblemOverlapDetailLabel}`
                     : '',
                 ].filter(Boolean).join(' ')}
+                onClick={() => focusOverlapProblems(reviewSummary.sourceProblemOverlapGroups)}
               >
                 {reviewSummary.sourceProblemOverlapLabel}
-              </span>
+              </button>
             )}
             {reviewSummary.passageGroupSourceReuseGroups.length > 0 && (
               <button
                 type="button"
-                className={`review-summary-chip warn risk-filter-chip ${reviewRiskFilter === 'passage_group_source_reuse' ? 'on' : ''}`}
+                className="review-summary-chip warn risk-filter-chip"
                 title={[
-                  '지문 겹침: 같은 지문 묶음에서 원본 영역이 크게 겹칩니다.',
+                  '지문 겹침: 같은 지문 묶음에서 원본 영역이 크게 겹칩니다. 누르면 해당 문항을 선택합니다.',
                   reviewSummary.passageGroupSourceReuseDetailLabel
                     ? `세부: ${reviewSummary.passageGroupSourceReuseDetailLabel}`
                     : '',
                 ].filter(Boolean).join(' ')}
-                aria-pressed={reviewRiskFilter === 'passage_group_source_reuse'}
-                data-risk-flag="passage_group_source_reuse"
-                onClick={() => toggleRiskFilter('passage_group_source_reuse')}
+                onClick={() => focusOverlapProblems(reviewSummary.passageGroupSourceReuseGroups)}
               >
                 {reviewSummary.passageGroupSourceReuseLabel}
               </button>
@@ -6287,6 +6306,7 @@ function ReviewStage({
                   reviewSummary.passageReviewLabel,
                   reviewSummary.passageReviewReasonLabel,
                   reviewSummary.passageReviewPreview ? `대상 ${reviewSummary.passageReviewPreview}` : '',
+                  reviewSummary.passageMissingChildLabel,
                 ].filter(Boolean).join(' · ')}
                 aria-pressed={reviewFilter === 'passage-review'}
                 onClick={() => setReviewFilter(prev => (prev === 'passage-review' ? 'all' : 'passage-review'))}
@@ -6349,7 +6369,9 @@ function ReviewStage({
               </span>
             )}
             {reviewSummary.warningPreview && (
-              <span className="review-summary-note">{reviewSummary.warningPreview}</span>
+              <ul className="review-summary-note">
+                {reviewSummary.warningMessages.map(message => <li key={message}>{message}</li>)}
+              </ul>
             )}
             </div>
             )}
@@ -6386,6 +6408,8 @@ function ReviewStage({
             ) return null;
             const pageCounts = countSessionProblems(allPageProblems);
             const pageRiskFlags = riskFlagsFor(page);
+            const pageRiskLabels = listUnique(pageRiskFlags.map(riskFlagLabel));
+            const pageShownRiskLabels = listUnique(pageRiskFlags.filter(flag => !NON_ACTIONABLE_RISK_FLAGS.has(flag)).map(riskFlagLabel));
             const storedPageStatus = normalizeReviewStatus(page.reviewStatus || page.review_status);
             const pageStatus = pageReviewTarget?.status
               || (passageOnlyReview && !pageRiskFlags.length
@@ -6416,10 +6440,11 @@ function ReviewStage({
                     {reviewStatusMeta(pageStatus).label}
                   </span>
                   {hasRisk && (
-                    <span className="pg-risk" title={pageRiskFlags.join(', ')}>
+                    <span className="pg-risk" title={pageRiskLabels.join(', ')}>
                       {pageReviewTarget?.status === 'check_needed'
                         ? '지문이 검출되지 않아 확인이 필요합니다'
-                        : pageRiskFlags.length ? `위험 · ${pageRiskFlags.join(' · ')}` : '문제 인식 실패'}
+                        : pageShownRiskLabels.length ? `확인 필요 · ${pageShownRiskLabels.join(' · ')}`
+                          : pageStatus === 'failed' ? '문제 인식 실패' : '확인이 필요합니다'}
                     </span>
                   )}
                   <div className="spacer" />
@@ -6539,9 +6564,9 @@ function ReviewStage({
                     const tooltipParts = [prob.title || ''];
                     const problemRiskFlags = riskFlagsFor(prob);
                     const hasPageChrome = hasPageChromeArtifactFlag(prob);
-                    if (isRisky) tooltipParts.push(`${statusMeta.label}: ${problemRiskFlags.join(', ') || '경계 확인 필요'}`);
+                    if (isRisky) tooltipParts.push(`${statusMeta.label}: ${listUnique(problemRiskFlags.map(riskFlagLabel)).join(', ') || '경계 확인 필요'}`);
                     if (hasPageChrome) tooltipParts.push('페이지 선/번호 감지');
-                    if (isPassage) tooltipParts.push(`지문 ${passageGroupId}`);
+                    if (isPassage) tooltipParts.push(passageRangeLabel ? `지문 ${passageRangeLabel}` : '지문 묶음');
                     const editableBoxes = isEditing
                       ? (boxEdit.multi
                           ? (boxEdit.segments || []).filter(segment => segment.pageId === page.id)
@@ -10322,7 +10347,7 @@ function PublishPlanSummary({ plan, busy, failed }){
 
 function PublishResultPanel({
   session, visible, onClassinReviewComplete, onExportImages, exportingImages, canExportImages,
-  onDownloadPublish, publishDownloadBusy,
+  onDownloadPublish, publishDownloadBusy, onFocusProblems,
 }){
   const summary = useMemo(() => visible ? sessionPublishSummary(session) : null, [session, visible]);
   const history = useMemo(() => visible ? sessionPublishHistory(session) : [], [session, visible]);
@@ -10331,6 +10356,7 @@ function PublishResultPanel({
     if (summary) setOpen(false);
   }, [summary?.edbFileName, summary?.publishedAt]);
   if (!summary) return null;
+  const preflightIssueButtons = publishPreflightIssueButtons(summary.classinPreflight);
   return (
     <div className={`publish-result-panel ${open ? 'open' : 'is-collapsed'}`}>
       <button
@@ -10389,7 +10415,21 @@ function PublishResultPanel({
             {summary.outerSize > 0 && <span>{formatBytes(summary.outerSize)}</span>}
             {summary.classinHandoffStatusLabel && <span title="ClassIn 전달 상태">{summary.classinHandoffStatusLabel}</span>}
             {summary.classinPreflightStatusLabel && <span title="ClassIn 사전점검">{summary.classinPreflightStatusLabel}</span>}
-            {summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
+            {preflightIssueButtons.length > 0
+              ? preflightIssueButtons.map(issue => (issue.problemIds.length && onFocusProblems
+                ? (
+                  <button
+                    key={issue.type}
+                    type="button"
+                    className="publish-result-issue"
+                    title="검수 화면에서 이 문항 보기"
+                    onClick={() => onFocusProblems(issue.problemIds)}
+                  >
+                    {issue.text}
+                  </button>
+                )
+                : <span key={issue.type} title="ClassIn 사전점검 이슈">{issue.text}</span>))
+              : summary.classinPreflightIssueSummaryLabel && <span title="ClassIn 사전점검 이슈">{summary.classinPreflightIssueSummaryLabel}</span>}
             {summary.passageGroupLabel && <span title="지문 묶음">{summary.passageGroupLabel}</span>}
             {summary.passageReviewLabel && <span title="지문 확인 항목">{summary.passageReviewLabel}</span>}
             {summary.passageReviewReasonLabel && <span title="지문 확인 사유">{summary.passageReviewReasonLabel}</span>}
@@ -10736,7 +10776,7 @@ function SidePanel({
   session, published, sessionEditState,
   publishPlan, publishPlanBusy, publishPlanFailed,
   onClassinReviewComplete,
-  onDownloadPublish, publishDownloadBusy,
+  onDownloadPublish, publishDownloadBusy, onFocusProblems,
   onExportImages, exportingImages, canExportImages,
   updateInfo, updateBusy, updateInstallBusy, updateInstallBlockedReason = '', onCheckUpdate, onOpenUpdate, onInstallUpdate, onOpenUpdateSettings, settingsRequest = 0, selectedIds,
   view,
@@ -10803,8 +10843,11 @@ function SidePanel({
   const multiSelectionCount = selectedPanelItems.length > 1 ? selectedPanelItems.length : 0;
   const multiSelectionSteps = Array.from(new Set(selectedPanelItems.map(candidate => candidate.step)));
   const itemNeedsCheck = Boolean(item) && (item.reviewStatus === 'check_needed' || item.reviewStatus === 'failed');
-  const nextNeedsCheckItem = item ? (items || []).find((candidate, index) => index > activeIndex
-    && (candidate.reviewStatus === 'check_needed' || candidate.reviewStatus === 'failed')) : null;
+  // Search after the current item first, then wrap to the earlier ones.
+  const nextNeedsCheckItem = item
+    ? [...(items || []).slice(activeIndex + 1), ...(items || []).slice(0, Math.max(0, activeIndex))]
+      .find(candidate => candidate.reviewStatus === 'check_needed' || candidate.reviewStatus === 'failed') || null
+    : null;
   const panelBusy = Boolean(mutating || sessionEditState?.busy);
   const handlePanelTabKeyDown = (event) => {
     if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -11574,6 +11617,7 @@ function SidePanel({
         canExportImages={canExportImages}
         onDownloadPublish={onDownloadPublish}
         publishDownloadBusy={publishDownloadBusy}
+        onFocusProblems={onFocusProblems}
       />
 
       {settingsPanel}
@@ -12051,9 +12095,12 @@ function SidePanel({
               className="btn primary"
               disabled={!item || item.step === 'raw' || panelBusy}
               title="처리 방식을 적용하고 현재 수업의 미저장 변경을 함께 저장"
-              onClick={() => {
+              onClick={async () => {
                 if (!item) return;
-                onConfirm(item.id, { bulk, problemIds: bulk ? remainingApplyIds : [item.id], processingStep: item.step });
+                // Captured before the await: items change once the save lands.
+                const advanceTo = !bulk && itemNeedsCheck ? nextNeedsCheckItem : null;
+                const result = await onConfirm(item.id, { bulk, problemIds: bulk ? remainingApplyIds : [item.id], processingStep: item.step });
+                if (result && advanceTo?.id) setActive?.(advanceTo.id);
               }}
             >
               {Icon.check} {mutating ? '저장 중…' : itemNeedsCheck ? (bulk && remainingReviewItems.length ? `${remainingApplyIds.length}개 확인·적용` : '확인 완료') : '변경 저장'}
@@ -14147,6 +14194,16 @@ function mapProblemToItem(problem, idx, rawSession = null){
     problem.snappedNextStartYPages,
     problem.snapped_next_start_y_pages
   );
+  const passageGroupId = problem.passageGroupId || problem.passage_group_id || problem.metadata?.passageGroupId || problem.metadata?.passage_group_id || null;
+  const missingChildGroup = passageGroupId && riskFlags.includes('passage_missing_child_questions')
+    ? (Array.isArray(rawSession?.passageGroups) ? rawSession.passageGroups : Array.isArray(rawSession?.passage_groups) ? rawSession.passage_groups : [])
+      .find(group => String(group?.groupId || group?.group_id || '') === String(passageGroupId))
+    : null;
+  const missingChildNumbers = missingChildGroup?.missingChildProblemNumbers || missingChildGroup?.missing_child_problem_numbers || [];
+  const missingChildGroupLabel = String(missingChildGroup?.numberLabel || missingChildGroup?.number_label || '').trim();
+  const missingChildReason = missingChildNumbers.length
+    ? `${missingChildGroupLabel ? `${missingChildGroupLabel}번 ` : ''}지문의 ${missingChildNumbers.map(number => `${number}번`).join(', ')} 문항이 없어요`
+    : '';
   return {
     id: problem.id || `p${idx + 1}`,
     name: name === '' ? fallbackName : name,
@@ -14167,12 +14224,14 @@ function mapProblemToItem(problem, idx, rawSession = null){
     reviewStatus,
     statusLabel: statusMeta.label,
     statusShortLabel: statusMeta.shortLabel || statusMeta.label,
-    statusReason: riskFlags.length ? riskFlags.map(riskFlagLabel).join(', ') : '',
+    statusReason: riskFlags
+      .map(flag => (flag === 'passage_missing_child_questions' && missingChildReason) || riskFlagLabel(flag))
+      .join(', '),
     retryable: reviewStatus !== 'normal',
     parseConfidence: typeof problem.parseConfidence === 'number' ? problem.parseConfidence : null,
     confidence: problem.confidence || null,
     aiStatus: problem.aiStatus || 'unknown',
-    passageGroupId: problem.passageGroupId || problem.passage_group_id || problem.metadata?.passageGroupId || problem.metadata?.passage_group_id || null,
+    passageGroupId,
     passageRole: problem.passageRole || problem.passage_role || problem.metadata?.passageRole || problem.metadata?.passage_role || null,
     passageRange: problem.passageRange || problem.passage_range || problem.metadata?.passageRange || problem.metadata?.passage_range || null,
     passageChildProblemNumbers: problem.passageChildProblemNumbers || problem.passage_child_problem_numbers || problem.metadata?.passageChildProblemNumbers || problem.metadata?.passage_child_problem_numbers || [],
@@ -14550,7 +14609,7 @@ const RISK_FLAG_META = {
   fallback_grouping: '문항 경계 추정',
   hwp_oversegmentation: 'HWP 과분할',
   hwp_problem_count_mismatch: 'HWP 문항 수 차이',
-  large_block_dominance: '큰 블록 우세',
+  large_block_dominance: '큰 영역 하나로 인식됨',
   marker_document_continuation: '지문·자료 분리',
   needs_review: '검토 필요',
   no_problem_markers: '문항 번호 부족',
@@ -14559,8 +14618,8 @@ const RISK_FLAG_META = {
   passage_quality_review: '지문 품질 확인',
   passage_group_source_reuse: '지문 겹침',
   passage_cross_page_merge_check: '병합 확인',
-  problem_per_block: '블록 단위 분리',
-  sparse_segmentation: '성긴 분할',
+  problem_per_block: '영역별로 나눔',
+  sparse_segmentation: '나뉜 문항이 적음',
   source_problem_bbox_overlap: '문항 영역 겹침',
   step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
   step3_page_chrome_artifact: '3단계 페이지 장식',
@@ -14590,7 +14649,7 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   board_placement_overlap: '판서 배치 겹침',
   duplicate_problem_id: '문항 ID 중복',
   duplicate_problem_number: '중복 번호',
-  horizontal_crop_edge_risk: '좌우 원본 경계 확인',
+  horizontal_crop_edge_risk: '글자 잘림 확인',
   low_ink_problem_image: '이미지 내용 부족',
   missing_problem_id: '문항 ID 누락',
   missing_problem_image: '문항 이미지 없음',
@@ -14603,7 +14662,7 @@ const CLASSIN_PREFLIGHT_ISSUE_LABELS = {
   source_problem_bbox_overlap: '문항 영역 겹침',
   step2_page_chrome_artifact_rate: '2단계 페이지 장식 초과',
   step3_page_chrome_artifact: '3단계 페이지 장식',
-  unreadable_problem_image: '문항 이미지 흐림',
+  unreadable_problem_image: '이미지 파일을 열 수 없음',
 };
 const PASSAGE_REVIEW_REASON_LABELS = {
   cross_page_passage_group: '페이지 이어짐',
@@ -14780,6 +14839,38 @@ function preflightIssueProblemIds(issue){
     issue?.problemId || issue?.problem_id,
     issue?.nextProblemId || issue?.next_problem_id,
   ]);
+}
+
+// "3번 ↔ 4번 외 2곳": the first pair plus how many more the same check found.
+function preflightPairToastLabel(issues){
+  const first = issues[0] || {};
+  const more = issues.length > 1 ? ` 외 ${issues.length - 1}곳` : '';
+  return `${first.problemTitle || first.problemId} ↔ ${first.nextProblemTitle || first.nextProblemId}${more}`;
+}
+
+// One button per issue type after 제작, naming the questions it found.
+function publishPreflightIssueButtons(classinPreflight){
+  const issues = Array.isArray(classinPreflight?.issues) ? classinPreflight.issues : [];
+  const groups = new Map();
+  issues.filter(issue => issue && typeof issue === 'object').forEach(issue => {
+    const type = preflightIssueType(issue) || 'unknown';
+    const group = groups.get(type) || { type, count: 0, problemIds: [], names: [] };
+    group.count += 1;
+    group.problemIds.push(...preflightIssueProblemIds(issue));
+    const missing = Array.isArray(issue.missingChildProblemNumbers) ? issue.missingChildProblemNumbers : [];
+    if (missing.length) group.names.push(...missing.map(number => `${number}번 없음`));
+    else group.names.push(...[issue.problemTitle, issue.nextProblemTitle].map(value => String(value || '').trim()).filter(Boolean));
+    groups.set(type, group);
+  });
+  return Array.from(groups.values()).map(group => {
+    const names = listUnique(group.names);
+    const shown = names.slice(0, 3).join(', ') + (names.length > 3 ? ` 외 ${names.length - 3}개` : '');
+    return {
+      type: group.type,
+      problemIds: listUnique(group.problemIds),
+      text: `${classinPreflightIssueLabel(group.type)} ${shown ? `· ${shown}` : group.count}`,
+    };
+  });
 }
 
 function preflightBlockingProblemIds(blockedPublish){
@@ -15650,45 +15741,29 @@ function sessionReviewSummary(session){
     })
     .filter(Boolean)
     .join(', ');
-  const sourceProblemOverlapGroups = Array.isArray(session?.sourceProblemOverlapGroups)
-    ? session.sourceProblemOverlapGroups
-    : Array.isArray(session?.source_problem_overlap_groups)
-      ? session.source_problem_overlap_groups
-      : [];
-  const sourceProblemOverlapDetailLabel = sourceProblemOverlapGroups
-    .map(group => {
-      const pageId = String(group?.sourcePageId || group?.source_page_id || '').trim();
-      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
-      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : '';
-      return [pageId, percent].filter(Boolean).join(' ');
-    })
-    .filter(Boolean)
-    .join(', ');
+  // Recompute from the current problems with the same checks 제작 uses, so
+  // the chips follow crop edits, exclusions and 확인 instead of the import.
+  const overlapDetailLabel = issues => {
+    const pairs = issues.slice(0, 3).map(issue => {
+      const ratio = Number(issue?.overlapAreaRatio || 0);
+      const percent = Number.isFinite(ratio) && ratio > 0 ? ` ${Math.round(ratio * 100)}%` : '';
+      return `${issue.problemTitle || issue.problemId} ↔ ${issue.nextProblemTitle || issue.nextProblemId}${percent}`;
+    });
+    return pairs.join(', ') + (issues.length > 3 ? ` 외 ${issues.length - 3}건` : '');
+  };
+  const sourceProblemOverlapGroups = findSourceProblemOverlaps(session?.problems || []);
+  const sourceProblemOverlapDetailLabel = overlapDetailLabel(sourceProblemOverlapGroups);
   const sourceProblemOverlapLabel = sourceProblemOverlapGroups.length > 0
     ? `문항 영역 겹침 ${sourceProblemOverlapGroups.length}건`
     : '';
-  const passageGroupSourceReuseGroups = Array.isArray(session?.passageGroupSourceReuseGroups)
-    ? session.passageGroupSourceReuseGroups
-    : Array.isArray(session?.passage_group_source_reuse_groups)
-      ? session.passage_group_source_reuse_groups
-      : [];
-  const explicitPassageGroupSourceReuseCount = Number(
-    session?.passageGroupSourceReuseGroupCount
-    ?? session?.passage_group_source_reuse_group_count
-    ?? passageGroupSourceReuseGroups.length
-  );
-  const passageGroupSourceReuseGroupCount = Number.isFinite(explicitPassageGroupSourceReuseCount)
-    ? Math.max(0, explicitPassageGroupSourceReuseCount)
-    : passageGroupSourceReuseGroups.length;
-  const passageGroupSourceReuseDetailLabel = passageGroupSourceReuseGroups
-    .map(group => {
-      const groupId = String(group?.passageGroupId || group?.passage_group_id || '').trim();
-      const ratio = Number(group?.overlapAreaRatio ?? group?.overlap_area_ratio ?? 0);
-      const percent = Number.isFinite(ratio) && ratio > 0 ? `${Math.round(ratio * 100)}%` : '';
-      return [groupId, percent].filter(Boolean).join(' ');
-    })
-    .filter(Boolean)
-    .join(', ');
+  const passageGroupSourceReuseGroups = findPassageGroupSourceReuse(session?.problems || []);
+  const passageGroupSourceReuseGroupCount = passageGroupSourceReuseGroups.length;
+  const passageGroupSourceReuseDetailLabel = overlapDetailLabel(passageGroupSourceReuseGroups);
+  const passageMissingChildNumbers = listUnique(passageReviewSummary.passageReviewItems
+    .flatMap(item => item.missingChildProblemNumbers || item.missing_child_problem_numbers || []));
+  const passageMissingChildLabel = passageMissingChildNumbers.length
+    ? `${passageMissingChildNumbers.map(number => `${number}번`).join(', ')} 문항이 없어요`
+    : '';
   const passageGroupSourceReuseLabel = passageGroupSourceReuseGroupCount > 0
     ? `지문 겹침 ${passageGroupSourceReuseGroupCount}건`
     : '';
@@ -15710,6 +15785,7 @@ function sessionReviewSummary(session){
     topRiskFlags,
     warningCount: Number.isFinite(Number(raw.warningCount)) ? Number(raw.warningCount) : warningMessages.length,
     warningPreview: warningMessages[0] || '',
+    warningMessages,
     hwpTextExtractorLabel: extractorNames.join(', '),
     hwpTextProblemSignalCount: Number.isFinite(hwpTextProblemSignalCount) ? Math.max(0, hwpTextProblemSignalCount) : 0,
     hwpTextProblemCountStatus,
@@ -15752,6 +15828,7 @@ function sessionReviewSummary(session){
     passageReviewLabel: passageReviewSummary.passageReviewLabel,
     passageReviewPreview: passageReviewSummary.passageReviewPreview,
     passageReviewReasonLabel: passageReviewSummary.passageReviewReasonLabel,
+    passageMissingChildLabel,
   };
 }
 
@@ -19936,6 +20013,19 @@ function App(){
     return nextSession;
   };
 
+  // Publish-result issue buttons jump to the named questions in 검수.
+  const focusReviewProblems = useCallback((problemIds) => {
+    const knownIds = new Set((session?.problems || []).map(problem => String(problem?.id || '')));
+    const ids = listUnique((problemIds || []).map(id => String(id || '').trim())).filter(id => knownIds.has(id));
+    if (!ids.length) {
+      showToast('해당 문항을 찾지 못했어요. 이미 빼거나 다시 나눈 문항일 수 있어요.');
+      return;
+    }
+    requestViewChange('review', {
+      beforeCommit: () => setReviewFocus({ filter: 'all', problemIds: ids, source: 'publish-result' }),
+    });
+  }, [session, requestViewChange, showToast]);
+
   const markClassinReviewComplete = useCallback(async () => {
     if (!session) {
       showToast('저장할 자료가 없습니다. 먼저 파일을 추가해 주세요');
@@ -20000,18 +20090,14 @@ function App(){
     const passageSourceReuseIssues = findPassageGroupSourceReuse(sessionForPublish.problems || [])
       .filter(issue => issue.type === 'passage_group_source_reuse');
     if (passageSourceReuseIssues.length > 0) {
-      const firstIssue = passageSourceReuseIssues[0];
-      const focusProblemIds = Array.isArray(firstIssue.problemIds || firstIssue.problem_ids)
-        ? (firstIssue.problemIds || firstIssue.problem_ids)
-        : [firstIssue.problemId, firstIssue.nextProblemId];
       setReviewFocus({
         filter: 'all',
-        problemIds: focusProblemIds,
+        problemIds: listUnique(passageSourceReuseIssues.flatMap(preflightIssueProblemIds)),
         source: 'passage-source-reuse-preflight',
       });
       setView('review');
       showToast(
-        `지문 묶음 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`,
+        `지문 묶음 안에서 원본 영역이 반복될 수 있어 제작을 멈췄어요. ${preflightPairToastLabel(passageSourceReuseIssues)}`,
         'error'
       );
       return;
@@ -20019,18 +20105,14 @@ function App(){
     const sourceOverlapIssues = findSourceProblemOverlaps(sessionForPublish.problems || [])
       .filter(issue => issue.type === 'source_problem_bbox_overlap');
     if (sourceOverlapIssues.length > 0) {
-      const firstIssue = sourceOverlapIssues[0];
-      const focusProblemIds = Array.isArray(firstIssue.problemIds || firstIssue.problem_ids)
-        ? (firstIssue.problemIds || firstIssue.problem_ids)
-        : [firstIssue.problemId, firstIssue.nextProblemId];
       setReviewFocus({
         filter: 'all',
-        problemIds: focusProblemIds,
+        problemIds: listUnique(sourceOverlapIssues.flatMap(preflightIssueProblemIds)),
         source: 'source-overlap-preflight',
       });
       setView('review');
       showToast(
-        `문항 영역이 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`,
+        `문항 영역이 겹칠 수 있어 제작을 멈췄어요. ${preflightPairToastLabel(sourceOverlapIssues)}`,
         'error'
       );
       return;
@@ -20043,20 +20125,22 @@ function App(){
       .filter(issue => issue.type === 'board_placement_overlap');
     if (placementOverlapIssues.length > 0) {
       const firstIssue = placementOverlapIssues[0];
+      if (items.some(item => item.id === firstIssue.problemId)) selectBoardItem(firstIssue.problemId);
       setView('board');
       showToast(
-        `문항 배치가 겹칠 수 있어 제작을 멈췄어요. ${firstIssue.problemTitle || firstIssue.problemId} → ${firstIssue.nextProblemTitle || firstIssue.nextProblemId}`,
+        `문항 배치가 겹칠 수 있어 제작을 멈췄어요. ${preflightPairToastLabel(placementOverlapIssues)}`,
         'error'
       );
       return;
     }
     const publishReviewWarning = publishReviewWarningMessage(sessionForPublish, publishReviewSummary);
+    const missingChildNote = publishReviewSummary.passageMissingChildLabel ? ` ${publishReviewSummary.passageMissingChildLabel}.` : '';
     if (publishReviewWarning) {
       openFirstReviewTarget(sessionForPublish);
       const reviewCount = Number(publishReviewSummary?.actionableNeedsReviewCount) || 0;
       showToast(reviewCount > 0
-        ? `확인이 필요한 문항 ${reviewCount}개가 남았어요. 확인을 마친 뒤 다시 제작해 주세요.`
-        : '확인이 필요한 지문이 남았어요. 확인을 마친 뒤 다시 제작해 주세요.', 'error');
+        ? `확인이 필요한 문항 ${reviewCount}개가 남았어요.${missingChildNote} 확인을 마친 뒤 다시 제작해 주세요.`
+        : `확인이 필요한 지문이 남았어요.${missingChildNote} 확인을 마친 뒤 다시 제작해 주세요.`, 'error');
       return;
     }
     publishInFlightRef.current = true;
@@ -20128,7 +20212,8 @@ function App(){
           setView(blockedTarget.view);
           showToast(
             pageChromePreflightBlockToast(blockedPublish)
-              || `제작 전 자동 점검에서 멈췄어요. ${blockedPublish.issueSummaryLabel || blockedPublish.message}`,
+              || `제작 전 자동 점검에서 멈췄어요. ${blockedPublish.issueSummaryLabel || blockedPublish.message}${
+                blockedPublish.issueTypes.includes('passage_review_queue_remaining') ? missingChildNote : ''}`,
             'error'
           );
           return;
@@ -20809,6 +20894,7 @@ function App(){
           onClassinReviewComplete={markClassinReviewComplete}
           onDownloadPublish={target => void handlePublishDownload(target)}
           publishDownloadBusy={downloadBusy}
+          onFocusProblems={focusReviewProblems}
           onExportImages={exportSessionImages}
           exportingImages={exportingImages}
           canExportImages={!!session && items.some(item => item?.id && !item.excluded)}

@@ -5827,6 +5827,8 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
         problem["sourceImagePath"] = path_to_api_url(problem.get("sourceImagePath"))
         problem["boardRenderPath"] = path_to_api_url(problem.get("boardRenderPath"))
         problem["originalImagePath"] = path_to_api_url(problem.get("originalImagePath"))
+        if "reviewConfirmedImagePath" in problem:
+            problem["reviewConfirmedImagePath"] = path_to_api_url(problem.get("reviewConfirmedImagePath"))
 
     for page in rewritten.get("pages", []):
         raw_problem_ids = page.get("problemIds")
@@ -6547,6 +6549,9 @@ PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS = (
     ("passageSourcePageIds", "passage_source_page_ids"),
     ("passageContinuesAcrossPages", "passage_continues_across_pages"),
     ("passagePreQuestionContinuationBlockIds", "passage_pre_question_continuation_block_ids"),
+    # The 확인 record stays valid only while the rebuilt image and bbox match.
+    ("reviewConfirmedImagePath",),
+    ("reviewConfirmedBBox",),
 )
 
 
@@ -6923,6 +6928,12 @@ def _session_review_summary(session: dict[str, Any]) -> dict[str, Any]:
         if hwp_text_problem_count_matches:
             hwp_text_problem_count_status = "match"
             hwp_text_problem_count_message = "HWP 텍스트 문항 수와 검출 문항 수가 일치합니다."
+            # The builder stored its count mismatch at import time. The
+            # teacher's edits now make the counts agree, so it is stale.
+            warning_messages = [
+                message for message in warning_messages
+                if not message.startswith("HWP 내부 텍스트 기준 문항 수는")
+            ]
         else:
             hwp_text_problem_count_status = "mismatch"
             if hwp_text_problem_delta > 0:
@@ -8638,6 +8649,12 @@ def _mutate_confirm(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]
         problem["review_status"] = "normal"
         problem["parseFailed"] = False
         problem["parse_failed"] = False
+        # Remember which crop the teacher confirmed. The publish overlap and
+        # page-decoration checks accept only this exact image and bbox; any
+        # later re-crop, enhance or AI regeneration makes the record stale.
+        problem["reviewConfirmedImagePath"] = problem.get("imagePath") or problem.get("image_path") or ""
+        confirmed_bbox = problem.get("bbox") or problem.get("sourceBbox") or problem.get("source_bbox")
+        problem["reviewConfirmedBBox"] = dict(confirmed_bbox) if isinstance(confirmed_bbox, dict) else None
 
     normalized_by_id = {
         str(problem.get("id")): problem
@@ -10139,6 +10156,8 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
             continue
         for key in ("imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath"):
             problem[key] = fix(problem.get(key))
+        if "reviewConfirmedImagePath" in problem:
+            problem["reviewConfirmedImagePath"] = fix(problem.get("reviewConfirmedImagePath"))
     for page in cloned.get("pages", []) or []:
         if not isinstance(page, dict):
             continue

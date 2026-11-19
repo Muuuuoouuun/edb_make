@@ -186,7 +186,7 @@ CLASSIN_PREFLIGHT_NON_ACTIONABLE_REVIEW_RISK_FLAGS = {
 CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "board_placement_overlap": "판서 배치 겹침",
     "duplicate_problem_number": "중복 번호",
-    "horizontal_crop_edge_risk": "좌우 원본 경계 확인",
+    "horizontal_crop_edge_risk": "글자 잘림 확인",
     "low_ink_problem_image": "이미지 내용 부족",
     "missing_problem_image": "문항 이미지 없음",
     "passage_group_source_reuse": "지문 겹침",
@@ -198,7 +198,7 @@ CLASSIN_PREFLIGHT_ISSUE_LABELS = {
     "source_problem_bbox_overlap": "문항 영역 겹침",
     "step2_page_chrome_artifact_rate": "2단계 페이지 장식 허용률 초과",
     "step3_page_chrome_artifact": "3단계 페이지 장식",
-    "unreadable_problem_image": "문항 이미지 흐림",
+    "unreadable_problem_image": "이미지 파일을 열 수 없음",
 }
 PASSAGE_CROSS_PAGE_MERGE_CHECK_RISK_FLAG = "passage_cross_page_merge_check"
 PASSAGE_FRAGMENT_STITCH_GAP_PX = 16
@@ -9016,6 +9016,11 @@ def _classin_page_chrome_artifact_issues(problems: Sequence[dict[str, Any]]) -> 
             # semantic content that must remain in the stage-2 crop.
             s2_total += 1
             continue
+        if step == PROCESSING_STEP_CHALK and _session_problem_review_confirmed(problem):
+            # The teacher confirmed this exact stage-2 crop. Keep it in the
+            # denominator; stage 3 must still be re-cleaned even when confirmed.
+            s2_total += 1
+            continue
         try:
             with Image.open(image_path) as image:
                 stats = _problem_image_page_chrome_artifact_stats(image)
@@ -9197,13 +9202,39 @@ def _bbox_payload(box: tuple[float, float, float, float]) -> dict[str, float]:
     }
 
 
+def _session_problem_is_hwp_text_fallback(problem: dict[str, Any]) -> bool:
+    # Restored HWP-text questions are rendered from text, so their band-shaped
+    # bbox is not a crop. 확인 clears riskFlags, so also read the lasting source.
+    if HWP_TEXT_FALLBACK_RISK_FLAG in {str(flag) for flag in (problem.get("riskFlags") or []) if str(flag)}:
+        return True
+    source = _session_problem_field(problem, "problemNumberSource", "problem_number_source")
+    return str(source or "").strip() == "hwp_text_snippet"
+
+
+def _session_problem_review_confirmed(problem: dict[str, Any]) -> bool:
+    """True while the teacher's 확인 still covers this exact crop.
+
+    ``_mutate_confirm`` records the image path and bbox it confirmed. Any later
+    re-crop, enhance or AI regeneration changes one of them, which makes the
+    record stale and re-arms the publish checks.
+    """
+    if "reviewConfirmedImagePath" not in problem:
+        return False
+    if str(problem.get("reviewStatus") or problem.get("review_status") or "").strip() != "normal":
+        return False
+    if _session_asset_path(problem.get("reviewConfirmedImagePath")) != _session_asset_path(
+        problem.get("imagePath") or problem.get("image_path")
+    ):
+        return False
+    return _problem_bbox({"bbox": problem.get("reviewConfirmedBBox")}) == _problem_bbox(problem)
+
+
 def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates_by_page: dict[str, list[tuple[tuple[float, float, float, float], dict[str, Any]]]] = {}
     for problem in problems:
         if not isinstance(problem, dict):
             continue
-        risk_flags = {str(flag) for flag in (problem.get("riskFlags") or []) if str(flag)}
-        if HWP_TEXT_FALLBACK_RISK_FLAG in risk_flags:
+        if _session_problem_is_hwp_text_fallback(problem):
             continue
         if _session_problem_is_supplemental(problem):
             # Shared passages can be assembled from disjoint column rectangles
@@ -9237,6 +9268,8 @@ def _classin_source_bbox_overlap_issues(problems: Sequence[dict[str, Any]]) -> l
                 group_id = _session_problem_passage_group_id(problem)
                 next_group_id = _session_problem_passage_group_id(next_problem)
                 if group_id and group_id == next_group_id:
+                    continue
+                if _session_problem_review_confirmed(problem) and _session_problem_review_confirmed(next_problem):
                     continue
                 next_left, next_top, next_right, next_bottom = next_bbox
                 next_area = (next_right - next_left) * (next_bottom - next_top)
@@ -9292,8 +9325,7 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
     for problem in problems:
         if not isinstance(problem, dict):
             continue
-        risk_flags = {str(flag) for flag in (problem.get("riskFlags") or []) if str(flag)}
-        if HWP_TEXT_FALLBACK_RISK_FLAG in risk_flags:
+        if _session_problem_is_hwp_text_fallback(problem):
             continue
         group_id = _session_problem_passage_group_id(problem)
         source_page_id = _problem_source_page_id(problem)
@@ -9323,6 +9355,8 @@ def _classin_passage_group_source_reuse_issues(problems: Sequence[dict[str, Any]
             if area <= 0:
                 continue
             for next_bbox, next_problem in candidates[index + 1:]:
+                if _session_problem_review_confirmed(problem) and _session_problem_review_confirmed(next_problem):
+                    continue
                 next_left, next_top, next_right, next_bottom = next_bbox
                 next_area = (next_right - next_left) * (next_bottom - next_top)
                 if next_area <= 0:
@@ -9604,6 +9638,17 @@ def _classin_missing_passage_child_question_issues(problems: Sequence[dict[str, 
         if not missing_numbers:
             continue
         problem_ids = _ordered_unique_strings(group.get("coreProblemIds") or group.get("core_problem_ids") or [])
+        core_problems = [problems_by_id.get(problem_id) for problem_id in problem_ids]
+        if core_problems and all(
+            isinstance(problem, dict)
+            and _session_problem_review_confirmed(problem)
+            and PASSAGE_MISSING_CHILD_QUESTIONS_RISK_FLAG
+            not in {str(flag) for flag in (problem.get("riskFlags") or problem.get("risk_flags") or [])}
+            for problem in core_problems
+        ):
+            # The teacher confirmed every question of this passage after it was
+            # flagged, so later publishes stop repeating the same notice.
+            continue
         issue_problem = problems_by_id.get(problem_ids[0]) if problem_ids else None
         missing_label = ", ".join(f"{number}번" for number in missing_numbers)
         issues.append(
