@@ -46,6 +46,8 @@ class TestDraftReleaseGuards(unittest.TestCase):
 
 class TestDraftReleaseArtifacts(unittest.TestCase):
     def test_stages_both_macs_and_windows_under_their_release_names(self):
+        import hashlib
+        import json
         import subprocess
         import sys
         import tempfile
@@ -60,12 +62,17 @@ class TestDraftReleaseArtifacts(unittest.TestCase):
             root = Path(raw)
             feed_input = root / 'feed-input'
             feed_input.mkdir()
-            for _, _, artifact_dir, _, built_name, release_name in stage.INSTALLERS:
+            for _, arch, artifact_dir, evidence_platform, built_name, release_name in stage.INSTALLERS:
                 metadata = root / artifact_dir / 'release-metadata'
                 metadata.mkdir(parents=True)
                 (metadata / '.edb-release-metadata-output').write_bytes(b'generated')
                 body = f'{artifact_dir} bytes'.encode()
                 (root / artifact_dir / built_name).write_bytes(body)
+                (root / artifact_dir / 'update-smoke.json').write_text(json.dumps({
+                    'platform': evidence_platform, 'arch': arch, 'targetVersion': version,
+                    'targetSha256': hashlib.sha256(body).hexdigest(), 'targetSourceCommit': commit,
+                    'wrongPinRejected': True,
+                }), encoding='utf-8')
                 (feed_input / release_name).write_bytes(body)
             feed_dir = root / 'update-feed'
             subprocess.run([

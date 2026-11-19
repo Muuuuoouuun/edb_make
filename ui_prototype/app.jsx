@@ -12403,7 +12403,7 @@ function HomeUpdateDialog({ open, onClose, busy, versionLine, statusLabel, child
   );
 }
 
-function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
+function BugReportDialog({ request, draft, onDraftChange, onClose, context, environmentLine = '' }){
   const [contact, setContact] = useState('');
   const [consentToContact, setConsentToContact] = useState(false);
   const [includeDiagnostics, setIncludeDiagnostics] = useState(true);
@@ -12597,14 +12597,14 @@ function BugReportDialog({ request, draft, onDraftChange, onClose, context }){
           </label>
           <label className="bug-report-diagnostics">
             <input type="checkbox" checked={includeDiagnostics} disabled={busy || Boolean(result?.reportId)} onChange={event => setIncludeDiagnostics(event.target.checked)} />
-            <span><strong>진단 정보 포함</strong><small>앱 버전, 운영체제, 오류 로그 일부를 함께 보냅니다.</small></span>
+            <span><strong>진단 정보 포함</strong><small>앱 버전, 운영체제, 오류·업데이트 기록 일부를 함께 보냅니다.</small></span>
           </label>
           <p className="bug-report-privacy">원본 시험지, 작업 내용, API 키, 컴퓨터 안의 전체 파일 경로는 보내지 않습니다.</p>
           {errorMessage && <div id="global-bug-report-error" className="bug-report-status error" role="alert">{errorMessage}</div>}
           {sendFailed && !busy && <div className="bug-report-field-help">
             <span>보내기가 계속 안 되면 내용을 복사해 담당자에게 전달해 주세요.</span>{' '}
             <button className="btn" type="button" onClick={async () => {
-              const reportText = [draftText, errorSnapshot ? operationErrorClipboardText(errorSnapshot) : ''].filter(Boolean).join('\n\n');
+              const reportText = [environmentLine, draftText, errorSnapshot ? operationErrorClipboardText(errorSnapshot) : ''].filter(Boolean).join('\n\n');
               try { await navigator.clipboard.writeText(reportText); setCopyStatus('신고 내용을 복사했어요.'); }
               catch (_error) { setCopyStatus('내용을 직접 선택해 복사해 주세요.'); }
             }}>신고 내용 복사</button>
@@ -16873,6 +16873,14 @@ function operationErrorClipboardText(error){
   ].filter(Boolean).join('\n');
 }
 
+// A copied report reaches a person, so it names the app version and the computer in plain words.
+function bugReportEnvironmentLine(updateInfo){
+  const mac = updateInfo?.platform ? updateInfo.platform === 'macos' : IS_MAC_PLATFORM;
+  const chip = updateInfo?.arch === 'arm64' ? ' (Apple 칩)' : updateInfo?.arch === 'x64' ? ' (인텔 칩)' : '';
+  const version = String(updateInfo?.currentVersion || '').trim();
+  return [version && `앱 버전 ${version}`, mac ? `Mac${chip}` : 'Windows'].filter(Boolean).join(' · ');
+}
+
 const OPERATION_RECOVERY_SUMMARIES = Object.freeze({
   publish_output_unavailable: '제작 파일을 저장할 폴더를 사용할 수 없습니다.',
   publish_build_failed: '자료를 EDB 형식으로 구성하는 중 문제가 발생했습니다.',
@@ -20570,6 +20578,7 @@ function App(){
         draft={bugReportDraft}
         onDraftChange={setBugReportDraft}
         onClose={() => setBugReportRequest(null)}
+        environmentLine={bugReportEnvironmentLine(updateInfo)}
         context={{
           view,
           settingsTab: bugReportRequest?.errorSnapshot ? 'recovery-dialog' : 'support-dialog',

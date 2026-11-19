@@ -43,6 +43,9 @@ except ImportError:  # pragma: no cover - direct script execution
     from build_release_metadata import collect_release_metadata_errors
 
 
+# package_macos_app.sh writes LSMinimumSystemVersion from this profile's minimumMacOS.
+OPENCV_IMAGE_PROFILE = Path(__file__).resolve().parents[1] / "release" / "opencv-image-profile.json"
+
 REQUIRED_RUNTIME_FILES = (
     "app_update_config.json",
     *REQUIRED_RUNTIME_SOURCE_FILES,
@@ -780,6 +783,14 @@ def collect_package_errors(
                                 f"macOS app bundle Info.plist {key} mismatch: "
                                 f"expected {expected_bundle_version!r}, found {value!r}"
                             )
+                    # Native libraries target this macOS; older Macs must get Finder's message, not a crash.
+                    expected_minimum = str(_read_json(OPENCV_IMAGE_PROFILE)["minimumMacOS"])
+                    minimum = str(info_plist.get("LSMinimumSystemVersion") or "").strip()
+                    if minimum != expected_minimum:
+                        errors.append(
+                            "macOS app bundle Info.plist LSMinimumSystemVersion mismatch: "
+                            f"expected {expected_minimum!r}, found {minimum!r}"
+                        )
 
     return errors
 

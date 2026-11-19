@@ -249,7 +249,8 @@ class TestPackagingSourceHardening(unittest.TestCase):
         source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")
 
         self.assertEqual(2, source.count("EDB_PACKAGE_UPDATE_PIN: ${{ secrets.EDB_UPDATE_PIN }}"))
-        self.assertEqual(2, source.count("Production release requires EDB_UPDATE_PIN."))
+        # Quality gate, macOS build and Windows build all refuse an update-channel build without the PIN.
+        self.assertEqual(3, source.count("EDB_UPDATE_PIN is required when update_channel=true or production_release=true"))
 
     def test_windows_workflow_uses_named_packaging_arguments(self) -> None:
         source = (PROJECT_ROOT / ".github" / "workflows" / "build-installers.yml").read_text(encoding="utf-8")

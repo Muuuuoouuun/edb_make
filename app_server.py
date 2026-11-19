@@ -1882,8 +1882,12 @@ def _update_root() -> Path:
     return Path(local) / "ClassInEDBMVP" / "updates" if local else RUNTIME_DIR / "updates"
 
 
+_UPDATE_FAILURE_SEEN = False  # the startup update check consumes the marker; bug reports still need it
+
+
 def _consume_update_failure_marker() -> bool:
     """Report once that an update helper gave up (it leaves ``update-failed`` in its folder)."""
+    global _UPDATE_FAILURE_SEEN
     found = False
     for marker in _update_root().glob("pending-*/update-failed"):
         try:
@@ -1891,7 +1895,29 @@ def _consume_update_failure_marker() -> bool:
             found = True
         except OSError:
             pass
+    _UPDATE_FAILURE_SEEN = _UPDATE_FAILURE_SEEN or found
     return found
+
+
+def _bug_report_diagnostics() -> tuple[dict[str, Path], dict[str, Any]]:
+    """Newest update attempt's logs, the startup log and a few flags support asks about first."""
+    logs = {"startup": _startup_log_path()}
+    try:
+        newest = max(_update_root().glob("pending-*"), key=lambda path: path.stat().st_mtime, default=None)
+        update_failed = _UPDATE_FAILURE_SEEN or any(_update_root().glob("pending-*/update-failed"))
+    except OSError:
+        newest, update_failed = None, _UPDATE_FAILURE_SEEN
+    if newest is not None:
+        logs.update(
+            updateHelper=newest / "update-helper.log",
+            updateHelperProcess=newest / "update-helper-process.log",
+            updateInstall=newest / "update-install.log",
+        )
+    return logs, {
+        "arch": _app_arch_key(),
+        "dataFolderFallback": is_frozen_app() and BASE_DIR != default_frozen_app_home(),
+        "lastUpdateFailed": update_failed,
+    }
 
 
 def _download_update_artifact(
@@ -12587,11 +12613,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             )
             return
         app_config = load_app_update_config()
+        extra_logs, extra_diagnostics = _bug_report_diagnostics()
         try:
             report = build_bug_report(
                 request_payload,
                 app_config=app_config,
                 log_file=APP_LOG_FILE,
+                extra_logs=extra_logs,
+                extra_diagnostics=extra_diagnostics,
             )
         except BugReportValidationError as exc:
             self._send_json(
@@ -13450,13 +13479,18 @@ def _startup_error_message(exc: BaseException) -> str:
     return "ClassIn EDB를 열지 못했습니다. 컴퓨터를 다시 시작한 뒤 다시 열어 주세요."
 
 
+def _startup_log_path() -> Path:
+    # Outside Documents, so the log survives a blocked work folder.
+    log_dir = Path.home() / "Library" / "Logs" if sys.platform == "darwin" else Path(tempfile.gettempdir())
+    return log_dir / "ClassInEDBMVP-startup.log"
+
+
 def _report_startup_failure(exc: BaseException) -> None:
     """Log the traceback and show a Korean dialog instead of PyInstaller's English one."""
     detail = traceback.format_exc()
-    # Outside Documents, so the log survives a blocked work folder.
-    log_dir = Path.home() / "Library" / "Logs" if sys.platform == "darwin" else Path(tempfile.gettempdir())
+    log_path = _startup_log_path()
     try:
-        with (log_dir / "ClassInEDBMVP-startup.log").open("a", encoding="utf-8") as handle:
+        with log_path.open("a", encoding="utf-8") as handle:
             handle.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n{detail}")
     except OSError:
         pass

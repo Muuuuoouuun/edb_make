@@ -230,6 +230,9 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                     "CFBundleName": "ClassInEDBMVP",
                     "CFBundleShortVersionString": version,
                     "CFBundleVersion": version,
+                    "LSMinimumSystemVersion": json.loads(
+                        (PROJECT_ROOT / "release" / "opencv-image-profile.json").read_text(encoding="utf-8")
+                    )["minimumMacOS"],
                 },
                 sort_keys=True,
             )
