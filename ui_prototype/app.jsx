@@ -8871,6 +8871,8 @@ function BoardStage({
   }, [pageH, boardOrderSignature, activeId, previewFitActive, layout.positions, contentW]);
 
   const setCurrentBoardDropTarget = (target) => {
+    // A group drag never lands on one of its own problems (that drop does nothing).
+    if (target && target.mode !== 'gap' && positionDragRef.current?.groupIds?.includes(String(target.id))) target = null;
     boardDropTargetRef.current = target;
     setBoardDropTarget(prev => (
       prev?.id === target?.id && prev?.position === target?.position
@@ -9484,13 +9486,14 @@ function BoardStage({
                 <span><kbd>F2</kbd> 수업 이름 바꾸기</span>
                 <span><kbd>{PRIMARY_MODIFIER_LABEL} Z</kbd> 되돌리기</span>
                 <span><kbd>{ALTERNATE_MODIFIER_LABEL} 1·2·3</kbd> 오른쪽 편집 · 크기·배치 · 설정</span>
-                <span><kbd>{ALTERNATE_MODIFIER_LABEL}+드래그</kbd> 칠판에서 순서 이동</span>
+                <span><kbd>{ALTERNATE_MODIFIER_LABEL} 드래그</kbd> 칠판에서 순서 이동</span>
                 <span><kbd>Esc</kbd> 칠판 드래그 취소</span>
                 <span><kbd>{ALTERNATE_MODIFIER_LABEL} ↑↓</kbd> 목록 순서 이동 (필터 중 제외)</span>
                 <span><kbd>Shift ↑↓</kbd> 목록 범위 선택</span>
                 <span><kbd>{PRIMARY_MODIFIER_LABEL} A</kbd> 목록 전체 선택</span>
                 <span><kbd>Delete</kbd> 목록에서 선택한 문제 삭제</span>
                 <span><kbd>Esc</kbd> 목록 선택 해제</span>
+                <span className="board-shortcut-note">목록 단축키는 왼쪽 목록에서 문제를 클릭한 뒤 쓸 수 있어요.</span>
               </div>
             )}
             {estimateDetailsOpen && ReactDOM.createPortal(
@@ -11133,7 +11136,8 @@ function SidePanel({
     if (target?.id) setActive?.(target.id);
   };
   useEffect(() => {
-    setPlacementScope(multiSelectionCount ? 'selected' : selectedPassageGroupId ? 'group' : 'item');
+    // '선택 N개' stays opt-in: a multi-selection never widens the edit scope by itself.
+    setPlacementScope(selectedPassageGroupId ? 'group' : 'item');
     setPlacementPreset('auto');
   }, [item?.id, selectedPassageGroupId, multiSelectionCount]);
 

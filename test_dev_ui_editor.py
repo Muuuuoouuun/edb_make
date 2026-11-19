@@ -107,11 +107,14 @@ class TestReviewDeleteKeys(unittest.TestCase):
           confirmPageAndAdvance: async () => calls.push('page'), selectNextUnresolvedProblem() {},
           nextUnresolvedProblemId: null,
           historyStack: [{}], undoMutation: () => calls.push('undo'),
+          // dev/ui-undo rewrites the same listener with these names; keep the guard there too.
+          canUndo: true, canRedo: false, redoMutation: () => calls.push('redo'),
+          manualSplitShortcutKey: evt => String(evt.key).toLowerCase(),
         });
         """ + self.DELETE_EFFECT + r"""
         vm.runInContext(section("  useEffect(() => {\n    if (reviewEditorActive || reviewFlow.complete) return undefined;",
           "  useEffect(() => {\n    // 영역 조정 owns Delete/Backspace"), sandbox);
-        vm.runInContext(section('  // Ctrl/Cmd+Z → undo.', '  // initial session fetch'), sandbox);
+        vm.runInContext(section('  // Ctrl/Cmd+Z → undo', '  // initial session fetch'), sandbox);
         assert.equal(listeners.length, 3);
         press('Backspace', dialogButton);
         press('Enter', dialogButton, { ctrlKey: true });
@@ -188,11 +191,18 @@ class TestPlacementSelectionScope(unittest.TestCase):
         assert.equal(resolve(), 'b|현재 자료 1개', 'a collapsed selection falls back to the active problem');
         """)
 
-    def test_multi_selection_defaults_the_scope_and_offers_the_button(self) -> None:
-        self.assertIn(
-            "setPlacementScope(multiSelectionCount ? 'selected' : selectedPassageGroupId ? 'group' : 'item');",
-            SOURCE,
-        )
+    def test_multi_selection_keeps_the_safe_scope_and_offers_the_button(self) -> None:
+        run_node(NODE_SETUP + r"""
+        const scopes = [];
+        const sandbox = { useEffect: effect => effect(), setPlacementScope: scope => scopes.push(scope),
+          setPlacementPreset() {}, item: { id: 'b' }, selectedPassageGroupId: '', multiSelectionCount: 3 };
+        vm.createContext(sandbox);
+        const reset = section("  useEffect(() => {\n    // '선택 N개' stays opt-in", '  const updatePlacementTargets =');
+        vm.runInContext(reset, sandbox);
+        sandbox.selectedPassageGroupId = 'g1';
+        vm.runInContext(reset, sandbox);
+        assert.deepEqual(scopes, ['item', 'group'], '선택 N개 is opt-in; a multi-selection never widens the scope by itself');
+        """)
         self.assertIn("}, [item?.id, selectedPassageGroupId, multiSelectionCount]);", SOURCE)
         self.assertIn("onClick={() => selectPlacementScope('selected')}", SOURCE)
 
@@ -253,6 +263,23 @@ class TestBoardGroupDrag(unittest.TestCase):
         assert.equal(shifts(), null, 'no preview for a drop on a selected sibling');
         """)
 
+    def test_group_drag_shows_no_drop_target_on_its_own_problems(self) -> None:
+        run_node(NODE_SETUP + r"""
+        let shown = 'unset';
+        const sandbox = { boardDropTargetRef: { current: null }, positionDragRef: { current: { groupIds: ['p1', 'p2'] } },
+          setBoardDropTarget: update => { shown = update(null); } };
+        vm.createContext(sandbox);
+        vm.runInContext(section('  const setCurrentBoardDropTarget = (target) => {', '  const findBoardDropTarget =')
+          + '\nglobalThis.setTarget = setCurrentBoardDropTarget;', sandbox);
+        const show = target => { sandbox.setTarget(target); return shown; };
+        assert.equal(show({ id: 'p2', mode: 'reorder', position: 'after' }), null, 'smart move over a selected sibling');
+        assert.equal(show({ id: 'p2', position: 'before' }), null, 'Alt-drag over a selected sibling');
+        assert.equal(show({ id: 'p3', mode: 'reorder', position: 'after' }).id, 'p3');
+        assert.equal(show({ id: 'p2', mode: 'gap', position: 'gap' }).mode, 'gap', 'gap pulls still work');
+        sandbox.positionDragRef.current = { groupIds: null };
+        assert.equal(show({ id: 'p2', position: 'before' }).id, 'p2', 'a single-problem drag is unchanged');
+        """)
+
 
 class TestBoardShortcutSheet(unittest.TestCase):
     def test_more_menu_toggles_an_os_aware_shortcut_sheet(self) -> None:
@@ -268,10 +295,12 @@ class TestBoardShortcutSheet(unittest.TestCase):
         keys().onSelect();
         assert.equal(keys().label, '단축키 닫기');
         const guide = text(findClass(renderEstimate(), 'board-shortcut-guide'));
-        for (const label of ['F2', '⌘ Z', '⌘ A', 'Option 1·2·3', 'Option ↑↓', 'Option+드래그', 'Shift ↑↓', 'Delete', 'Esc']) {
+        for (const label of ['F2', '⌘ Z', '⌘ A', 'Option 1·2·3', 'Option ↑↓', 'Option 드래그', 'Shift ↑↓', 'Delete', 'Esc']) {
           assert.ok(guide.includes(label), `missing ${label}`);
         }
         assert.ok(!guide.includes('Ctrl') && !guide.includes('Alt'), 'Mac wording must not show Windows keys');
+        assert.ok(!guide.includes('+'), 'every row writes modifier keys the same way (no "+")');
+        assert.ok(guide.includes('왼쪽 목록에서 문제를 클릭한 뒤'), 'list keys need a focused list row; say so');
         keys().onSelect();
         assert.equal(findClass(renderEstimate(), 'board-shortcut-guide'), undefined);
         """)

@@ -7053,6 +7053,7 @@
   }
   /* Board shortcut sheet: its own full-width row under the board toolbar. */
   .board-shortcut-guide{ flex: 1 0 100%; margin-bottom: 4px; }
+  .board-shortcut-guide .board-shortcut-note{ grid-column: 1 / -1; color: var(--muted); }
   .manual-split-empty,
   .manual-split-note{
     padding: 12px;
