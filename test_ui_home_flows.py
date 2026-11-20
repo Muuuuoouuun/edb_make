@@ -128,6 +128,7 @@ class TestUiHomeFlows(unittest.TestCase):
           setRecognitionReview: () => { reviewClears += 1; },
           selectPendingFile: key => { selected = key; },
           showToast: message => toasts.push(message),
+          session: null, runtimeDiagnostics: null,
         };
         vm.createContext(sandbox);
         vm.runInContext(section('function fileQueueKey(', 'function sourceFileExtension(')

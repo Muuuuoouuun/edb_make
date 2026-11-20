@@ -90,7 +90,7 @@ class TestStabilizeUiFlow(unittest.TestCase):
           useCallback: fn => fn, pendingFilesRef: { current: [] }, autoProcessKeysRef: { current: new Set() },
           pendingFileKeysRef: { current: new Set() }, queueGenerationRef: { current: 0 }, items: [],
           fileInputRef: { current: { value: 'picked' } }, setPendingFiles() {}, setRecognitionReview() {},
-          selectPendingFile() {}, showToast: message => toasts.push(message),
+          selectPendingFile() {}, showToast: message => toasts.push(message), session: null, runtimeDiagnostics: null,
         };
         vm.createContext(sandbox);
         vm.runInContext(section('function fileQueueKey(', 'function sourceFileExtension(')

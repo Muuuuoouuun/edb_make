@@ -6980,6 +6980,7 @@ function replacePendingSourceFile(files, targetKey, replacement){
   const index = files.findIndex(file => fileQueueKey(file) === targetKey);
   if (index < 0) throw new Error('교체할 파일이 대기열에 없습니다. 파일을 다시 선택해 주세요.');
   if (!replacement) return files;
+  if (!UPLOAD_FILE_EXTENSION_PATTERN.test(String(replacement.name || ''))) throw new Error(unsupportedUploadNotice([replacement.name]));
   const key = fileQueueKey(replacement);
   if (files.some((file, i) => i !== index && fileQueueKey(file) === key)) {
     throw new Error('이미 대기열에 있는 파일입니다. 기존 파일은 유지했어요.');
@@ -10470,10 +10471,11 @@ async function openPublishedEdb(target){
     });
     const json = await readJsonResponse(resp, '파일 열기 실패').catch(() => ({}));
     if (!resp.ok || !json.ok) {
-      console.warn('[board] open-file failed:', json.error || resp.status);
-      notifyOpenFailure(resp.status === 404
-        ? '파일을 찾지 못했어요. EDB를 다시 제작해 주세요.'
-        : 'ClassIn을 열지 못했어요. ClassIn이 설치돼 있는지 확인해 주세요.');
+      console.warn('[board] open-file failed:', json.detail || json.error || resp.status);
+      if (resp.status === 404) notifyOpenFailure('파일을 찾지 못했어요. EDB를 다시 제작해 주세요.');
+      // Nothing on this computer opens .edb (or ClassIn is missing): hand over the file's folder instead.
+      else notifyOpenFailure('ClassIn에서 바로 열지 못했어요. 폴더에서 EDB 파일을 찾아 ClassIn에서 불러와 주세요.',
+        { actionLabel: '폴더 열기', onAction: () => openOutputFolder(edbPath) });
     }
   } catch (e) {
     console.warn('[board] open-file error:', e.message);
@@ -10482,8 +10484,8 @@ async function openPublishedEdb(target){
 }
 
 // The open helpers live outside App, so App turns this event into its usual toast.
-function notifyOpenFailure(message){
-  window.dispatchEvent(new CustomEvent('edb-notice', { detail: { message, type: 'error' } }));
+function notifyOpenFailure(message, action = {}){
+  window.dispatchEvent(new CustomEvent('edb-notice', { detail: { message, type: 'error', ...action } }));
 }
 
 function readSettingsSectionsOpen(){
@@ -13166,7 +13168,8 @@ function OperationRecoveryBanner({
           {!localServerUnavailable && !isReset && !isQueue && !isRestore && (!isDownload || canExport) && <button className="btn" type="button" onClick={onExport} disabled={!canExport || anyBusy || conflictNeedsResolution}>
             {Icon.pagePng} {exportBusy ? '저장 중…' : 'PNG로 대체 저장'}
           </button>}
-          {!localServerUnavailable && !isDownload && !isReset && <button
+          {/* One bad file must not offer to wipe the queue, the board and 최근 수업. */}
+          {!localServerUnavailable && !isDownload && !isReset && !isQueue && <button
             className="btn"
             type="button"
             onClick={onReset}
@@ -13584,6 +13587,13 @@ function fileQueueKey(file){
 // screenshot arrives as a generic "image.png", so it gets a readable,
 // time-stamped name that also keeps repeated pastes apart in the queue.
 const UPLOAD_FILE_EXTENSION_PATTERN = /\.(pdf|hwpx?|png|jpe?g|webp|bmp|tiff?)$/i;
+// iPhone photos arrive as HEIC, which reads as an image to the teacher: say how to convert it.
+function unsupportedUploadNotice(names){
+  if (!names.some(name => /\.hei[cf]$/i.test(String(name || '')))) return 'PDF, HWP, PNG, JPG 파일만 넣을 수 있어요';
+  return IS_MAC_PLATFORM
+    ? 'HEIC 사진은 넣을 수 없어요. Finder에서 파일을 오른쪽 클릭 → 빠른 동작 → 이미지 변환으로 JPEG로 바꾼 뒤 넣어 주세요'
+    : 'HEIC 사진은 넣을 수 없어요. JPG로 바꾼 뒤 넣어 주세요';
+}
 const CLIPBOARD_IMAGE_EXTENSIONS = {
   'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/tiff': 'tif',
 };
@@ -13596,11 +13606,11 @@ function clipboardUploadFiles(clipboardData, now = new Date()){
   const pad = value => String(value).padStart(2, '0');
   const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const accepted = [];
-  let rejected = 0;
+  const rejected = [];
   files.forEach(file => {
     const name = String(file?.name || '');
     const imageExtension = CLIPBOARD_IMAGE_EXTENSIONS[String(file?.type || '').toLowerCase()];
-    if (!UPLOAD_FILE_EXTENSION_PATTERN.test(name) && !imageExtension) { rejected += 1; return; }
+    if (!UPLOAD_FILE_EXTENSION_PATTERN.test(name) && !imageExtension) { rejected.push(name); return; }
     const generic = !name || /^image\.[a-z0-9]+$/i.test(name) || !UPLOAD_FILE_EXTENSION_PATTERN.test(name);
     if (!generic) { accepted.push(file); return; }
     const extension = imageExtension || name.split('.').pop().toLowerCase();
@@ -18401,10 +18411,14 @@ function App(){
   }, [showToast]);
 
   useEffect(() => {
-    const onNotice = event => showToast(event.detail?.message || '', event.detail?.type || 'info');
+    const onNotice = event => {
+      const detail = event.detail || {};
+      if (detail.onAction) showActionToast(detail.message || '', detail.actionLabel, detail.onAction);
+      else showToast(detail.message || '', detail.type || 'info');
+    };
     window.addEventListener('edb-notice', onNotice);
     return () => window.removeEventListener('edb-notice', onNotice);
-  }, [showToast]);
+  }, [showToast, showActionToast]);
 
   const clearOperationRecovery = useCallback(() => {
     setOperationRecoveryState(state => operationRecoveryStateTransition(state, { type: 'clear' }));
@@ -19884,18 +19898,43 @@ function App(){
 
   const triggerUpload = () => fileInputRef.current?.click();
 
+  const newLessonAskedRef = useRef(null);
   const handleFiles = (fileList) => {
     const incoming = Array.from(fileList || []);
     // An unsupported file would fail the whole batch on upload, so leave it out here.
-    const files = incoming.filter(file => UPLOAD_FILE_EXTENSION_PATTERN.test(String(file?.name || '')));
-    const skipped = incoming.length - files.length;
+    const supported = incoming.filter(file => UPLOAD_FILE_EXTENSION_PATTERN.test(String(file?.name || '')));
+    // No HWP converter (Home pill 'PDF로 저장 필요'): a Hangul file would fail the whole batch after the PDFs have run.
+    const hangulBlocked = runtimeDiagnostics?.hangul?.status === 'blocked' ? supported.filter(isHwpFile) : [];
+    // Windows hands over the last-clicked file first. Keep one pick or drop in the name order
+    // Explorer and Finder show: IMG_2 before IMG_10, 'Scan' before 'Scan (2)'. Queued files keep their order.
+    const byName = new Intl.Collator('ko', { numeric: true });
+    const stem = file => String(file?.name || '').replace(/\.[^.]*$/, '');
+    const files = supported.filter(file => !hangulBlocked.includes(file))
+      .sort((a, b) => byName.compare(stem(a), stem(b)) || byName.compare(String(a?.name || ''), String(b?.name || '')));
+    const skipped = incoming.filter(file => !supported.includes(file)).map(file => file?.name);
     if (fileInputRef.current) fileInputRef.current.value = '';
-    if (skipped) {
-      showToast(files.length
-        ? `지원하지 않는 파일 ${skipped}개는 빼고 담았어요. PDF, HWP, 이미지 파일만 넣을 수 있어요`
-        : 'PDF, HWP, 이미지 파일만 넣을 수 있어요', files.length ? 'info' : 'error');
+    if (hangulBlocked.length) {
+      const names = hangulBlocked.length > 1 ? `${hangulBlocked[0].name} 외 ${hangulBlocked.length - 1}개` : hangulBlocked[0].name;
+      showToast(`한글 파일은 바로 열 수 없어 빼 두었어요(${names}). 한글 프로그램에서 PDF로 저장한 뒤 그 PDF를 넣어 주세요`,
+        files.length ? 'info' : 'error');
+    } else if (skipped.length) {
+      const notice = unsupportedUploadNotice(skipped);
+      showToast(files.length ? `지원하지 않는 파일 ${skipped.length}개는 빼고 담았어요. ${notice}` : notice, files.length ? 'info' : 'error');
     }
     if (!files.length) return 0;
+    // Material dropped on a lesson whose EDB is built is usually the next lesson: ask once per build.
+    const builtAt = session && sessionPublishSummary(session)?.publishedAt;
+    if (builtAt && newLessonAskedRef.current !== builtAt && !sessionEditState.dirty && !pendingFilesRef.current.length) {
+      newLessonAskedRef.current = builtAt;
+      if (window.confirm(`새 수업으로 시작할까요?\n\n‘${fileName}’ 수업은 EDB까지 만들었어요. 새 수업을 시작해도 이 수업은 최근 수업에 그대로 남아요.\n취소를 누르면 이 수업 뒤에 이어서 넣어요.`)) {
+        // The closure may still hold this lesson until React re-renders; the ref keeps the call from asking twice.
+        void resetSession({ keepHistory: true }).then(ok => {
+          if (ok) handleFilesRef.current(files);
+          else newLessonAskedRef.current = null;
+        });
+        return 0;
+      }
+    }
     const addition = appendUniquePendingFiles(pendingFilesRef.current, files);
     if (!addition.addedFiles.length) {
       showToast('이미 대기열에 있는 파일입니다');
@@ -19942,7 +19981,7 @@ function App(){
     setPendingFilesTracked(prev => prev.filter(file => fileQueueKey(file) !== key));
     if (
       (operationRecovery?.kind === 'recognition' || operationRecovery?.kind === 'registration')
-      && operationRecovery.retryTargetKey === key
+      && operationRecovery.retryKeys?.includes(key)
     ) clearOperationRecovery();
   }, [operationRecovery, setPendingFilesTracked, clearOperationRecovery]);
 
@@ -19967,10 +20006,10 @@ function App(){
         || isEditableKeyboardTarget(document.activeElement)
         || document.querySelector('dialog[open], [aria-modal="true"]:not([hidden])')) return;
       const { files, rejected } = clipboardUploadFiles(event.clipboardData);
-      if (!files.length && !rejected) return;
+      if (!files.length && !rejected.length) return;
       event.preventDefault();
       if (!files.length) {
-        showToast('이미지, PDF, HWP 파일만 붙여넣을 수 있어요');
+        showToast(unsupportedUploadNotice(rejected));
         return;
       }
       const added = handleFilesRef.current(files);
@@ -20113,7 +20152,7 @@ function App(){
         }, {
           kind: 'recognition',
           retryMode: mode,
-          retryTargetKey: targetKey,
+          retryKeys: fileKeys,
           retryLabel: isPassageOnly ? '공통 지문 다시 추출' : '문제 인식 다시 시도',
           alternativeMode: 'register',
           alternativeLabel: '페이지 PNG로 등록',
@@ -20170,7 +20209,7 @@ function App(){
       }, {
         kind: 'registration',
         retryMode: mode,
-        retryTargetKey: targetKey,
+        retryKeys: fileKeys,
         retryLabel: isManualSplit ? '수동 자르기 다시 열기' : '페이지 PNG 등록 다시 시도',
         alternativeMode: isManualSplit ? 'register' : 'manual-split',
         alternativeLabel: isManualSplit ? '페이지 PNG로 등록' : '수동 자르기로 열기',
@@ -21205,15 +21244,13 @@ function App(){
       return;
     }
     if (recovery.kind === 'recognition' || recovery.kind === 'registration') {
-      if (
-        recovery.retryTargetKey
-        && !pendingFiles.some(file => fileQueueKey(file) === recovery.retryTargetKey)
-      ) {
+      // Rerun only the files that failed, not everything else waiting in the queue.
+      if (!pendingFiles.some(file => recovery.retryKeys?.includes(fileQueueKey(file)))) {
         clearOperationRecovery();
         showToast('실패한 원본 파일이 대기열에 없습니다. 파일을 다시 추가해 주세요');
         return;
       }
-      void processQueuedFiles(recovery.retryMode || 'register', recovery.retryTargetKey || null);
+      void processQueuedFiles(recovery.retryMode || 'register', null, recovery.retryKeys);
       return;
     }
     if (recovery.kind === 'restore') {
@@ -21258,15 +21295,12 @@ function App(){
   const runRecoveryAlternative = () => {
     const recovery = operationRecovery;
     if (recovery?.kind === 'recognition' || recovery?.kind === 'registration') {
-      if (
-        recovery.retryTargetKey
-        && !pendingFiles.some(file => fileQueueKey(file) === recovery.retryTargetKey)
-      ) {
+      if (!pendingFiles.some(file => recovery.retryKeys?.includes(fileQueueKey(file)))) {
         clearOperationRecovery();
         showToast('실패한 원본 파일이 대기열에 없습니다. 파일을 다시 추가해 주세요');
         return;
       }
-      void processQueuedFiles(recovery.alternativeMode || 'register', recovery.retryTargetKey || null);
+      void processQueuedFiles(recovery.alternativeMode || 'register', null, recovery.retryKeys);
       return;
     }
     void exportSessionImages();
