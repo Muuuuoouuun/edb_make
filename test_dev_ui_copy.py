@@ -61,6 +61,7 @@ class TestDevUiCopy(unittest.TestCase):
             'aria-label="되돌리기"', "'되돌리기'", "이름 없는 작업", "작업 이름으로", "최근 작업",
             "ID, 번호", "고객을 확인할 수 있는 ID", "'OCR 미사용'", "로컬 2K",
             "<code>{errorSnapshot.code || 'unknown'}</code>", "배포 서버", "1.2p는", "1.2p 경계",
+            "빠른 자르기", "수동 쪼개기", "영역 다시 잡기", "문항 다시 나누기", "선택 항목 재분할", "연속 자르기·스탬프",
         ):
             self.assertNotIn(gone, APP, gone)
         for kept in (
@@ -68,6 +69,8 @@ class TestDevUiCopy(unittest.TestCase):
             "{tileClassinStartPage}–{tileClassinEndPage}쪽", "it.step === 's3' ? '고화질'",
             ">쪽 맞춤</button>", "<strong>EDB 제작</strong>", "'신고 보내기'", 'aria-label="실행 취소"',
             "'이름 없는 수업'", 'placeholder="수업 이름으로 검색"', "'기본 간격은 ClassIn 쪽 경계에 맞춥니다.'",
+            "{Icon.crop} 영역 넓히기", "[['crop','영역 조정'],['split','수동 자르기']]", "{Icon.pen} 수동 자르기",
+            "disabled={busy || !changed}>원래 영역으로</button>", "onClick={onCancel}>{Icon.arrowLeft} 취소</button>",
         ):
             self.assertIn(kept, APP, kept)
 
@@ -185,7 +188,8 @@ class TestDevUiCopy(unittest.TestCase):
         self.assertIn("macOS 14 이상에서 설치할 수 있습니다", GUIDE)
         self.assertNotIn("macOS 12·13", GUIDE)
         self.assertIn("브라우저 탭을 실수로 닫았다면 `응용 프로그램` 폴더에서 `ClassInEDBMVP`를 다시 열면", GUIDE)
-        for gone in ("EDB 메이크는 기본", "EDB 메이크를 실행", "`EDB 만들기`", "`리포트 보내기`", "세션", "서버의", "로컬"):
+        for gone in ("EDB 메이크는 기본", "EDB 메이크를 실행", "`EDB 만들기`", "`리포트 보내기`", "세션", "서버의", "로컬",
+                     "수동 쪼개기"):
             self.assertNotIn(gone, GUIDE, gone)
 
 
