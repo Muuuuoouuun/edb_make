@@ -123,6 +123,27 @@ def test_failed_retry_toast_says_the_items_stayed_and_what_to_check() -> None:
     """)
 
 
+def test_mixed_ai_retry_toast_names_the_pages_left_as_they_were() -> None:
+    run_node(RECOGNITION_SETUP + r"""
+    (async () => {
+      const applied = { pageId: 'pg1', status: 'applied', replacedProblemCount: 1 };
+      for (const [rows, expected] of [
+        [[applied, { pageId: 'pg2', status: 'failed', error: 'Gemini request failed: [WinError 10061]' }],
+          'AI 결과를 받지 못한 1쪽은 그대로 뒀어요 · 인터넷 연결과 Gemini API 키·사용량을 확인해 주세요 · AI 인식 적용 · 1 item · Ctrl+Z로 실행 취소'],
+        [[applied], 'AI 인식 적용 · 1 item · Ctrl+Z로 실행 취소'],
+      ]) {
+        const { sandbox: s, events } = transaction({
+          PRIMARY_MODIFIER_LABEL: 'Ctrl',
+          recognitionReview: { kind: 'retry-ai', session: { problems: [{ id: 'p1' }] }, pageIds: ['pg1', 'pg2'],
+            problemIds: [], snapshotBefore: { problems: [{ id: 'existing' }] }, retrySummary: rows },
+        });
+        await s.applyResult();
+        assert.deepEqual(events.filter(event => event[0] === 'toast').map(event => event[1]), [expected]);
+      }
+    })().catch(error => { console.error(error); process.exitCode = 1; });
+    """)
+
+
 def test_import_notice_names_pages_split_without_ai() -> None:
     run_node(NODE_SETUP + r"""
     const sandbox = {
@@ -242,7 +263,7 @@ def test_closing_the_manual_split_asks_before_drawn_areas_are_lost() -> None:
     """)
 
 
-def test_closing_a_changed_passage_stitch_asks_but_a_single_crop_does_not() -> None:
+def test_closing_the_box_editor_asks_only_when_drawn_areas_would_be_lost() -> None:
     run_node(NODE_SETUP + r"""
     let state, prompts = [], answer = false;
     const sandbox = {
@@ -250,6 +271,7 @@ def test_closing_a_changed_passage_stitch_asks_but_a_single_crop_does_not() -> N
       window: { confirm: message => { prompts.push(message); return answer; } },
       boxEditDragRef: { current: null }, boxEditCommitRef: { current: false },
       setBoxEditDraftBox() {}, setBoxEdit: value => { state = value; },
+      originalModeDrafts: { current: { crop: null, split: null } },
     };
     vm.createContext(sandbox);
     vm.runInContext(section('function reviewBoxesEqual(', 'function editableSourceSegmentsForProblem(')
@@ -273,6 +295,18 @@ def test_closing_a_changed_passage_stitch_asks_but_a_single_crop_does_not() -> N
     sandbox.cancel();
     assert.equal(state, null);
     assert.equal(prompts.length, 0, 'an untouched passage and a single 영역 조정 close without asking');
+
+    // 수동 자르기 → 영역 조정 tab: the drawn areas wait in originalModeDrafts and close with the editor.
+    answer = false;
+    sandbox.originalModeDrafts.current.split = { regions: [{ id: 'r1' }, { id: 'r2' }] };
+    const single = { multi: false, originalSegments: [segment('a', 0)], segments: [segment('a', 0)] };
+    state = sandbox.boxEdit = single;
+    sandbox.cancel();
+    assert.equal(state, single, 'declining keeps the areas drawn in 수동 자르기');
+    assert.deepEqual(prompts, ['적용하지 않은 영역 2개가 사라집니다. 편집을 닫을까요?']);
+    answer = true;
+    sandbox.cancel();
+    assert.equal(state, null);
     """)
 
 

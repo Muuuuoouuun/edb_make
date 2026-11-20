@@ -5054,6 +5054,9 @@ function ReviewStage({
     setManualSplitDraftBox(null);
   };
   const cancelBoxEdit = () => {
+    // Areas drawn in the 수동 자르기 tab wait in originalModeDrafts and close with the editor.
+    const draftRegionCount = (originalModeDrafts.current.split?.regions || []).length;
+    if (draftRegionCount && !window.confirm(`적용하지 않은 영역 ${draftRegionCount}개가 사라집니다. 편집을 닫을까요?`)) return;
     // A single 영역 조정 closes on Esc ('Esc 취소'); several passage areas are worth a question.
     if (boxEdit?.multi && !boxEditSegmentsEqual(boxEdit.originalSegments, boxEdit.segments)
       && !window.confirm('적용하지 않은 영역 변경이 사라집니다. 편집을 닫을까요?')) return;
@@ -20275,8 +20278,11 @@ function App(){
         }
         refreshSessionHistory();
         const summary = summarizeRecognitionSession(restored, review.pageIds);
+        // A mixed retry applies only the pages that got an AI result (none at all is refused with 502).
+        const keptPageCount = (review.retrySummary || []).filter(row => row?.status !== 'applied').length;
         showToast([
           review.fallbackMessage,
+          keptPageCount ? `AI 결과를 받지 못한 ${keptPageCount}쪽은 그대로 뒀어요 · 인터넷 연결과 Gemini API 키·사용량을 확인해 주세요` : '',
           `AI 인식 적용 · ${summary.problemLabel}`,
           `${PRIMARY_MODIFIER_LABEL}+Z로 실행 취소`,
         ].filter(Boolean).join(' · '), { duration: 4500 });
