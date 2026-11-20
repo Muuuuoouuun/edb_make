@@ -5349,7 +5349,7 @@ def _apply_classin_review_result(
     return review
 
 
-def _session_history_key(session: dict[str, Any]) -> str:
+def _session_history_key(session: dict[str, Any], *, folder_only: bool = False) -> str:
     # Set when a write moved the lesson to outputs/recovered: one 최근 수업 entry follows it there.
     history_key = str(session.get("history_key") or "").strip()
     if history_key:
@@ -5359,6 +5359,8 @@ def _session_history_key(session: dict[str, Any]) -> str:
         if value:
             # Decoded: after the data folder moves, the old and new spellings give one key.
             return str(decode_file_reference(value) or value)
+    if folder_only:
+        return ""  # the name|time fallback below can be shared by two different lessons
     name = str(session.get("session_name") or session.get("sessionName") or "session")
     generated_at = str(session.get("generated_at") or session.get("generatedAt") or "")
     source_files = "|".join(str(path) for path in (session.get("input_files") or session.get("inputFiles") or []))
@@ -5424,7 +5426,7 @@ def _session_history_with_session(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     entry = _session_history_entry(session, updated_at=updated_at)
-    key = _session_history_key(entry["session"])
+    key = _session_history_key(entry["session"], folder_only=True)
     seen = {entry["id"]}
     merged = [entry]
     for raw in history:
@@ -5433,7 +5435,8 @@ def _session_history_with_session(
         entry_id = str(raw.get("id") or "")
         snapshot = raw.get("session") if isinstance(raw.get("session"), dict) else raw
         # Stored ids were hashed from the folder spelling of their day; a moved data folder changes it.
-        if not entry_id or entry_id in seen or _session_history_key(snapshot) == key:
+        # Lessons without a folder keep id-only dedupe.
+        if not entry_id or entry_id in seen or (key and _session_history_key(snapshot, folder_only=True) == key):
             continue
         seen.add(entry_id)
         merged.append(raw)
