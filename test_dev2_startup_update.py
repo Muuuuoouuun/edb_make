@@ -152,7 +152,7 @@ def test_second_copy_on_a_moved_port_also_says_when_another_version_runs():
     with mock.patch.object(app, "is_frozen_app", return_value=True), \
             mock.patch.object(app.sys, "platform", "darwin"), \
             mock.patch.object(app, "ensure_runtime_dirs"), \
-            mock.patch.object(app, "hydrate_user_settings_env"), \
+            mock.patch.object(app, "hydrate_user_settings_env") as hydrate, \
             mock.patch.object(app, "write_placeholder_generated_session"), \
             mock.patch.object(app, "load_app_update_config", return_value={"version": "0.2.15"}), \
             mock.patch.object(app, "_local_server_is_healthy", side_effect=lambda _h, p, **_kw: p == 8766), \
@@ -164,6 +164,7 @@ def test_second_copy_on_a_moved_port_also_says_when_another_version_runs():
     alert.assert_called_once()
     browser.assert_called_once_with("http://127.0.0.1:8766/")
     assert server_class.call_count == 1  # 8765 tried once, the copy on 8766 reused
+    hydrate.assert_not_called()  # R47: an older running copy still reads its settings from Documents
 
 
 def test_windows_reuse_never_probes_or_alerts():
@@ -215,7 +216,7 @@ def test_another_accounts_copy_on_the_port_makes_this_one_take_the_next_port():
 
     try:
         with mock.patch.object(app, "ensure_runtime_dirs"), \
-                mock.patch.object(app, "hydrate_user_settings_env"), \
+                mock.patch.object(app, "hydrate_user_settings_env") as hydrate, \
                 mock.patch.object(app, "write_placeholder_generated_session"), \
                 mock.patch.object(app, "_prune_stale_update_downloads"), \
                 mock.patch.object(app, "_run_startup_maintenance"), \
@@ -228,6 +229,7 @@ def test_another_accounts_copy_on_the_port_makes_this_one_take_the_next_port():
     assert server_class.call_args.args[0] == ("127.0.0.1", port + 1)
     browser.assert_called_once_with(f"http://127.0.0.1:{port + 1}/")
     ours.serve_forever.assert_called_once()
+    hydrate.assert_called_once()  # the copy that serves still loads (and moves) the settings
 
 
 # R42: the loopback probe went through the system proxy -----------------------------------------

@@ -14116,7 +14116,6 @@ def _run_startup_maintenance(server: AppHTTPServer) -> None:
 
 def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
     ensure_runtime_dirs()
-    hydrate_user_settings_env()
     write_placeholder_generated_session()
     handler = partial(AppRequestHandler)
     # 8765 stays first (bookmarks, browser storage); the next ports cover another program
@@ -14145,6 +14144,9 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
                 return
             if not address_in_use or candidate == candidate_ports[-1]:
                 raise
+    # Only the copy that serves moves and loads the settings: a reused copy may be an
+    # older version that still reads them from Documents.
+    hydrate_user_settings_env()
     threading.Thread(target=_prune_stale_update_downloads, name="update-prune", daemon=True).start()
     print(f"{APP_NAME} running at {url}")
     if open_browser:
