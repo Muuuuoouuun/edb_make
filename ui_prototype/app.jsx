@@ -9835,7 +9835,10 @@ function BoardStage({
 function RailItemDetails({ it, i, hasPageChrome }){
   const originalNumber = originalProblemNumberInfo(it);
   const pageAsIs = it.inputIntent === 'page-as-is' || it.placementMode === 'continuous-page-as-is';
-  const rowName = originalNumber.status === 'passage' ? '공통 지문'
+  // Questions of a passage group carry its range too; only passage rows show it.
+  const passageRange = originalNumber.status === 'passage' ? passageRangeLabelFor(it) : '';
+  const rowName = passageRange ? `지문 ${passageRange}`
+    : originalNumber.status === 'passage' ? '공통 지문'
     : pageAsIs ? problemSourceLabel(it)
       : originalNumber.status === 'known' ? `${originalNumber.number}번`
         : originalNumber.status === 'inferred' ? `${originalNumber.number}번 · 추정`
@@ -14074,8 +14077,15 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   ).map(item => applyItemStateToProblem(mergedProblemsById.get(item.id) || {}, item));
   const mergedPages = [...(base.pages || []), ...incomingPages];
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
+  // A lesson mixing 공통 지문만 추출 and 문항 AI 인식 files is reviewed as
+  // questions; each passage-only problem carries its own stamp for 제작.
+  const baseTarget = normalizeContentTarget(base.contentTarget || base.content_target);
+  const contentTarget = baseTarget === normalizeContentTarget(incoming.contentTarget || incoming.content_target)
+    ? baseTarget : DEFAULT_CONTENT_TARGET;
   const merged = {
     ...base,
+    contentTarget,
+    content_target: contentTarget,
     session_name: fileName || base.session_name || incoming.session_name || '새 수업',
     layoutGapMode,
     layout_gap_mode: layoutGapMode,

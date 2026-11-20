@@ -7086,6 +7086,8 @@ PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS = (
     ("passageSourcePageIds", "passage_source_page_ids"),
     ("passageContinuesAcrossPages", "passage_continues_across_pages"),
     ("passagePreQuestionContinuationBlockIds", "passage_pre_question_continuation_block_ids"),
+    # 공통 지문만 추출 stamp: its passage groups skip the missing-question check.
+    ("contentTarget", "content_target"),
     # The 확인 record stays valid only while the rebuilt image and bbox match.
     ("reviewConfirmedImagePath",),
     ("reviewConfirmedBBox",),

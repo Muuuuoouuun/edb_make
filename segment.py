@@ -977,6 +977,7 @@ def detect_pdf_visual_column_divider_x(image: Image.Image) -> float | None:
 def _assign_pdf_marker_columns(
     image: Image.Image,
     markers: list[dict[str, Any]],
+    text_lines: list[dict[str, Any]] | None = None,
 ) -> tuple[list[tuple[int, list[dict[str, Any]], tuple[float, float]]], int, bool]:
     marker_columns = _cluster_pdf_marker_columns(markers, image.width)
     if len(marker_columns) == 1 and all(marker.get("marker_kind") == "badge" for marker in markers):
@@ -1005,6 +1006,36 @@ def _assign_pdf_marker_columns(
                 continue
             column_index = 0 if center_x < boundary_x else 1
             grouped[column_index].append(marker)
+        # A one-column worksheet with figures beside short stems leaves an
+        # empty strip that reads as a gutter. A right "column" with no question
+        # number, no PDF text of 4+ chars and no printed centre rule is that
+        # figure strip. Without a text layer (rhwp HWP pages) "no text there"
+        # proves nothing, and a markerless LEFT column is a passage beside its
+        # questions, so both keep the split. The rule check goes last: it is
+        # the only one that scans pixels.
+        right_column = visual_columns[1]
+        if (
+            text_lines
+            and grouped[0]
+            and not grouped[1]
+            and not any(
+                len(str(line.get("text") or "").strip()) >= 4
+                for _line_box, line in _pdf_text_lines_in_region(
+                    text_lines,
+                    left=right_column.left,
+                    right=right_column.right,
+                    top=0.0,
+                    bottom=float(image.height),
+                )
+            )
+            and _detect_document_separator_split_x(
+                _column_dark_projection(_dark_mask(image, threshold=220)),
+                image.width,
+                image.height,
+            )
+            is None
+        ):
+            return [(1, markers, (0.0, float(image.width)))], 1, False
         entries = [
             (
                 index + 1,
@@ -1726,11 +1757,15 @@ def _pdf_passage_column_text_top(
     right_bound: float,
     bottom: float,
     image_height: int,
+    skip_above: float | None = None,
 ) -> float | None:
     tops: list[float] = []
     for line in text_lines:
         line_box = _marker_bbox(line)
         if line_box is None or line_box.top >= bottom:
+            continue
+        # Page-1 header (exam title, 성명/수험 번호) sits above the page-wide rule.
+        if skip_above is not None and line_box.bottom <= skip_above:
             continue
         line_center_x = (line_box.left + line_box.right) / 2.0
         if not left_bound - 8.0 <= line_center_x <= right_bound + 8.0:
@@ -2258,6 +2293,7 @@ def _build_pdf_passage_range_blocks(
                     right_bound=fragment_right,
                     bottom=first_marker_top,
                     image_height=image.height,
+                    skip_above=_scan_page_header_rule_bottom(image),
                 )
                 if detected_top is None:
                     if marker_boundaries:
@@ -2782,6 +2818,7 @@ def _segment_pdf_problem_markers(
     column_entries, detected_column_count, visual_column_bounds_used = _assign_pdf_marker_columns(
         image,
         column_reference_markers,
+        text_lines if isinstance(text_lines, list) else None,
     )
     if not column_entries:
         return None
