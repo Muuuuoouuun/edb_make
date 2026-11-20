@@ -22,7 +22,7 @@ from test_problem_gallery import fake_parse, pdf_bytes
 
 
 def _history_handler(server: app_server.AppHTTPServer) -> app_server.AppRequestHandler:
-    """GET /api/session/history without a socket."""
+    """A request handler without a socket (GET /api/session/history and /api/session/latest)."""
     handler = object.__new__(app_server.AppRequestHandler)
     handler.server = server
     handler._send_json = lambda *args, **kwargs: None
@@ -65,6 +65,40 @@ class TestRunningServerTakesOverSyncedLesson(unittest.TestCase):
 
                 app_server.LATEST_SESSION_JSON.write_text('{"problems": [', encoding="utf-8")  # mid-sync
                 self.assertEqual(committed, server.session_snapshot_with_revision()[1])
+            finally:
+                server.server_close()
+
+    def test_new_lesson_on_another_pc_closes_the_stale_copy(self) -> None:
+        with TemporaryDirectory() as raw, ExitStack() as stack:
+            runtime = Path(raw)
+            _runtime_patches(stack, runtime)
+            v1 = {"session_name": "3월 모의고사", "output_dir": str(runtime / "outputs" / "quiz"),
+                  "problems": [{"id": "p1", "title": "학교 v1"}]}
+            app_server.persist_latest_session_with_history(v1)
+            server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+            handler, replies = _history_handler(server), []
+            handler._send_json = lambda payload, **kwargs: replies.append(payload)
+            try:
+                _stale, stale_revision = server.session_snapshot_with_revision()
+                # The other PC edits the lesson and clicks 새 수업: its 최근 수업 entry syncs, latest_session.json goes.
+                v2 = dict(v1, problems=[{"id": "p1", "title": "집 v2"}])
+                app_server.save_session_history(
+                    app_server._session_history_with_session(app_server.load_session_history(), v2))
+                app_server.LATEST_SESSION_JSON.unlink()
+
+                handler._handle_latest_session()  # tab load
+                self.assertIsNone(replies[-1]["session"])
+                self.assertGreater(replies[-1]["sessionRevision"], stale_revision)
+                self.assertFalse(app_server.LATEST_SESSION_JSON.exists(), "the old copy must not be written back")
+                kept = app_server.load_session_history()[0]["session"]["problems"]
+                self.assertEqual(["집 v2"], [problem["title"] for problem in kept])
+
+                # This server's own 새 수업 is not mistaken for another PC's: no extra revision.
+                committed = server.remember_session_if_current(
+                    None, {"session_name": "새 수업", "problems": []}, expected_revision=replies[-1]["sessionRevision"])
+                self.assertEqual(committed, server.session_snapshot_with_revision()[1])
+                cleared = server.clear_session_with_revision(keep_history=True)[1]
+                self.assertEqual(cleared, server.session_snapshot_with_revision()[1])
             finally:
                 server.server_close()
 
@@ -274,6 +308,29 @@ class TestHistoryListWalksOnlyNewLessons(unittest.TestCase):
                 handler._handle_session_history()
                 handler._handle_session_history()
                 self.assertEqual(sorted(entry["id"] for entry in entries + [outside]), sorted(walked))
+            finally:
+                server.server_close()
+
+    def test_a_recent_lesson_changed_on_another_pc_is_walked_again(self) -> None:
+        with TemporaryDirectory() as raw, ExitStack() as stack:
+            runtime = Path(raw)
+            _runtime_patches(stack, runtime)
+            old_crop = _write(runtime / "outputs" / "old.png", mtime=None)
+            new_crop = _write(runtime / "outputs" / "new.png", mtime=None)
+            app_server.persist_latest_session_with_history(
+                _session("다른 수업", old_crop), updated_at="2026-11-17T15:00:00+09:00")
+            app_server.persist_latest_session_with_history(_session("수업"))
+            server = app_server.AppHTTPServer(("127.0.0.1", 0), app_server.AppRequestHandler)
+            handler = _history_handler(server)
+            try:
+                handler._handle_session_history()
+                # The other PC adds a crop to '다른 수업' (same id, new updatedAt) and clicks 새 수업;
+                # Home lists 최근 수업 before any lesson request could take that over.
+                app_server.persist_latest_session_with_history(
+                    _session("다른 수업", old_crop, new_crop), updated_at="2026-11-17T21:00:00+09:00")
+                app_server._atomically_clear_persisted_session_state(keep_history=True)
+                handler._handle_session_history()
+                self.assertTrue(server.is_file_allowed(str(new_crop.resolve())))
             finally:
                 server.server_close()
 

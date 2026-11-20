@@ -5722,6 +5722,14 @@ def collect_session_history_file_paths(history: list[dict[str, Any]]) -> set[str
     return paths
 
 
+def _history_seen_key(entry: Any) -> str:
+    """AppHTTPServer._history_paths_seen key. A lesson changed on another PC keeps its id but gets a
+    new updatedAt, so its new files are walked once more; '' (no id) means walk it every time."""
+    if not isinstance(entry, dict) or not entry.get("id"):
+        return ""
+    return f"{entry['id']}|{entry.get('updatedAt') or ''}"
+
+
 def _session_artifact_protection_paths(session: dict[str, Any] | None) -> set[Path]:
     if not isinstance(session, dict):
         return set()
@@ -10637,45 +10645,56 @@ class AppHTTPServer(ThreadingHTTPServer):
         self._session_revision = 1 if latest_session is not None else 0
         self.allowed_files: set[str] = collect_session_file_paths(latest_session) if latest_session else set()
         self.allowed_files |= collect_session_history_file_paths(history)
-        self._history_paths_seen: set[str] = {str(entry.get("id") or "") for entry in history}
+        self._history_paths_seen: set[str] = {_history_seen_key(entry) for entry in history}
 
     def _allow_new_history_paths(self, history: list[dict[str, Any]]) -> None:
         """Call with _state_lock held, after the committed snapshot's own paths were allowed.
 
-        history[0] is that snapshot; older entries never change, so each id is walked
-        once instead of re-resolving every history path on every board edit.
+        history[0] is that snapshot; older entries change only on another PC (new updatedAt),
+        so each one is walked once instead of re-resolving every history path on every board edit.
         """
+        # ponytail: keys are never pruned, so the open lesson adds one per second it is edited (a few bytes);
+        # prune to the history's keys if a server ever runs for months
         seen = getattr(self, "_history_paths_seen", None)
         if seen is None:
             seen = self._history_paths_seen = set()
         for entry in history[1:]:
-            key = str(entry.get("id") or "") if isinstance(entry, dict) else ""
+            key = _history_seen_key(entry)
             if key and key in seen:
                 continue
             seen.add(key)
             self.allowed_files |= collect_session_history_file_paths([entry])
         if history and isinstance(history[0], dict):
-            seen.add(str(history[0].get("id") or ""))
+            seen.add(_history_seen_key(history[0]))
 
     def allow_unwalked_history_paths(self, history: list[dict[str, Any]]) -> None:
         """GET /api/session/history: walk only lessons this server has not walked yet (start, commits
         and 새 수업 keep _history_paths_seen in step with allowed_files)."""
         with self._state_lock:
             seen = self._history_paths_seen
-            fresh = [entry for entry in history if not entry.get("id") or str(entry["id"]) not in seen]
+            fresh = [entry for entry in history if not entry.get("id") or _history_seen_key(entry) not in seen]
         paths = collect_session_history_file_paths(fresh)  # stat-heavy: outside the lock
         with self._state_lock:
             self.allowed_files |= paths
-            seen.update(str(entry.get("id") or "") for entry in fresh)
+            seen.update(_history_seen_key(entry) for entry in fresh)
 
     def _adopt_synced_session_locked(self) -> None:
         """Call with _state_lock held. Take over latest_session.json when a save from another PC
         replaced it through sync, so a server left running never serves or overwrites an older lesson.
         Tabs built on the old copy then get session_conflict."""
         stamp = _latest_session_stamp()
-        # ponytail: a deleted file (the other PC's 새 수업) is ignored, and a changed file that cannot be read at commit time is still overwritten
-        if stamp is None or stamp == getattr(self, "_latest_stamp", None):
+        if stamp == getattr(self, "_latest_stamp", None):
             return
+        if stamp is None:
+            # Deleted: the other PC's 새 수업 or 초기화 (this server's own reset already closed the lesson).
+            # Keeping the old copy would let the next tab load write it back over that PC's newer 최근 수업 entry.
+            self._latest_stamp = None
+            if self.latest_session is not None:
+                self.latest_session = None
+                self._session_revision += 1
+                getattr(self, "_history_paths_seen", set()).clear()
+            return
+        # ponytail: a changed file that cannot be read at commit time is still overwritten
         synced = load_latest_session()
         if synced is None:
             return  # half-synced or unreadable: look again on the next request
@@ -10688,7 +10707,8 @@ class AppHTTPServer(ThreadingHTTPServer):
         self.latest_session = synced
         self._session_revision += 1
         self.allowed_files.update(collect_session_file_paths(synced))
-        # The synced 최근 수업 may hold new files for lessons already walked: walk them again once.
+        # The synced 최근 수업 may hold new files for lessons already walked (a rewrite within the
+        # same second keeps its _history_seen_key): walk them again once.
         getattr(self, "_history_paths_seen", set()).clear()
 
     def note_shutdown_reason(self, reason: str) -> str:
