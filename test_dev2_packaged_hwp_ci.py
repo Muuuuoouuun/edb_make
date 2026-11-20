@@ -193,6 +193,11 @@ class TestLibreOfficeHwpSupport(unittest.TestCase):
             self.addCleanup(patcher.stop)
         return tmp, profile
 
+    def failed_conversion(self, source: Path, output_dir: Path) -> dict:
+        with self.assertRaises(ValueError) as raised:
+            preprocess.convert_hwp_to_pdf(source, output_dir)
+        return app_server._export_error_payload(raised.exception)
+
     def test_runtime_diagnostics_count_libreoffice_only_with_h2orestart(self) -> None:
         _tmp, profile = self.libreoffice()
         with (
@@ -215,17 +220,11 @@ class TestLibreOfficeHwpSupport(unittest.TestCase):
         (profile / ".lock").write_text("host,user", encoding="utf-8")
         source = tmp / "worksheet.hwp"
         source.write_bytes(b"hwp")
-
-        def convert(output: str) -> dict:
-            with self.assertRaises(ValueError) as raised:
-                preprocess.convert_hwp_to_pdf(source, tmp / output)
-            return app_server._export_error_payload(raised.exception)
-
         silent = lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", "")
         with mock.patch.object(preprocess, "_run_tool", side_effect=silent):
-            locked = convert("out1")
+            locked = self.failed_conversion(source, tmp / "out1")
             (profile / ".lock").unlink()
-            closed = convert("out2")
+            closed = self.failed_conversion(source, tmp / "out2")
         self.assertEqual("hwp_conversion_failed", locked["code"])
         self.assertEqual("열려 있는 LibreOffice를 완전히 종료한 뒤 다시 시도해 주세요.", locked["recoverySteps"][0])
         self.assertIs(True, locked["retryable"])
@@ -233,6 +232,29 @@ class TestLibreOfficeHwpSupport(unittest.TestCase):
         self.assertNotIn("libreoffice_profile_in_use", closed["detail"])
         self.assertTrue(closed["recoverySteps"][0].startswith("한컴오피스"))
         self.assertIs(False, closed["retryable"])
+
+    def test_timed_out_conversion_does_not_blame_an_open_libreoffice(self) -> None:
+        tmp, profile = self.libreoffice()
+        (profile / H2ORESTART).mkdir(parents=True)
+        source = tmp / "worksheet.hwp"
+        source.write_bytes(b"hwp")
+
+        def hung(command: list[str], *, timeout: float, **_kwargs: object) -> None:
+            # LibreOffice removes its profile lock only on a clean exit, so the killed one leaves it.
+            (profile / ".lock").write_text("host,user", encoding="utf-8")
+            raise subprocess.TimeoutExpired(command, timeout)
+
+        with mock.patch.object(preprocess, "_run_tool", side_effect=hung):
+            killed = self.failed_conversion(source, tmp / "out1")
+            self.assertFalse((profile / ".lock").exists(), "the killed soffice's lock was left behind")
+            # A lock that was there first belongs to an open LibreOffice: keep it and say so.
+            (profile / ".lock").write_text("host,user", encoding="utf-8")
+            open_app = self.failed_conversion(source, tmp / "out2")
+        self.assertIn("timed out", killed["detail"])
+        self.assertNotIn("libreoffice_profile_in_use", killed["detail"])
+        self.assertIs(False, killed["retryable"])
+        self.assertTrue((profile / ".lock").exists())
+        self.assertIn("libreoffice_profile_in_use", open_app["detail"])
 
 
 # R64 -------------------------------------------------------------------------------------------

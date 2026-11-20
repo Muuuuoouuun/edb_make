@@ -3219,7 +3219,7 @@ def _run_tool(command: list[str], *, timeout: float, env: dict[str, str] | None 
         )
         try:
             returncode = process.wait(timeout=timeout)
-        except subprocess.TimeoutExpired:
+        except BaseException:  # the timeout, or a Ctrl+C the child never gets (own session/console)
             try:
                 if windows:
                     subprocess.run(
@@ -3298,10 +3298,23 @@ def _run_hwp_pdf_converter_commands(
             for candidate in _hwp_pdf_candidates(target_dir, source_path)
             if candidate.exists()
         }
+        # A LibreOffice profile lock that appears from here on is this soffice's own.
+        own_locks = [
+            profile / ".lock"
+            for profile in (_libreoffice_profile_dirs() if "--headless" in command else [])
+            if not (profile / ".lock").exists()
+        ]
         try:
             result = _run_tool(command, timeout=timeout_seconds, env=command_env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             errors.append(f"{command[0]}: {exc}")
+            # A killed soffice cannot remove its lock; left behind, it would make the check after
+            # the loop tell the teacher to quit a LibreOffice that is not open.
+            for lock in own_locks:
+                try:
+                    lock.unlink(missing_ok=True)
+                except OSError:
+                    pass
             continue
 
         for pdf_path in _hwp_pdf_candidates(target_dir, source_path):
