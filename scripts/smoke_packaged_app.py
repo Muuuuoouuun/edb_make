@@ -396,6 +396,9 @@ def _validate_ui_assets(board_html: str, bundle: str) -> str:
 def _validate_update_metadata(payload: dict[str, Any], *, expected_app_id: str = "ClassInEDBMVP") -> None:
     if payload.get("ok") is not True:
         raise RuntimeError(f"update metadata endpoint did not report ok=true: {payload}")
+    # A 404 or a timeout still passes; a missing CA bundle breaks every HTTPS call the app makes.
+    if "CERTIFICATE_VERIFY_FAILED" in str(payload.get("detail") or ""):
+        raise RuntimeError(f"packaged app cannot verify HTTPS certificates: {payload['detail']}")
     if payload.get("appId") != expected_app_id:
         raise RuntimeError(
             f"unexpected update metadata appId: expected {expected_app_id!r}, "
