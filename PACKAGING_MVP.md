@@ -56,14 +56,11 @@ If Python 3.11+ is not installed, the launcher shows a Korean error message and 
 If the local server is already running, it only opens the browser instead of starting a duplicate server.
 
 ## In-App Flow
-1. Start the local app server
-2. Open the browser UI
-3. Click `Choose source`
-4. Pick an image or PDF
-5. Set `subject`, `OCR`, and output folder name
-6. Click `Run export`
-7. Review source/problem/board previews
-8. Open the generated `.edb` from the inspector or header
+Manual smoke test of a build. Teacher steps and current button names: [EDB_MAKE_USER_GUIDE.md](EDB_MAKE_USER_GUIDE.md).
+1. Start the app; the browser opens `http://127.0.0.1:8765/`.
+2. On the start screen pick a method under `어떻게 넣을까요?`, then press `파일 선택` and choose a PDF, image or HWP/HWPX file. It is processed and placed on the 칠판.
+3. Press `EDB 제작` in the top bar.
+4. Press `ClassIn에서 열기` and check that the `.edb` opens in ClassIn.
 
 ## PyInstaller Packaging
 Windows packages must be built on Windows. macOS `.app` bundles must be built on macOS.
@@ -457,9 +454,9 @@ The base Python package also includes dependencies with copyleft or dual-license
 - `generated_session.js` is kept and overwritten only as an empty compatibility bridge; latest-session restore uses `.app_runtime\latest_session.json` and session history. Legacy CLI bridge output stays under the selected output folder and must not recreate project `ui_prototype\generated_session.js` or `prototype_data.js`.
 - The browser UI talks to the local server over HTTP and does not call Python directly.
 - Double-clicking the packaged app opens the browser automatically. If the app server is already running, it opens the browser instead of starting a duplicate server.
-- API keys are entered in the app's `칠판 설정` panel and stored locally under the app runtime folder.
-- Updates are semi-automatic: the app checks configured release metadata and opens the installer download page; it does not self-replace in the background.
-- Use the top-bar power button to stop the local app server after use.
+- API keys are entered under `설정` → `AI 사용·연결` → `Gemini API 키` and stored locally under the app runtime folder.
+- Updates never install in the background: an administrator installs them from `···` → `업데이트` with the update PIN, or uses `다운로드 열기` for a manual install.
+- Use the top bar `···` → `종료` to stop the local app server after use.
 - The current `.edb` export is still the MVP image-based board export, not the final mixed text/image writer.
 
 ## Known Limits

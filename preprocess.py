@@ -5,10 +5,12 @@ import concurrent.futures
 import errno
 import hashlib
 import json
+import locale
 import math
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -129,6 +131,34 @@ def _iter_libreoffice_executables() -> list[Path]:
         candidates.append(candidate)
         seen.add(key)
     return candidates
+
+
+def _libreoffice_profile_dirs() -> list[Path]:
+    # ponytail: default profile only; a custom -env:UserInstallation or a portable LibreOffice is not seen.
+    appdata = os.environ.get("APPDATA", "").strip()
+    home = Path.home()
+    return [
+        *([_configured_path(appdata) / "LibreOffice" / "4"] if appdata else []),
+        home / "Library" / "Application Support" / "LibreOffice" / "4",
+        home / ".config" / "libreoffice" / "4",
+    ]
+
+
+def _libreoffice_reads_hwp(executable: str | Path) -> bool:
+    """Stock LibreOffice opens only Hangul 97 files; HWP 5 and HWPX need the H2Orestart extension."""
+    # ponytail: folder-name check only; the Java 8+ runtime H2Orestart needs is not verified.
+    install = Path(executable).resolve().parent.parent  # program/soffice.exe or LibreOffice.app/Contents/MacOS/soffice
+    places = [(profile / "user" / "uno_packages", "cache/uno_packages/*/*") for profile in _libreoffice_profile_dirs()]
+    for share in (install / "share", install / "Resources"):  # Windows/Linux and macOS install layouts
+        places += [(share / "uno_packages", "cache/uno_packages/*/*"), (share / "extensions", "*")]
+    for root, pattern in places:
+        try:
+            # Extension files carry a version: H2Orestart-v0.8.0.oxt, H2Orestart-0.7.14.oxt.
+            if any("h2orestart" in entry.name.lower() for entry in root.glob(pattern)):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 @dataclass(slots=True)
@@ -963,6 +993,38 @@ def _render_hwp_pages_with_rhwp_python(
     cached_pages = _load_cached_hwp_core_pages(source_path, target_dir, dpi, renderer="rhwp-python")
     if cached_pages:
         return cached_pages
+    rhwp = _bundled_rhwp()
+    if rhwp is not None:
+        # The same pages _RHWP_PYTHON_RENDER_PNG_SCRIPT prints.
+        try:
+            written = rhwp.parse(str(source_path)).export_png(str(target_dir), prefix=f"{source_path.stem}_page")
+            pages = []
+            for index, raw_path in enumerate(written):
+                with Image.open(raw_path) as image:
+                    width, height = image.size
+                pages.append(
+                    NormalizedPageImage(
+                        page_id=f"{source_path.stem}-page-{index + 1:03d}",
+                        source_path=str(source_path),
+                        normalized_path=str(raw_path),
+                        page_index=index,
+                        width_px=width,
+                        height_px=height,
+                        metadata={
+                            "source_type": "hwp",
+                            "document_like": True,
+                            "dpi": dpi,
+                            "hwp_renderer": "rhwp-python",
+                            "hwp_renderer_version": rhwp.version(),
+                            "hwp_renderer_core_version": rhwp.rhwp_core_version(),
+                            "hwp_renderer_page_count": len(written),
+                        },
+                    )
+                )
+        except BaseException:  # rhwp's PanicException is not an Exception
+            return []
+        _save_hwp_core_render_cache(source_path, target_dir, dpi, pages, renderer="rhwp-python")
+        return pages
     for command_prefix in _iter_rhwp_python_renderer_commands():
         command = [*command_prefix, str(source_path), str(target_dir), str(dpi)]
         try:
@@ -1194,8 +1256,27 @@ for index, raw_path in enumerate(written):
             },
         }
     )
-print(json.dumps(pages, ensure_ascii=False))
+print(json.dumps(pages, ensure_ascii=True))
 """.strip()
+
+
+def _python_interpreter() -> str | None:
+    # A PyInstaller executable is the app, not a Python interpreter: running it
+    # with -c would start a hidden copy of the app (see the PyMuPDF note above).
+    return None if getattr(sys, "frozen", False) else sys.executable
+
+
+def _bundled_rhwp() -> Any:
+    """rhwp for the installed app, which calls it in-process; source runs keep the subprocess path."""
+    # ponytail: in-process parsing has no timeout and a Rust abort takes the app down;
+    # move it to a worker process if a real file hangs.
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        import rhwp  # this import is also what makes PyInstaller bundle rhwp
+    except ImportError:
+        return None
+    return rhwp
 
 
 def _python_can_import_unhwp(python_path: Path) -> bool:
@@ -1247,7 +1328,7 @@ def _iter_unhwp_text_converter_commands() -> list[list[str]]:
         Path(__file__).resolve().parent / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         Path(__file__).resolve().parent / ".app_runtime" / "unhwp_probe_env" / "Scripts" / "python.exe",
         Path(__file__).resolve().parent / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1271,7 +1352,7 @@ def _iter_hwp_hwpx_parser_text_converter_commands() -> list[list[str]]:
         os.environ.get("EDB_HWP_HWPX_PARSER_PYTHON"),
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1297,7 +1378,7 @@ def _iter_rhwp_python_text_converter_commands() -> list[list[str]]:
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         base_dir / ".app_runtime" / "rhwp_python_probe_env" / "Scripts" / "python.exe",
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1323,7 +1404,7 @@ def _iter_rhwp_python_renderer_commands() -> list[list[str]]:
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         base_dir / ".app_runtime" / "rhwp_python_probe_env" / "Scripts" / "python.exe",
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1551,6 +1632,12 @@ def _extract_hwp_text_with_hwp_hwpx_parser(source: str | Path, timeout_seconds: 
 
 def _extract_hwp_text_with_rhwp_python(source: str | Path, timeout_seconds: int = 15) -> str:
     source_path = Path(source)
+    rhwp = _bundled_rhwp()
+    if rhwp is not None:
+        try:
+            return (rhwp.parse(str(source_path)).extract_text() or "").replace("\x00", "").strip()
+        except BaseException:  # rhwp's PanicException is not an Exception
+            return ""
     for command_prefix in _iter_rhwp_python_text_converter_commands():
         command = [*command_prefix, str(source_path)]
         try:
@@ -3119,6 +3206,45 @@ def _normalize_pdf_rendered_pages(
     return normalized_pages
 
 
+def _run_tool(command: list[str], *, timeout: float, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    # ponytail: on Windows subprocess.run(timeout=) still waits for pipe EOF after the kill, and
+    # soffice.exe hands its pipes to soffice.bin, so a hung conversion never returned. Output goes
+    # to files and the whole process tree is killed. Text extractors, hwp5html and the rhwp
+    # renderers still use subprocess.run (dev-only tools).
+    windows = os.name == "nt"
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0) if windows else 0
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        process = subprocess.Popen(
+            command, stdout=out, stderr=err, env=env, creationflags=no_window, start_new_session=not windows
+        )
+        try:
+            returncode = process.wait(timeout=timeout)
+        except BaseException:  # the timeout, or a Ctrl+C the child never gets (own session/console)
+            try:
+                if windows:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=no_window,
+                        timeout=15,
+                        check=False,
+                    )
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            process.kill()
+            process.wait()
+            raise
+        encoding = locale.getpreferredencoding(False)  # what text=True decoded with, minus its strict errors
+        out.seek(0)
+        err.seek(0)
+        return subprocess.CompletedProcess(
+            command, returncode, out.read().decode(encoding, "replace"), err.read().decode(encoding, "replace")
+        )
+
+
 def _run_hwp_pdf_converter_commands(
     source_path: Path,
     target_dir: Path,
@@ -3172,19 +3298,23 @@ def _run_hwp_pdf_converter_commands(
             for candidate in _hwp_pdf_candidates(target_dir, source_path)
             if candidate.exists()
         }
+        # A LibreOffice profile lock that appears from here on is this soffice's own.
+        own_locks = [
+            profile / ".lock"
+            for profile in (_libreoffice_profile_dirs() if "--headless" in command else [])
+            if not (profile / ".lock").exists()
+        ]
         try:
-            run_kwargs: dict[str, Any] = {
-                "check": False,
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "timeout": timeout_seconds,
-            }
-            if command_env is not None:
-                run_kwargs["env"] = command_env
-            result = subprocess.run(command, **run_kwargs)
+            result = _run_tool(command, timeout=timeout_seconds, env=command_env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             errors.append(f"{command[0]}: {exc}")
+            # A killed soffice cannot remove its lock; left behind, it would make the check after
+            # the loop tell the teacher to quit a LibreOffice that is not open.
+            for lock in own_locks:
+                try:
+                    lock.unlink(missing_ok=True)
+                except OSError:
+                    pass
             continue
 
         for pdf_path in _hwp_pdf_candidates(target_dir, source_path):
@@ -3204,6 +3334,14 @@ def _run_hwp_pdf_converter_commands(
         errors.append(
             f"{command[0]} exited {result.returncode}: {output or 'no PDF output'}"
         )
+    libreoffice = next((command[0] for command in commands if "--headless" in command), None)
+    if (
+        libreoffice
+        and any((profile / ".lock").exists() for profile in _libreoffice_profile_dirs())
+        and _libreoffice_reads_hwp(libreoffice)
+    ):
+        # An open LibreOffice takes over --convert-to, so this soffice ends without a PDF (tdf#37531).
+        errors.append("libreoffice_profile_in_use: default LibreOffice profile is locked")
     return None, errors
 
 
@@ -3225,14 +3363,7 @@ def _convert_hwp_to_hwpx_with_hwpilot(
     for command_prefix in commands:
         command = [*command_prefix, "convert", str(source_path), str(target_path)]
         try:
-            result = subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout_seconds,
-            )
+            result = _run_tool(command, timeout=timeout_seconds)
         except (OSError, subprocess.TimeoutExpired) as exc:
             errors.append(f"{command[0]}: {exc}")
             continue

@@ -160,7 +160,7 @@ python3 scripts/run_quality_corpus.py /secure/edb-quality/corpus.json \
 
 production report의 provenance는 Git commit, pipeline source fingerprint, OS/Python/OCR 모드, `requirements-release.lock`·`requirements-release-bootstrap.lock`·`requirements-ci.lock`을 포함한 requirements 원문 SHA-256, 설치된 Pillow/PyMuPDF/numpy/OpenCV/OCR/HWP 패키지 버전, Tesseract/LibreOffice/hwp5/rhwp/Node 버전, isolated-cache policy를 포함한다. 잠금 파일이 한 바이트라도 바뀌면 environment fingerprint도 바뀌므로 기존 baseline을 재사용하지 않고 같은 보호 runner에서 candidate를 다시 생성·검토·승인한다. baseline과 현재 실행의 environment fingerprint가 다르면 속도 비교를 거부한다. runner는 성공·일반 예외 시 isolated 원문 복제본과 OCR/render 출력을 자동 삭제한다. `--retain-private-artifacts`와 `--allow-dirty-checkout`은 로컬 진단 전용이며 그 report는 baseline으로 승인할 수 없다. CI 취소·강제 종료까지 보장하려면 workflow에서도 `if: always()` cleanup으로 전용 RUNNER_TEMP 디렉터리 전체를 삭제해야 한다.
 
-공개 릴리스 workflow의 private gate는 self-hosted runner의 전역 Python을 사용하지 않는다. `RUNNER_TEMP` 아래 새 venv에 bootstrap/release hash lock만 설치하고 미등록 distribution을 거부하며, 선택적 Paddle/Tesseract Python backend 혼입도 별도로 차단한다. OCR은 `gemini-3.5-flash`와 thinking level `low`로 고정되고 보호된 `EDB_QUALITY_GEMINI_API_KEY` GitHub secret이 없으면 실행 전에 실패한다. venv와 모든 비공개 파생물·report는 `if: always()` 단계에서 안전한 경로인지 확인한 뒤 함께 삭제한다.
+공개 릴리스 workflow의 private gate는 self-hosted runner의 전역 Python을 사용하지 않는다. `RUNNER_TEMP` 아래 새 venv에 bootstrap/release hash lock만 설치하고 미등록 distribution을 거부하며, 선택적 Paddle backend와 Gemini SDK 패키지 혼입도 별도로 차단한다(pytesseract는 문제 추출 사진 번호 인식용으로 배포본에 들어 있어 허용한다). OCR은 `gemini-3.5-flash`와 thinking level `low`로 고정되고 보호된 `EDB_QUALITY_GEMINI_API_KEY` GitHub secret이 없으면 실행 전에 실패한다. venv와 모든 비공개 파생물·report는 `if: always()` 단계에서 안전한 경로인지 확인한 뒤 함께 삭제한다.
 
 이미 생성한 관측값을 진단하거나 evaluator 자체를 점검할 때만 아래의 읽기 전용 평가 명령을 사용한다. 이 명령만으로는 현재 코드가 원문을 올바르게 처리했다는 릴리스 증거가 되지 않는다.
 

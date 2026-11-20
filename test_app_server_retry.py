@@ -5897,6 +5897,8 @@ class TestRuntimeDiagnostics(unittest.TestCase):
     def test_runtime_diagnostics_reports_hangul_converter_readiness(self):
         with (
             patch.object(app_server.preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]]),
+            # A LibreOffice with the H2Orestart extension; stock LibreOffice opens only Hangul 97 files.
+            patch.object(app_server.preprocess, "_libreoffice_reads_hwp", return_value=True),
             patch.object(app_server.preprocess, "_iter_hwp_hwpx_converter_commands", return_value=[["/usr/local/bin/hwpilot"]]),
             patch.object(app_server.preprocess, "_iter_pyhwp_html_converter_commands", return_value=[["/venv/bin/hwp5html"]]),
             patch.object(app_server.preprocess, "_iter_hwp_text_converter_commands", return_value=[["/venv/bin/hwp5txt"], ["/venv/bin/python", "-c", "import unhwp; unhwp.extract_text('x')"]]),

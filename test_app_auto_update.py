@@ -382,7 +382,7 @@ function Start-Process {{
 '''
         completed = subprocess.run(
             [shutil.which("pwsh") or shutil.which("powershell"), "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         )
         return completed, installer, executable, marker
 
