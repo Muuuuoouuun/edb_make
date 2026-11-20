@@ -1069,7 +1069,7 @@ def _tesseract_binary_available_cached(path_env: str, command: str) -> bool:
     try:
         pytesseract.get_tesseract_version()
         return True
-    except Exception:
+    except (Exception, SystemExit):  # pytesseract exits on an engine older than 3.05
         return False
 
 
@@ -1154,7 +1154,7 @@ def _tesseract_tool_version() -> str:
         return "unavailable"
     try:
         return str(pytesseract.get_tesseract_version())
-    except Exception:
+    except (Exception, SystemExit):  # pytesseract exits on an engine older than 3.05
         return "unavailable"
 
 

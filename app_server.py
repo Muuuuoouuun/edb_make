@@ -11461,6 +11461,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._allow_session_files(paths)
             return response
 
+        failed = "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요."
         try:
             if action == "list":
                 self._send_json({"ok": True, "jobs": [public_job(job) for job in store.list_jobs()]})
@@ -11507,17 +11508,24 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     })
         except ValueError as exc:
             # The gallery raises its own Korean ValueErrors; some carry a code and an English detail.
+            # English ones come from the parser or Python itself: a failure to log, not teacher copy.
+            # ponytail: Korean text marks the gallery's own errors, as in _export_error_payload.
+            korean = re.search(r"[가-힣]", str(exc))
+            if not korean:
+                _log_operation_exception("problem_gallery", exc)
             self._send_json({
-                "ok": False, "code": getattr(exc, "code", None) or "gallery_request_invalid", "error": str(exc),
+                "ok": False, "code": getattr(exc, "code", None) or "gallery_request_invalid",
+                "error": str(exc) if korean else failed,
                 "detail": getattr(exc, "detail", "") or f"{type(exc).__name__}: {exc}",
             }, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             _log_operation_exception("problem_gallery", exc)
             # Disk full, locked files and memory get the shared Korean copy; the raw text stays in detail.
             payload = _classified_processing_error(exc) if isinstance(exc, (OSError, MemoryError)) else None
+            if payload:  # The gallery page has no 문제 신고 and no 오류 상세 to copy.
+                payload["recoverySteps"] = [step for step in payload["recoverySteps"] if "신고" not in step]
             self._send_json(payload or {
-                "ok": False, "code": "gallery_failed",
-                "error": "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요.",
+                "ok": False, "code": "gallery_failed", "error": failed,
                 "detail": f"{type(exc).__name__}: {exc}",
             }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 

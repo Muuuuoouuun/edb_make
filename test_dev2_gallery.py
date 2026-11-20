@@ -103,6 +103,39 @@ def test_tesseract_probe_finds_a_standard_install_off_path(monkeypatch, tmp_path
         ocr_backend.clear_ocr_capability_cache()
 
 
+def test_an_engine_too_old_for_pytesseract_counts_as_missing(monkeypatch, tmp_path):
+    class FakePytesseractModule:
+        class pytesseract:
+            tesseract_cmd = "tesseract"
+
+        def get_tesseract_version(self):
+            # pytesseract exits instead of raising below 3.05, e.g. UB Mannheim's 3.05.00dev.
+            raise SystemExit('Invalid tesseract version: "tesseract 3.05.00dev"')
+
+    fake = FakePytesseractModule()
+    old = tmp_path / "Tesseract-OCR" / "tesseract.exe"
+    old.parent.mkdir()
+    old.write_bytes(b"")
+    monkeypatch.setattr(ocr_backend, "pytesseract", fake)
+    monkeypatch.setattr(ocr_backend, "PaddleOCR", None)
+    monkeypatch.setattr(ocr_backend.sys, "platform", "win32")
+    monkeypatch.setattr(ocr_backend.shutil, "which", lambda *_args, **_kwargs: None)
+    monkeypatch.delenv("PROGRAMFILES", raising=False)
+    monkeypatch.setenv("PROGRAMFILES(X86)", str(tmp_path))
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    ocr_backend.clear_ocr_capability_cache()
+    ocr_backend._tesseract_tool_version.cache_clear()
+    try:
+        # Otherwise the SystemExit ends the request thread with no response and no log line.
+        assert ocr_backend._tesseract_binary_available() is False
+        assert fake.pytesseract.tesseract_cmd == str(old)
+        assert ocr_backend.build_ocr_backend("local").name == "none"
+        assert ocr_backend._tesseract_tool_version() == "unavailable"
+    finally:
+        ocr_backend.clear_ocr_capability_cache()
+        ocr_backend._tesseract_tool_version.cache_clear()
+
+
 def test_missing_ocr_is_a_coded_install_note_without_a_forced_reprobe():
     with mock.patch("gallery_recognition.build_ocr_backend", return_value=ocr_backend.NoOcrBackend()) as build:
         with pytest.raises(ValueError) as caught:
@@ -267,11 +300,16 @@ def test_gallery_names_a_queued_file_changed_on_disk_without_uploading_it():
       serverJobs=[];
       await mount();
       const stale={name:'고친 시험지.pdf',size:10,slice:()=>({arrayBuffer:async()=>{throw Object.assign(new Error('could not be read'),{name:'NotReadableError'});}})};
-      nodes(render()).find(n=>n.type==='input'&&n.props.type==='file').props.onChange({target:{files:[stale]}});
+      const pick=file=>nodes(render()).find(n=>n.type==='input'&&n.props.type==='file').props.onChange({target:{files:[file]}});
+      const queued=()=>nodes(render()).filter(n=>n.props?.className==='gallery-pending-file').length;
+      pick(stale);
       await button(render(),'문제 추출하기').props.onClick();
       assert.equal(uploads,0);
       assert.ok(text(render()).includes('고친 시험지.pdf: 대기열에 넣은 뒤 원본 파일이 바뀌었거나 옮겨졌습니다'), text(render()));
       assert.ok(!text(render()).includes('앱과 연결이 끊겼습니다'));
+      assert.equal(queued(),0,'the stale entry leaves 업로드 대기');
+      pick(stale);
+      assert.equal(queued(),1,'picking the same name, size and date again queues the file');
     })().catch(error=>{console.error(error);process.exitCode=1;});
     """)
 
@@ -363,8 +401,11 @@ def test_deleting_a_source_asks_first_and_drops_its_cards_and_selection():
       assert.deepEqual(deletes, [], 'a cancelled confirm deletes nothing');
       assert.ok(prompts[0].includes("'old.pdf' 자료와 추출한 문제 12개") && prompts[0].includes('원본 파일'), prompts[0]);
       confirmAnswer = true;
+      let focused = null;
+      gallerySource('전체 문제').props.ref.current = { focus: options => { focused = options; } };
       await deleteOf('old.pdf').props.onClick();
       assert.deepEqual(deletes, ['old']);
+      assert.equal(focused?.preventScroll, true, 'the removed 삭제 button hands focus to 전체 문제');
       tree = render();
       assert.ok(!gallerySource('old.pdf'), 'the deleted source leaves the list');
       assert.equal(gallerySource('전체 문제').props['aria-pressed'], true, 'the filter falls back to every source');
@@ -436,22 +477,28 @@ def test_gallery_errors_are_korean_logged_and_keep_raw_text_in_detail(exc, code)
     assert payload["code"] == code
     assert "Errno" not in payload["error"] and "Users" not in payload["error"]
     assert str(exc) in payload["detail"]
+    assert not any("신고" in step for step in payload.get("recoverySteps", [])), "the gallery has no 문제 신고"
     assert kwargs["status"] == 500
     log.assert_called_once_with("problem_gallery", exc)
 
 
-def test_gallery_request_errors_keep_their_korean_text_with_a_code():
+@pytest.mark.parametrize("exc, korean", [
+    (ValueError("추출 진행 정보를 다시 불러와 주세요."), True),
+    # A parser bug surfaces as Python's own English ValueError.
+    (ValueError("max() arg is an empty sequence"), False),
+])
+def test_gallery_value_errors_are_coded_400s_in_korean(exc, korean):
     handler, responses = _handler("/api/parser/next")
     handler._read_json_body = lambda: {"jobId": "0" * 32}
-    with mock.patch.object(GalleryStore, "parse_next", side_effect=ValueError("추출 진행 정보를 다시 불러와 주세요.")), \
+    with mock.patch.object(GalleryStore, "parse_next", side_effect=exc), \
             mock.patch.object(app_server, "_log_operation_exception") as log:
         handler._handle_parser_request("next", urlparse("/api/parser/next"))
     payload, kwargs = responses[0]
     assert payload["code"] == "gallery_request_invalid"
-    assert payload["error"] == "추출 진행 정보를 다시 불러와 주세요."
-    assert payload["detail"].startswith("ValueError")
+    assert payload["error"] == (str(exc) if korean else "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요.")
+    assert payload["detail"] == f"ValueError: {exc}"
     assert kwargs["status"] == 400
-    log.assert_not_called()
+    assert log.call_args_list == ([] if korean else [mock.call("problem_gallery", exc)])
 
 
 # R58 ------------------------------------------------------------------------

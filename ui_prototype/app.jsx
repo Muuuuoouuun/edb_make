@@ -22083,6 +22083,7 @@ function ProblemGalleryApp({ onBack }){
   const [recognizing, setRecognizing] = useState(false);
   const fileRef = useRef(null);
   const gridRef = useRef(null);
+  const allSourcesRef = useRef(null);
   const anchorRef = useRef(null);
   const hoverTimerRef = useRef(null);
   const busyRef = useRef(false);
@@ -22194,7 +22195,11 @@ function ProblemGalleryApp({ onBack }){
           upsertJob(result.job);
           work.push(result.job);
           setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)));
-        } catch (error) { failures.push(`${file.name}: ${userErrorText(error)}`); }
+        } catch (error) {
+          failures.push(`${file.name}: ${userErrorText(error)}`);
+          // Picking a changed or moved file again would be deduped against this stale entry.
+          if (error.code === 'upload_source_changed') setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)));
+        }
       }
       for (let job of work) {
         while (job.processedPages < job.sourcePageCount && !pauseRef.current) {
@@ -22309,6 +22314,8 @@ function ProblemGalleryApp({ onBack }){
     setError('');
     try {
       await galleryRequest('delete', { jobId: job.id });
+      // The focused 삭제 button leaves with its entry; keep keyboard focus off <body>.
+      allSourcesRef.current?.focus({ preventScroll: true });
       setJobs(previous => previous.filter(existing => existing.id !== job.id));
       setSelected(previous => new Set([...previous].filter(id => !id.startsWith(`${job.id}:`))));
       if (sourceId === job.id) changeSource('all');
@@ -22344,7 +22351,7 @@ function ProblemGalleryApp({ onBack }){
           {files.length > 0 && <div className="gallery-pending"><h3>업로드 대기 · {files.length}</h3>{files.map(file => (
             <div className="gallery-pending-file" key={fileQueueKey(file)}><span title={file.name}>{file.name}</span><button type="button" disabled={busy} aria-label={`${file.name} 대기열에서 제거`} onClick={() => setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)))}>{Icon.close}</button></div>
           ))}</div>}
-          <button type="button" className={`gallery-source ${sourceId === 'all' ? 'on' : ''}`} aria-pressed={sourceId === 'all'} onClick={() => changeSource('all')}><strong>전체 문제</strong><span>{allProblems.length}개</span></button>
+          <button ref={allSourcesRef} type="button" className={`gallery-source ${sourceId === 'all' ? 'on' : ''}`} aria-pressed={sourceId === 'all'} onClick={() => changeSource('all')}><strong>전체 문제</strong><span>{allProblems.length}개</span></button>
           <div className="gallery-source-list">{jobs.map(job => (
             <div className="gallery-source-entry" key={job.id}>
             <button type="button" className={`gallery-source ${sourceId === job.id ? 'on' : ''}`} aria-pressed={sourceId === job.id} onClick={() => changeSource(job.id)}>
