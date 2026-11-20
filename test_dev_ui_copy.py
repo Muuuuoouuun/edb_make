@@ -61,6 +61,9 @@ class TestDevUiCopy(unittest.TestCase):
             'aria-label="되돌리기"', "'되돌리기'", "이름 없는 작업", "작업 이름으로", "최근 작업",
             "ID, 번호", "고객을 확인할 수 있는 ID", "'OCR 미사용'", "로컬 2K",
             "<code>{errorSnapshot.code || 'unknown'}</code>", "배포 서버", "1.2p는", "1.2p 경계",
+            # One name per open action after a build: the top bar's 'ClassIn에서 열기' / '폴더 열기'.
+            "<span>ClassIn 열기</span>", "<span>EDB 파일 열기</span>", "<span>출력 폴더 열기</span>", ": '폴더'}",
+            "item.type.toUpperCase()", "을(를)", "${ALTERNATE_MODIFIER_NAME}과", "새 작업", "이 작업을 다시", "검색한 작업",
         ):
             self.assertNotIn(gone, APP, gone)
         for kept in (
@@ -68,6 +71,7 @@ class TestDevUiCopy(unittest.TestCase):
             "{tileClassinStartPage}–{tileClassinEndPage}쪽", "it.step === 's3' ? '고화질'",
             ">쪽 맞춤</button>", "<strong>EDB 제작</strong>", "'신고 보내기'", 'aria-label="실행 취소"',
             "'이름 없는 수업'", 'placeholder="수업 이름으로 검색"', "'기본 간격은 ClassIn 쪽 경계에 맞춥니다.'",
+            "01 · 새 수업", "${ALTERNATE_MODIFIER_NAME} 키와 위아래 방향키로",
         ):
             self.assertIn(kept, APP, kept)
 

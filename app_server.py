@@ -28,6 +28,7 @@ import tempfile
 import threading
 import time
 import traceback
+import unicodedata
 import uuid
 import webbrowser
 import zipfile
@@ -357,12 +358,17 @@ def run_problem_export(*args: Any, **kwargs: Any) -> Any:
 _EXPORT_PROGRESS: dict[str, dict[str, Any]] = {}
 
 
-def _run_with_export_progress(progress_id: str, run: Any, *args: Any, **kwargs: Any) -> Any:
-    if not progress_id:
+def _run_with_export_progress(progress_id: str, run: Any, *args: Any, should_cancel: Any = None, **kwargs: Any) -> Any:
+    if not progress_id and should_cancel is None:
         return run(*args, **kwargs)
 
     def report(stage: str, done: int, total: int) -> None:
-        _EXPORT_PROGRESS[progress_id] = {"stage": str(stage), "done": int(done), "total": int(total)}
+        # ponytail: cancel lands only at progress points (stage starts, each recognized page); PDF render
+        # (~0.6 s/page) and asset building run to the next one; add a hook in prepare_source_pages if teachers still wait.
+        if should_cancel is not None and should_cancel():
+            raise _lazy_attr("build_problem_board_edb", "ExportCancelled")()
+        if progress_id:
+            _EXPORT_PROGRESS[progress_id] = {"stage": str(stage), "done": int(done), "total": int(total)}
 
     try:
         return run(*args, progress=report, **kwargs)
@@ -3243,6 +3249,12 @@ def _truncate_utf8_bytes(value: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
+def _truncate_utf16_units(value: str, max_units: int) -> str:
+    """Cut to Windows path units; a surrogate pair cut in half is dropped whole."""
+    encoded = value.encode("utf-16-le", errors="surrogatepass")
+    return encoded[: max(0, max_units) * 2].decode("utf-16-le", errors="ignore")
+
+
 def _sanitize_path_component_token(value: str | None) -> str:
     raw = str(value or "").strip()
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
@@ -3298,7 +3310,9 @@ def sanitize_upload_file_name(
     *,
     max_bytes: int = UPLOAD_FILE_NAME_MAX_BYTES,
 ) -> str:
-    raw = Path(value or "upload.bin").name
+    # macOS hands out decomposed (NFD) Hangul: compose it first so the byte cut below
+    # never splits a syllable and the lesson name reads the same on Windows.
+    raw = Path(unicodedata.normalize("NFC", value or "upload.bin")).name
     invalid = '<>:"/\\|?*'
     safe = "".join(ch if ch not in invalid and ord(ch) >= 32 else "_" for ch in raw).strip(" .")
     if not safe:
@@ -3324,21 +3338,30 @@ def sanitize_edb_file_name(
     *,
     fallback_stem: str = "classin",
     max_bytes: int = SAFE_PATH_COMPONENT_MAX_BYTES,
+    max_units: int | None = None,
+    suffix: str | None = None,
 ) -> str:
     stem_max_bytes = min(
         EDB_FILE_STEM_MAX_BYTES,
         max(1, int(max_bytes) - EDB_PART_SUFFIX_RESERVED_BYTES),
     )
+    stem_max_units = None if max_units is None else max(1, int(max_units) - EDB_PART_SUFFIX_RESERVED_BYTES)
 
-    def _clean_stem(raw: str | None, fallback: str) -> str:
-        candidate = Path(str(raw or "")).name.strip()
+    def _clean_stem(raw: str | None, fallback: str, suffix: str | None = None) -> str:
+        candidate = Path(unicodedata.normalize("NFC", str(raw or ""))).name.strip()
         if candidate.lower().endswith(".edb"):
             candidate = candidate[:-4]
         candidate = candidate.strip(" .")
+        if stem_max_units is not None:
+            # Windows counts path length in UTF-16 units: a Hangul syllable costs 1 unit there
+            # but 3 bytes in UTF-8. Cut only the name, so the suffix added below always survives.
+            suffix_units = _windows_path_units(f"_{suffix}") if suffix else 0
+            candidate = _truncate_utf16_units(candidate, stem_max_units - suffix_units).strip(" .")
         if not candidate:
             return fallback
         safe = sanitize_output_dir_name(
             candidate,
+            suffix=suffix,
             max_bytes=stem_max_bytes,
         ).strip(" ._")
         safe = _truncate_utf8_bytes(safe, stem_max_bytes).rstrip(" ._") or fallback
@@ -3347,13 +3370,14 @@ def sanitize_edb_file_name(
         return _finalize_safe_path_component(safe, max_bytes=stem_max_bytes)
 
     fallback = _clean_stem(fallback_stem, "classin")
-    stem = _clean_stem(value, fallback) if value is not None else fallback
+    stem = _clean_stem(value, fallback, suffix) if value is not None else fallback
     return f"{stem}.edb"
 
 
 def _lesson_name_from_sources(source_paths: list[Path]) -> str:
-    """Readable lesson name: the first file's name without the managed upload digest."""
-    stem = re.sub(r"^[0-9a-f]{40,64}_", "", source_paths[0].stem).strip() or "새 수업"
+    """Readable lesson name: the first file's name without the managed upload digest
+    prefix and its name-hash tail (the tail goes only when the prefix is there)."""
+    stem = re.sub(r"^[0-9a-f]{40,64}_(.+?)(?:_[0-9a-f]{10})?$", r"\1", source_paths[0].stem).strip() or "새 수업"
     return stem if len(source_paths) == 1 else f"{stem} 외 {len(source_paths) - 1}개"
 
 
@@ -3445,10 +3469,13 @@ def _managed_publish_artifact_paths(
         max_bytes=SAFE_PATH_COMPONENT_MAX_BYTES,
         minimum_bytes=EDB_PART_SUFFIX_RESERVED_BYTES + 1,
     )
+    # The build time ends the name, so each rebuild downloads as its own file instead of
+    # the browser saving 'name (1).edb' next to an older build with the toast's name.
     edb_name = sanitize_edb_file_name(
         requested_edb_name,
         fallback_stem=fallback_stem,
-        max_bytes=edb_name_budget,
+        max_units=edb_name_budget,
+        suffix=time.strftime("%m%d_%H%M%S"),
     )
     return edb_name, staging_dir, final_dir
 
@@ -13702,8 +13729,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         export_final_dir: Path | None = None
         export_working_dir: Path | None = None
         export_cleanup_dir: Path | None = None
+        should_cancel = None
         try:
             payload = self._read_json_body()
+            if payload.get("jobId"):
+                should_cancel = self._cancel_checker(payload.get("jobId"))
             preview_only = _coerce_bool(
                 payload.get("preview")
                 if "preview" in payload
@@ -13785,7 +13815,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     if (payload.get("edbName") or payload.get("edb_name")) is not None
                     else None,
                     fallback_stem="mvp_board",
-                    max_bytes=export_edb_name_budget,
+                    max_units=export_edb_name_budget,
                 ),
                 "sync_ui": False,
             }
@@ -13820,6 +13850,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     ),
                     content_target=content_target,
                     input_notes=input_notes,
+                    should_cancel=should_cancel,
                     **common_kwargs,
                 )
             if isinstance(result, dict):
@@ -13832,6 +13863,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             if export_cleanup_dir is not None:
                 _discard_staged_publish(export_cleanup_dir)
+            if should_cancel is not None and should_cancel():
+                self._send_job_cancelled()
+                return
             error_payload = _export_error_payload(exc)
             self._send_json(error_payload, status=_export_error_status(exc, error_payload))
             return

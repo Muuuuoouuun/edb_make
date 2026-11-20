@@ -81,7 +81,7 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("실제 사용", panel)
         self.assertIn("파일 없음", panel)
         self.assertIn("폴더 없음", panel)
-        self.assertIn("ClassIn 열기", panel)
+        self.assertIn("ClassIn에서 열기", panel)
         self.assertIn("openPublishedEdb(summary)", panel)
         # The English developer handoff report is no longer opened from the UI.
         self.assertNotIn("openClassinHandoff", panel)

@@ -2136,12 +2136,19 @@ def _record_ms(timings: dict[str, int] | None, key: str, started_at: float) -> N
 ExportProgress = Callable[[str, int, int], None]
 
 
+class ExportCancelled(Exception):
+    """A progress callback raises this to stop the export."""
+
+
 def _report_progress(progress: ExportProgress | None, stage: str, done: int = 0, total: int = 0) -> None:
-    """Tell the caller which stage is running; a broken callback never fails the export."""
+    """Tell the caller which stage is running; a broken callback never fails the export,
+    but one that raises ExportCancelled stops it."""
     if progress is None:
         return
     try:
         progress(stage, done, total)
+    except ExportCancelled:
+        raise
     except Exception:  # noqa: BLE001 - progress is display-only
         pass
 

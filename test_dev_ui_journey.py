@@ -384,8 +384,8 @@ class TestPublishResultJourney(unittest.TestCase):
         let tree = sandbox.PublishResultPanel(props);
         const buttons = walk(findClass(tree, 'publish-result-primary-actions')).filter(node => node.type === 'button');
         assert.equal(buttons.length, 3);
-        buttons.find(node => text(node).includes('ClassIn 열기')).props.onClick();
-        buttons.find(node => text(node).includes('폴더')).props.onClick();
+        buttons.find(node => text(node).includes('ClassIn에서 열기')).props.onClick();
+        buttons.find(node => text(node).includes('폴더 열기')).props.onClick();
         assert.deepEqual(opened, [summary]);
         assert.deepEqual(folders, ['C:/out']);
         sandbox.publishOpen = true;
