@@ -4456,7 +4456,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(52, captured["board_page_count"])
             self.assertEqual(26, captured["split_entry_count"])
             self.assertEqual(52, captured["split_board_page_count"])
-            self.assertEqual("Renamed_Lesson.edb", captured["split_edb_name"])
+            self.assertRegex(captured["split_edb_name"], r"^Renamed_Lesson_\d{4}_\d{6}\.edb$")
             self.assertEqual(["Renamed_Lesson_part01.edb", "Renamed_Lesson_part02.edb"], captured["validated_paths"])
             self.assertEqual([13, 13], captured["expected_min_records"])
             self.assertEqual("Renamed_Lesson_part01.edb", body["publishSummary"]["edbFileName"])

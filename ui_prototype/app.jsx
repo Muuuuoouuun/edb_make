@@ -7848,13 +7848,13 @@ function ItemsRail({
               }}
               className={`rail-mini-item ${activeId === it.id ? 'active' : ''} ${hasPageChromeArtifactFlag(it) ? 'page-chrome-artifact' : ''}`}
               aria-current={activeId === it.id ? 'true' : undefined}
-              aria-label={`${String(i + 1).padStart(2, '0')} ${problemDisplayName(it, i)}`}
+              aria-label={`${String(i + 1).padStart(2, '0')} ${problemDisplayName(it, i)}${it.reviewStatus !== 'normal' && it.statusLabel ? `, ${it.statusLabel}` : ''}`}
               data-tooltip={`${String(i + 1).padStart(2, '0')} · ${problemDisplayName(it, i)}`}
               onClick={() => setActive(it.id)}
             >
               <span className={`thumb ${railThumbClass(it)}`}><TileImage item={it} previewMaxDimension={RAIL_THUMB_PREVIEW_MAX_DIMENSION} /></span>
               <span className="idx">
-                <span className={`status-dot ${reviewStatusClass(it.reviewStatus)}`} />
+                <span className={`status-dot ${reviewStatusClass(it.reviewStatus)}`} hidden={it.reviewStatus === 'normal'} />
                 {String(i + 1).padStart(2, '0')}
               </span>
             </button>
@@ -8091,12 +8091,12 @@ function ItemsRail({
                               )}
                               {publish.canOpenEdbFile && (
                                 <button className="btn" type="button" onClick={() => openPublishedEdb(publish)}>
-                                  {Icon.board}<span>EDB 파일 열기</span>
+                                  {Icon.board}<span>ClassIn에서 열기</span>
                                 </button>
                               )}
                               {publish.canOpenOutputDir && (
                                 <button className="btn" type="button" onClick={() => openOutputFolder(publish.outputDir)}>
-                                  {Icon.folder}<span>출력 폴더 열기</span>
+                                  {Icon.folder}<span>폴더 열기</span>
                                 </button>
                               )}
                             </div>
@@ -8107,7 +8107,7 @@ function ItemsRail({
                           type="button"
                           disabled={Boolean(restoringSessionId) || recentSessionRestoreBlocked || !onRestoreRecentSession}
                           onClick={() => onRestoreRecentSession?.(entry.id)}
-                          title="이 작업을 다시 엽니다"
+                          title="이 수업을 다시 엽니다"
                         >
                           {Icon.refresh}<span>{restoringSessionId === entry.id ? '여는 중' : '열기'}</span>
                         </button>
@@ -8116,7 +8116,7 @@ function ItemsRail({
                   );
                 })}
                 {!filteredRecentSessions.length && (
-                  <p className="session-history-empty" role="status">검색한 작업이 없습니다. 다른 이름으로 검색해 주세요.</p>
+                  <p className="session-history-empty" role="status">검색한 수업이 없습니다. 다른 이름으로 검색해 주세요.</p>
                 )}
                 {!!filteredRecentSessions.length && (
                   <div className="session-history-footer">
@@ -8352,7 +8352,7 @@ function RailRow({ it, i, isSelected, isActive, isPressed, isJustMoved, moveDire
             aria-posinset={i + 1}
             aria-setsize={filterActive ? itemCount : displayedCount}
             aria-describedby={editScope ? undefined : "problem-order-help"}
-            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${editTarget ? ', 교체 대상' : ''}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME}과 위아래 방향키로 순서 이동`}
+            aria-label={`${i + 1}번 ${problemDisplayName(it, i)}${it.reviewStatus !== 'normal' && it.statusLabel ? `, ${it.statusLabel}` : ''}${editTarget ? ', 교체 대상' : ''}${isSelected ? ', 선택됨' : ''}. Shift 범위 선택, ${PRIMARY_MODIFIER_NAME} 개별 선택, ${ALTERNATE_MODIFIER_NAME} 키와 위아래 방향키로 순서 이동`}
             onClick={e => {
               if (editScope || suppressClickRef.current) return;
               selectRailItem(it.id, e);
@@ -10264,7 +10264,7 @@ function HomeDashboard({
           </button>
         </div>
         <div className="home-launch-heading">
-          <span className="home-launch-step">01 · 새 작업</span>
+          <span className="home-launch-step">01 · 새 수업</span>
           <h2 id="home-launch-title">어떤 자료로 시작할까요?</h2>
         </div>
 
@@ -10580,7 +10580,7 @@ function PublishResultPanel({
           disabled={!summary.canOpenEdbFile}
           title={summary.edbFileExists === false ? 'EDB 파일이 없습니다' : 'ClassIn 또는 기본 앱으로 열기'}
         >
-          {Icon.board}<span>ClassIn 열기</span>
+          {Icon.board}<span>ClassIn에서 열기</span>
         </button>
         <button
           className="btn"
@@ -10589,7 +10589,7 @@ function PublishResultPanel({
           disabled={!summary.canOpenOutputDir}
           title={summary.outputDirExists === false ? '출력 폴더가 없습니다' : '출력 폴더 열기'}
         >
-          {Icon.folder}<span>{summary.outputDirExists === false ? '폴더 없음' : '폴더'}</span>
+          {Icon.folder}<span>{summary.outputDirExists === false ? '폴더 없음' : '폴더 열기'}</span>
         </button>
       </div>
       {open && (
@@ -10832,7 +10832,7 @@ function BoardLayoutControls({
       {columns !== BOARD_COLUMN_MIN && (
         <div className="placement-column-warning" role="status">
           <strong>기존 {columns}칸 배치를 유지합니다.</strong>
-          <small>새 작업은 한 행에 문제 하나로 시작합니다.</small>
+          <small>새 수업은 한 행에 문제 하나로 시작합니다.</small>
           <small>기존 배치 그대로 저장할 수 있습니다. 2·3칸 배치의 EDB 제작은 아직 지원하지 않습니다.</small>
         </div>
       )}
@@ -11923,7 +11923,7 @@ function SidePanel({
                         {Icon[itemIntentMeta.icon] || Icon.scan}
                         {itemIntentMeta.badgeLabel || itemIntentMeta.label}
                       </span>
-                      {problemSourceLabel(item)} · {item.type.toUpperCase()}
+                      {problemSourceLabel(item)}
                     </div>
                   </div>
                   <div className="item-nav" role="group" aria-label="자료 이동">
@@ -11971,7 +11971,7 @@ function SidePanel({
                       type="button"
                       className="section-hd-action"
                       disabled={panelBusy || item.step === 'raw'}
-                      title={`${stepLabel(item.step)}을(를) 전체 ${items.length}개 자료에 적용 · 검수 적용 시 저장`}
+                      title={`${stepLabel(item.step)} 방식을 전체 ${items.length}개 자료에 적용 · 검수 적용 시 저장`}
                       onClick={() => applyToAll(item.step)}
                     >전체 적용</button>
                   )}
@@ -17216,6 +17216,7 @@ async function postExport(files, aiFallback, inputIntent = DEFAULT_INPUT_INTENT,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(withExpectedSessionRevision({
       ...(progressId ? { progressId } : {}),
+      jobId: options.jobId,
       files: filesPayload,
       preview: !!options.preview,
       exportMode: inputIntentConfig.exportMode,
@@ -17316,6 +17317,7 @@ async function postReextractSharedPassages(options = {}){
     signal: options.signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(withExpectedSessionRevision({
+      jobId: options.jobId,
       preview: true,
       exportEdb: false,
       reuseSessionSources: true,
@@ -17823,6 +17825,16 @@ async function postEnhanceImage(args, options = {}){
   });
   const json = await expectOkJson(resp, '고화질 처리 실패');
   return json;
+}
+
+// keepalive lets a cancel sent while the page unloads (refresh, close) still reach the app.
+function postJobCancel(jobId){
+  return fetch('/api/jobs/cancel', {
+    method: 'POST',
+    keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jobId }),
+  }).catch(() => {});
 }
 
 // AI jobs do not hold up board edits, so an edit made meanwhile rejects the AI result.
@@ -18800,14 +18812,9 @@ function App(){
     const isRecognition = String(job?.scope || '').includes('recognition');
     const controller = jobControllersRef.current.get(id);
     if (controller) controller.abort();
-    // Aborting only stops the browser; this also stops the app's AI work for this job before it saves.
-    if (job?.scope === 'image-enhance' || job?.scope === 'session-recognition') {
-      fetch('/api/jobs/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: id }),
-      }).catch(() => {});
-    }
+    // Aborting only stops the browser; this also stops the app's work for this job (an import frees
+    // the app's file lock, an AI job stops before it saves). The app ignores ids no job watches.
+    postJobCancel(id);
     settleBackgroundJob(id, {
       status: 'canceled',
       label: isRecognition ? 'AI 인식 취소됨' : '작업 취소됨',
@@ -18815,6 +18822,18 @@ function App(){
     }, 2200);
     showToast(isRecognition ? 'AI 인식을 취소했어요' : '작업을 취소했어요');
   }, [backgroundJobs, settleBackgroundJob, showToast]);
+
+  // Refresh, close or back leaves a running import holding the app's file lock; stop it there too.
+  // Only imports: 고화질 saves its own result in the app, so a refresh must not throw that paid work away.
+  useEffect(() => {
+    const importIds = backgroundJobs
+      .filter(job => job.status === 'running' && String(job.scope || '').startsWith('queue-'))
+      .map(job => job.id);
+    if (!importIds.length) return undefined;
+    const stopImports = () => importIds.forEach(id => postJobCancel(id));
+    window.addEventListener('pagehide', stopImports);
+    return () => window.removeEventListener('pagehide', stopImports);
+  }, [backgroundJobs]);
 
   useEffect(() => {
     return () => {
@@ -19185,6 +19204,7 @@ function App(){
       const incomingSession = await postReextractSharedPassages({
         session,
         signal: job.controller.signal,
+        jobId: job.id,
         edbName: fileName,
         ocr: aiEnabled ? 'auto' : 'local',
         aiEnabled,
@@ -20133,6 +20153,7 @@ function App(){
             : entry)),
           preserveMediaMode: keepAttachedFigures ? 'auto' : 'off',
           signal: job.controller.signal,
+          jobId: job.id,
           preview: true,
           edbName: fileName,
           ocr: recognitionOcr,
@@ -20213,6 +20234,7 @@ function App(){
           ? { ...entry, hint: exportProgressHint(progress) || entry.hint }
           : entry)),
         signal: job.controller.signal,
+        jobId: job.id,
         preserveMediaMode: keepAttachedFigures ? 'auto' : 'off',
         trimPageWhitespace: !isManualSplit && trimPageWhitespace,
         edbName: fileName,
@@ -20468,7 +20490,7 @@ function App(){
     setItems(it => it.map(x => ({ ...x, step: nextStep })));
     setPublished(false);
     if (options.silent) return;
-    showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)}을(를) 적용했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`);
+    showToast(`전체 ${items.length}개 항목에 ${stepLabel(nextStep)} 방식을 적용했어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`);
   };
   const setPlacements = (updates) => {
     const validUpdates = Array.isArray(updates)
@@ -21520,7 +21542,7 @@ function App(){
                 setInitialSessionLoaded(true);
               }}
             >
-              새 작업으로 시작
+              새 수업으로 시작
             </button>
           </div>
         </div>

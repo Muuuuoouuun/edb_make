@@ -62,6 +62,9 @@ class TestDevUiCopy(unittest.TestCase):
             "ID, 번호", "고객을 확인할 수 있는 ID", "'OCR 미사용'", "로컬 2K",
             "<code>{errorSnapshot.code || 'unknown'}</code>", "배포 서버", "1.2p는", "1.2p 경계",
             "빠른 자르기", "수동 쪼개기", "영역 다시 잡기", "문항 다시 나누기", "선택 항목 재분할", "연속 자르기·스탬프",
+            # One name per open action after a build: the top bar's 'ClassIn에서 열기' / '폴더 열기'.
+            "<span>ClassIn 열기</span>", "<span>EDB 파일 열기</span>", "<span>출력 폴더 열기</span>", ": '폴더'}",
+            "item.type.toUpperCase()", "을(를)", "${ALTERNATE_MODIFIER_NAME}과", "새 작업", "이 작업을 다시", "검색한 작업",
         ):
             self.assertNotIn(gone, APP, gone)
         for kept in (
@@ -71,6 +74,7 @@ class TestDevUiCopy(unittest.TestCase):
             "'이름 없는 수업'", 'placeholder="수업 이름으로 검색"', "'기본 간격은 ClassIn 쪽 경계에 맞춥니다.'",
             "{Icon.crop} 영역 넓히기", "[['crop','영역 조정'],['split','수동 자르기']]", "{Icon.pen} 수동 자르기",
             "disabled={busy || !changed}>원래 영역으로</button>", "onClick={onCancel}>{Icon.arrowLeft} 취소</button>",
+            "01 · 새 수업", "${ALTERNATE_MODIFIER_NAME} 키와 위아래 방향키로",
         ):
             self.assertIn(kept, APP, kept)
 

@@ -2427,10 +2427,11 @@
     gap: 6px;
     min-width: 0;
   }
-  /* Download on its own row; ClassIn 열기 · 폴더 share the next one. */
+  /* Download on its own row; ClassIn에서 열기 · 폴더 열기 share the next one,
+     each sized from its label so neither wraps in a 300px panel. */
   .publish-result-primary-actions .btn.primary{ flex-basis: 100%; }
   .publish-result-primary-actions .btn{
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
     min-height: var(--control-height);
     justify-content: center;

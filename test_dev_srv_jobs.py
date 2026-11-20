@@ -435,17 +435,20 @@ def test_cancel_also_stops_the_apps_ai_work() -> None:
     const posts = [];
     const sandbox = {
       useCallback: fn => fn, jobControllersRef: { current: new Map() }, settleBackgroundJob() {}, showToast() {},
-      fetch: async (url, options) => { posts.push([url, options.method, JSON.parse(options.body).jobId]); return { ok: true }; },
+      fetch: async (url, options) => { posts.push([url, options.method, JSON.parse(options.body).jobId, options.keepalive]); return { ok: true }; },
       backgroundJobs: [{ id: 'a', scope: 'image-enhance' }, { id: 'b', scope: 'queue-recognition' }, { id: 'c', scope: 'session-recognition' }],
     };
     vm.createContext(sandbox);
-    vm.runInContext(section('  const cancelBackgroundJob = useCallback(', '\n  useEffect(() => {')
+    vm.runInContext(section('function postJobCancel(', '\n// AI jobs do not hold up board edits')
+      + section('  const cancelBackgroundJob = useCallback(', '\n  useEffect(() => {')
       + '\nglobalThis.cancelBackgroundJob = cancelBackgroundJob;', sandbox);
     sandbox.cancelBackgroundJob('a');
     sandbox.cancelBackgroundJob('b');
     sandbox.cancelBackgroundJob('c');
-    // Each cancel names its own job, so a second running AI job keeps going.
-    assert.deepEqual(posts, [['/api/jobs/cancel', 'POST', 'a'], ['/api/jobs/cancel', 'POST', 'c']]);
+    // Each cancel names its own job, so a second running job keeps going; an import (queue-*)
+    // cancel also frees the app's file lock. keepalive lets the cancel leave an unloading page.
+    assert.deepEqual(posts, [['/api/jobs/cancel', 'POST', 'a', true], ['/api/jobs/cancel', 'POST', 'b', true],
+      ['/api/jobs/cancel', 'POST', 'c', true]]);
     """)
 
 
