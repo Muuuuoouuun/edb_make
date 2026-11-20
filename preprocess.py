@@ -3365,11 +3365,13 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
     if not commands:
         diagnosis = _format_hwp_conversion_diagnosis(hwp_inspection)
         suffix = f" Diagnosis: {diagnosis}" if diagnosis else ""
-        raise ValueError(
+        error = ValueError(
             "HWP/HWPX input requires a local converter such as LibreOffice with HWP support "
             "or hwp5pdf. HWPilot can only help normalize HWP to HWPX and still needs a PDF "
             f"converter. Install one, or convert the HWP file to PDF first.{suffix}"
         )
+        error.source_file = source_path.name  # names the file on the error card, as PdfPageProcessingError does
+        raise error
 
     has_html_pdf_fallback = bool(_iter_pyhwp_html_converter_commands() and _iter_chrome_pdf_commands())
     direct_timeout_seconds = timeout_seconds
@@ -3411,10 +3413,12 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
     detail = "; ".join(errors) if errors else "no converter produced a PDF"
     diagnosis = _format_hwp_conversion_diagnosis(hwp_inspection)
     suffix = f" Diagnosis: {diagnosis}" if diagnosis else ""
-    raise ValueError(
+    error = ValueError(
         "HWP/HWPX conversion failed. Install LibreOffice with HWP support, "
         f"or convert the HWP file to PDF first. Details: {detail}{suffix}"
     )
+    error.source_file = source_path.name
+    raise error
 
 
 def _extract_pdf_problem_markers(

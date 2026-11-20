@@ -2842,7 +2842,9 @@ def _processing_error_context(exc: BaseException) -> dict[str, Any]:
                 context.setdefault(key, str(value) if isinstance(value, Path) else value)
         current = getattr(current, "cause", None) or current.__cause__
     if context.get("sourceFile"):
-        context.setdefault("fileName", Path(str(context["sourceFile"])).name)
+        # The teacher's own file name: no folder and no managed-upload digest prefix.
+        name = re.sub(r"^[0-9a-f]{40,64}_", "", Path(str(context["sourceFile"])).name)
+        context["sourceFile"] = context["fileName"] = name
     return context
 
 
@@ -5950,7 +5952,13 @@ def _open_system_target(target: Path) -> None:
     if sys.platform.startswith("win"):
         os.startfile(str(target))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(target)])
+        # `open` returns at once but exits 1 ("No application knows how to open ...") when nothing claims the file.
+        try:
+            result = subprocess.run(["/usr/bin/open", str(target)], capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            return  # ponytail: a launch slower than 10 s (e.g. a first-launch prompt) counts as opened
+        if result.returncode != 0:
+            raise OSError(result.stderr.decode("utf-8", "replace").strip() or f"open exited {result.returncode}")
     else:
         subprocess.Popen(["xdg-open", str(target)])
 
@@ -13073,7 +13081,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         try:
             _open_system_target(target)
         except OSError as exc:
-            self._send_json({"ok": False, "error": f"failed to open: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._send_json({
+                "ok": False, "code": "open_file_failed", "error": "ClassIn에서 바로 열지 못했어요.",
+                "detail": f"failed to open: {exc}",
+            }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "path": str(target)})
 

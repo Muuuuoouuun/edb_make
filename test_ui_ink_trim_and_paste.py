@@ -179,15 +179,15 @@ class TestUiClipboardPaste(unittest.TestCase):
         assert.equal(result.files[0].type, 'image/png');
         assert.equal(result.files[0].lastModified, 11);
         assert.equal(result.files[1], pdf, 'a copied file keeps its own name');
-        assert.equal(result.rejected, 1);
+        assert.deepEqual(plain(result.rejected), ['notes.txt']);
         const second = new File(['jpg'], 'image.jpg', { type: 'image/jpeg' });
         result = sandbox.clipboardUploadFiles({ items: [], files: [shot, second] }, now);
         assert.deepEqual(plain(result.files.map(file => file.name)),
           ['붙여넣은 이미지 20261019-093005.png', '붙여넣은 이미지 20261019-093005-2.jpg'], 'falls back to clipboard files');
         const unnamed = new File(['webp'], 'clipboard', { type: 'image/webp' });
         assert.equal(sandbox.clipboardUploadFiles({ files: [unnamed] }, now).files[0].name, '붙여넣은 이미지 20261019-093005.webp');
-        assert.deepEqual(plain(sandbox.clipboardUploadFiles({ items: [{ kind: 'string' }] }, now)), { files: [], rejected: 0 });
-        assert.deepEqual(plain(sandbox.clipboardUploadFiles(null, now)), { files: [], rejected: 0 });
+        assert.deepEqual(plain(sandbox.clipboardUploadFiles({ items: [{ kind: 'string' }] }, now)), { files: [], rejected: [] });
+        assert.deepEqual(plain(sandbox.clipboardUploadFiles(null, now)), { files: [], rejected: [] });
         """)
 
     def test_paste_adds_files_outside_text_fields_and_dialogs(self) -> None:
@@ -229,7 +229,7 @@ class TestUiClipboardPaste(unittest.TestCase):
         dialogOpen = false;
         event = paste([new File(['x'], 'notes.txt', { type: 'text/plain' })]);
         assert.equal(event.prevented, true);
-        assert.equal(toasts.at(-1), '이미지, PDF, HWP 파일만 붙여넣을 수 있어요');
+        assert.equal(toasts.at(-1), 'PDF, HWP, PNG, JPG 파일만 넣을 수 있어요');
         event = paste([]);
         assert.equal(event.prevented, false, 'plain text paste is ignored');
         assert.equal(added.length, 1);
