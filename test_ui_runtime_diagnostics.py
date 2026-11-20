@@ -482,7 +482,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         item_mapper = source.split("function mapProblemToItem(problem, idx, rawSession = null){", 1)[1]
         item_mapper = item_mapper.split("async function fetchLatestSession", 1)[0]
         preset = side_panel.split("const applyPlacementPreset = (preset) => {", 1)[1]
-        preset = preset.split("const updateCropDraft", 1)[0]
+        preset = preset.split("const commitPlacement", 1)[0]
 
         self.assertIn("    passageGroupId,\n", item_mapper)
         self.assertIn("passageRole:", item_mapper)
@@ -491,7 +491,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("const selectedPassageFragments = selectedGroupItems.filter(isPassageFragmentProblem);", side_panel)
         self.assertIn("placementPreset === 'passage-only'", side_panel)
         self.assertIn("setPlacements?.(selectedPassageFragments.map(target => ({", preset)
-        self.assertIn("scaleRatio: maxPlacementScaleRatio(target)", preset)
+        # fitWidth alone widens to the 너비 맞춤 3x; a capped scale left passages at 1-1.6x.
+        self.assertNotIn("scaleRatio", preset)
         self.assertIn("fitWidth: true", preset)
         self.assertIn("setBoardColumns?.(1)", preset)
         self.assertIn("value === 'passage-only' && passageFragmentCount === 0", side_panel)
@@ -831,7 +832,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn('role="status" aria-live="polite"', items_rail)
         self.assertIn("pendingKeyboardFocusRef.current = item.id", items_rail)
         self.assertIn("setItems(rollbackItems)", reorder_flow)
-        self.assertIn("setSession(snapshotBefore)", reorder_flow)
+        self.assertIn("setSession(savedSession)", reorder_flow)
+        self.assertNotIn("setSession(snapshotBefore)", reorder_flow)
         self.assertIn("순서 저장 실패 · 이전 순서로 복구했습니다", reorder_flow)
         self.assertIn("return true", reorder_flow)
         self.assertIn(".item:focus-visible", board)

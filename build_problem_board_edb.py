@@ -7559,7 +7559,8 @@ def _normalize_problem_title(title: str | None, index: int, source_page_id: str,
         return raw
     if isinstance(problem_number, int) and problem_number > 0:
         return f"문항 {problem_number}"
-    return f"문항 {index + 1:02d} · {source_page_id}"
+    # The page id carries the upload digest; the panel shows the page as '원본 N쪽'.
+    return f"문항 {index + 1:02d}"
 
 
 def recrop_problem(
