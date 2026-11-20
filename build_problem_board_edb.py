@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import copy
 import hashlib
 import io
 import json
@@ -16,6 +17,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 from urllib.parse import unquote, urlparse
@@ -8957,6 +8959,15 @@ def _problem_image_page_chrome_artifact_stats(image: Image.Image) -> dict[str, A
     }
 
 
+# ponytail: one decode per crop file per run, keyed by path+mtime+size. Edits write crops to fresh
+# names, so only a same-size rewrite in place within one clock tick would read stale stats.
+@lru_cache(maxsize=4096)
+def _page_chrome_artifact_stats_for_file(path: str, modified_ns: int, size: int) -> dict[str, Any]:
+    del modified_ns, size  # cache-key inputs
+    with Image.open(path) as image:
+        return _problem_image_page_chrome_artifact_stats(image)
+
+
 def _count_lower_corner_page_badges_from_mask(mask: Any) -> int:
     height = len(mask)
     if height <= 24:
@@ -9069,8 +9080,11 @@ def _classin_page_chrome_artifact_issues(problems: Sequence[dict[str, Any]]) -> 
             s2_total += 1
             continue
         try:
-            with Image.open(image_path) as image:
-                stats = _problem_image_page_chrome_artifact_stats(image)
+            file_stat = image_path.stat()
+            # Every board edit re-runs this preflight; decode each crop file once.
+            stats = copy.deepcopy(_page_chrome_artifact_stats_for_file(
+                str(image_path), file_stat.st_mtime_ns, file_stat.st_size,
+            ))
         except OSError:
             continue
         if step == PROCESSING_STEP_CHALK:
