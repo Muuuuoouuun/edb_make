@@ -8,6 +8,8 @@ import io
 import json
 import math
 import os
+import shutil
+import sys
 import threading
 import time
 import urllib.error
@@ -1071,6 +1073,23 @@ def _tesseract_binary_available_cached(path_env: str, command: str) -> bool:
         return False
 
 
+def _use_installed_tesseract() -> None:
+    # The Windows installer leaves PATH alone, and a Finder-launched Mac app
+    # lacks Homebrew's PATH, so also look in the standard install folders.
+    # ponytail: one PATH scan per probe while no engine is installed; skip it
+    # while a negative probe is fresh if that ever shows up in a profile.
+    settings = getattr(pytesseract, "pytesseract", None)
+    if settings is None or shutil.which(str(settings.tesseract_cmd)):
+        return
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", "")
+        roots = [os.environ.get("PROGRAMFILES", ""), os.environ.get("PROGRAMFILES(X86)", ""), local, local and os.path.join(local, "Programs")]
+        candidates = [os.path.join(root, "Tesseract-OCR", "tesseract.exe") for root in roots if root]
+    else:
+        candidates = ["/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract"]
+    settings.tesseract_cmd = next((path for path in candidates if os.path.isfile(path)), settings.tesseract_cmd)
+
+
 def _tesseract_binary_available(*, refresh: bool = False) -> bool:
     """Return True only if the tesseract binary is callable.
 
@@ -1079,10 +1098,12 @@ def _tesseract_binary_available(*, refresh: bool = False) -> bool:
     desktop process is already running.
     """
 
-    command = ""
-    if pytesseract is not None:
-        command = str(getattr(getattr(pytesseract, "pytesseract", None), "tesseract_cmd", ""))
     with _OCR_CAPABILITY_LOCK:
+        command = ""
+        if pytesseract is not None:
+            # A standard install found later changes the command, hence the cache key.
+            _use_installed_tesseract()
+            command = str(getattr(getattr(pytesseract, "pytesseract", None), "tesseract_cmd", ""))
         cache_key = (os.environ.get("PATH", ""), command)
         if refresh:
             _tesseract_binary_available_cached.cache_clear()

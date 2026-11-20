@@ -356,6 +356,10 @@ def run_problem_export(*args: Any, **kwargs: Any) -> Any:
 # dict get/set/pop are atomic, so the progress poll never waits on the export.
 _EXPORT_PROGRESS: dict[str, dict[str, Any]] = {}
 
+# Gallery (문제 추출) jobs touch only RUNTIME_DIR/problem-gallery, never lesson files. They skip the
+# lesson lock and wait only for each other (manifest read-modify-write, shared export .tmp names).
+_gallery_job_lock = threading.Lock()  # ponytail: one gallery job at a time; per-job locks if two tabs must extract at once
+
 
 def _run_with_export_progress(progress_id: str, run: Any, *args: Any, **kwargs: Any) -> Any:
     if not progress_id:
@@ -11351,11 +11355,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/uploads":
             self._run_artifact_job(self._handle_upload)
             return
-        if parsed.path in {"/api/parser/upload", "/api/parser/next", "/api/parser/export-images", "/api/parser/recognize-labels"}:
+        if parsed.path in {"/api/parser/upload", "/api/parser/next", "/api/parser/export-images", "/api/parser/recognize-labels", "/api/parser/delete"}:
             if not _request_is_same_origin(self.headers):
                 self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
                 return
-            self._run_artifact_job(lambda: self._handle_parser_request(parsed.path.rsplit("/", 1)[-1], parsed))
+            # Still counted as a writer job, so quitting, updating and 새 수업 wait for it.
+            with _gallery_job_lock:
+                self._run_artifact_job(lambda: self._handle_parser_request(parsed.path.rsplit("/", 1)[-1], parsed), exclusive=False)
             return
         if parsed.path == "/api/export":
             self._run_artifact_job(self._handle_export)
@@ -11477,6 +11483,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 elif action == "recognize-labels":
                     result = store.recognize_labels(payload.get("problemIds"), only_unattempted=payload.get("automatic") is True)
                     self._send_json({"ok": True, **result, "jobs": [public_job(job) for job in result["jobs"]]})
+                elif action == "delete":
+                    try:
+                        store.delete_job(str(payload.get("jobId", "")))
+                    except OSError as exc:
+                        self._send_json({
+                            "ok": False, "code": "gallery_delete_failed",
+                            "error": "자료를 지우지 못했어요. 잠시 후 다시 시도해 주세요.", "detail": f"{type(exc).__name__}: {exc}",
+                        }, status=HTTPStatus.CONFLICT)
+                        return
+                    self._send_json({"ok": True})
                 elif action == "export-images":
                     ids = payload.get("problemIds")
                     if not isinstance(ids, list) or not all(isinstance(value, str) for value in ids):
@@ -11489,11 +11505,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                         "mode": mode, "fileCount": count * (2 if mode == "both" else 1),
                         "fileName": target.name if target.suffix == ".zip" else store.image_download_name(ids[0]),
                     })
-        except (ValueError, OSError) as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except ValueError as exc:
+            # The gallery raises its own Korean ValueErrors; some carry a code and an English detail.
+            self._send_json({
+                "ok": False, "code": getattr(exc, "code", None) or "gallery_request_invalid", "error": str(exc),
+                "detail": getattr(exc, "detail", "") or f"{type(exc).__name__}: {exc}",
+            }, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             _log_operation_exception("problem_gallery", exc)
-            self._send_json({"ok": False, "error": "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요."}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            # Disk full, locked files and memory get the shared Korean copy; the raw text stays in detail.
+            payload = _classified_processing_error(exc) if isinstance(exc, (OSError, MemoryError)) else None
+            self._send_json(payload or {
+                "ok": False, "code": "gallery_failed",
+                "error": "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요.",
+                "detail": f"{type(exc).__name__}: {exc}",
+            }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_session_publish_plan(self) -> None:
         session, current_revision = self._current_session_state()
