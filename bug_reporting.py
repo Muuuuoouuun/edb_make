@@ -76,6 +76,12 @@ _DOCUMENT_NAME_PATTERN = re.compile(
     + _DOCUMENT_EXTENSION
     + r"\b"
 )
+# A quoted name may contain spaces ('3학년 2반 홍길동.pdf'); _DOCUMENT_NAME_PATTERN
+# only catches the last word before the extension.
+_QUOTED_DOCUMENT_NAME_PATTERN = re.compile(
+    r"(['\"‘“])[^'\"’”\r\n]*?\." + _DOCUMENT_EXTENSION + r"(['\"’”])",
+    re.IGNORECASE,
+)
 _SECRET_FIELD_PATTERN = re.compile(
     r"(?i)^(?:api[_ -]?key|authorization|bearer|password|secret|token)$"
 )
@@ -276,6 +282,7 @@ def _redact_filesystem_references(value: str) -> str:
     text = _LOCAL_DOCUMENT_PATH_PATTERN.sub("[local-path]", text)
     text = _GENERIC_POSIX_DOCUMENT_PATH_PATTERN.sub("[local-path]", text)
     text = _KNOWN_LOCAL_PATH_PATTERN.sub("[local-path]", text)
+    text = _QUOTED_DOCUMENT_NAME_PATTERN.sub(r"\1[document]\2", text)
     text = _DOCUMENT_NAME_PATTERN.sub("[document]", text)
     for index, url in enumerate(protected_urls):
         text = text.replace(f"\x00edb-web-url-{index}\x00", url)
@@ -431,7 +438,8 @@ def _read_log_tail(log_file: Path | None, max_chars: int = MAX_LOG_CHARS) -> str
             tail = _decode_log_bytes(stream.read(), file_prefix=file_prefix)
     except OSError:
         return ""
-    return redact_sensitive_text(tail)[-max_chars:]
+    # Failed request lines keep /api/file paths percent-encoded (C%3A%5CUsers...).
+    return redact_sensitive_text(unquote(tail))[-max_chars:]
 
 
 def _json_length(value: Any) -> int:

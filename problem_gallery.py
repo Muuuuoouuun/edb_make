@@ -11,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -106,8 +107,21 @@ class GalleryStore:
     def save(self, job: dict[str, Any]) -> None:
         root = self.job_dir(job["id"])
         temporary = root / "manifest.tmp"
-        temporary.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-        os.replace(temporary, root / "manifest.json")
+        with temporary.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(job, ensure_ascii=False))
+            stream.flush()
+            # Without this a power cut can leave a NUL-filled manifest, and list_jobs then hides the whole job.
+            os.fsync(stream.fileno())
+        # OneDrive and virus scanners can hold manifest.json for a moment
+        # (same delays as app_server._replace_file_with_retry, which this module cannot import).
+        for delay in (0.05, 0.1, 0.2, 0.4, 0.8, None):
+            try:
+                os.replace(temporary, root / "manifest.json")
+                return
+            except OSError as exc:
+                if delay is None or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                    raise
+                time.sleep(delay)
 
     def list_jobs(self) -> list[dict[str, Any]]:
         jobs = []
@@ -115,7 +129,9 @@ class GalleryStore:
             for path in self.root.glob("*/manifest.json"):
                 try:
                     jobs.append(self.load(path.parent.name))
-                except ValueError:
+                except ValueError as exc:
+                    # Keep the other jobs visible, but leave a trail in app.log for bug reports.
+                    print(f"[problem-gallery] skipped unreadable job {path.parent.name}: {exc.__cause__!r}", file=sys.stderr)
                     continue
         return sorted(jobs, key=lambda job: job["createdAt"], reverse=True)
 
@@ -198,8 +214,12 @@ class GalleryStore:
         context_end = min(count, end + CONTEXT_PAGES)
         result = None
         new_paths: list[Path] = []
+        # ponytail: a scanner/OneDrive lock can leave a batch folder behind; parser requests run
+        # one at a time (exclusive artifact job), so every batch-* folder here is stale.
+        for stale in self.root.glob("*/batch-*"):
+            shutil.rmtree(stale, ignore_errors=True)
         try:
-            with tempfile.TemporaryDirectory(prefix="batch-", dir=root) as temporary:
+            with tempfile.TemporaryDirectory(prefix="batch-", dir=root, ignore_cleanup_errors=True) as temporary:
                 work = Path(temporary)
                 # Keep preprocessing caches inside this temporary batch too.
                 if source.suffix == ".pdf":
@@ -254,9 +274,10 @@ class GalleryStore:
                     if not label_is_confirmed(record):
                         record["riskFlags"] = sorted(set([*record["riskFlags"], LABEL_REVIEW_FLAG]))
                     added.append(record)
-                job["problems"].extend(added)
-                job.update(processedPages=end, status="complete" if end == count else "partial", error=None)
-                self.save(job)
+            # Commit last: the except branch below assumes this batch was not saved.
+            job["problems"].extend(added)
+            job.update(processedPages=end, status="complete" if end == count else "partial", error=None)
+            self.save(job)
         except Exception as exc:
             for path in new_paths:
                 path.unlink(missing_ok=True)

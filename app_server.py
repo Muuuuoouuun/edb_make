@@ -997,6 +997,13 @@ def _atomically_clear_persisted_session_state(keep_history: bool = False) -> Non
             except OSError:
                 pass
             raise
+        if not keep_history:
+            # 초기화 empties 최근 수업 for good: a sync conflict copy would bring its lessons back.
+            for copy in _history_conflict_copies():
+                try:
+                    copy.unlink()
+                except OSError:
+                    pass
         tombstone_cleanup_failed = False
         for _target, tombstone in moved:
             try:
@@ -5411,6 +5418,15 @@ def content_disposition_attachment(filename: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
 
 
+def _latest_session_stamp() -> tuple[int, int, int] | None:
+    """Identity of latest_session.json on disk. A sync tool (OneDrive, iCloud) that replaces the file changes it."""
+    try:
+        stat = LATEST_SESSION_JSON.stat()
+    except OSError:
+        return None
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
 def load_latest_session() -> dict[str, Any] | None:
     with _session_storage_lock:
         _recover_interrupted_session_reset()
@@ -5425,7 +5441,8 @@ def load_latest_session() -> dict[str, Any] | None:
 
 def save_latest_session(session: dict[str, Any], path: Path | None = None) -> None:
     target = path or LATEST_SESSION_JSON
-    payload = json.dumps(session, ensure_ascii=False, indent=2)
+    # Compact: indent=2 makes json use its slow pure-Python encoder on every save.
+    payload = json.dumps(session, ensure_ascii=False, separators=(",", ":"))
     with _session_storage_lock:
         if path is None or target == LATEST_SESSION_JSON:
             _recover_interrupted_session_reset()
@@ -5448,6 +5465,9 @@ def load_session_history(path: Path | None = None, *, strict: bool = False) -> l
     but cannot be read (SessionHistoryCorrupt when it holds no list) instead of returning [],
     so a locked or offline file is never replaced and cleanup never mistakes it for "no history".
     """
+    if path is None:
+        # Lessons only a sync conflict copy holds stay listed and protected from cleanup.
+        return _with_history_conflict_copies(load_session_history(SESSION_HISTORY_JSON, strict=strict), strict=strict)
     target = path or SESSION_HISTORY_JSON
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
@@ -5473,18 +5493,48 @@ def load_session_history(path: Path | None = None, *, strict: bool = False) -> l
     return [entry for entry in payload if isinstance(entry, dict)]
 
 
+def _history_conflict_copies() -> list[Path]:
+    # OneDrive keeps the other PC's version as 'session_history-PC명.json', iCloud as 'session_history 2.json'.
+    return sorted(SESSION_HISTORY_JSON.parent.glob(f"{SESSION_HISTORY_JSON.stem}?*{SESSION_HISTORY_JSON.suffix}"))
+
+
+def _with_history_conflict_copies(history: list[dict[str, Any]], *, strict: bool) -> list[dict[str, Any]]:
+    """Add lessons only a sync conflict copy holds (the main file wins for the same id).
+    A corrupt copy is skipped; an unreadable one raises only when strict (cleanup then deletes nothing)."""
+    # ponytail: copies stay until 초기화, so 최근 수업 can list more than 10 while one holds lessons the main file dropped
+    seen = {str(entry.get("id") or "") for entry in history}
+    extra: list[dict[str, Any]] = []
+    for copy in _history_conflict_copies():
+        try:
+            entries = load_session_history(copy, strict=strict)
+        except SessionHistoryCorrupt:
+            continue  # holds no list; must never reach _history_for_write as "main file corrupt"
+        for entry in entries:
+            entry_id = str(entry.get("id") or "")
+            if entry_id and entry_id not in seen:
+                seen.add(entry_id)
+                extra.append(entry)
+    if not extra:
+        return history
+    return sorted(history + extra, key=lambda entry: str(entry.get("updatedAt") or ""), reverse=True)
+
+
 def _history_for_write(path: Path | None = None) -> list[dict[str, Any]]:
     """Strict read for writers: a corrupt file counts as empty so the save replaces it;
-    a locked or unreadable one raises SessionHistoryUnreadable (an OSError) and stays untouched."""
+    a locked or unreadable one raises SessionHistoryUnreadable (an OSError) and stays untouched.
+    Sync conflict copies are merged leniently: writers never change them, so an unreadable one just waits."""
+    target = path or SESSION_HISTORY_JSON
     try:
-        return load_session_history(path, strict=True)
+        history = load_session_history(target, strict=True)
     except SessionHistoryCorrupt:
-        return []
+        history = []
+    return _with_history_conflict_copies(history, strict=False) if target == SESSION_HISTORY_JSON else history
 
 
 def save_session_history(history: list[dict[str, Any]], path: Path | None = None) -> None:
     target = path or SESSION_HISTORY_JSON
-    payload = json.dumps(history, ensure_ascii=False, indent=2)
+    # Compact for the same reason as save_latest_session: this rewrites up to 10 full lessons per save.
+    payload = json.dumps(history, ensure_ascii=False, separators=(",", ":"))
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
             _recover_interrupted_session_reset()
@@ -10577,6 +10627,8 @@ class AppHTTPServer(ThreadingHTTPServer):
         # delayed response from a server incarnation it never observed.  The
         # UUID keeps concurrently-started processes unique.
         self._session_epoch = f"{time.time_ns():020d}-{uuid.uuid4().hex}"
+        # Stamp before reading, so a sync that lands in between is still taken over.
+        self._latest_stamp = _latest_session_stamp()
         latest_session = load_latest_session()
         history = load_session_history()
         if latest_session is not None:
@@ -10604,6 +10656,40 @@ class AppHTTPServer(ThreadingHTTPServer):
             self.allowed_files |= collect_session_history_file_paths([entry])
         if history and isinstance(history[0], dict):
             seen.add(str(history[0].get("id") or ""))
+
+    def allow_unwalked_history_paths(self, history: list[dict[str, Any]]) -> None:
+        """GET /api/session/history: walk only lessons this server has not walked yet (start, commits
+        and 새 수업 keep _history_paths_seen in step with allowed_files)."""
+        with self._state_lock:
+            seen = self._history_paths_seen
+            fresh = [entry for entry in history if not entry.get("id") or str(entry["id"]) not in seen]
+        paths = collect_session_history_file_paths(fresh)  # stat-heavy: outside the lock
+        with self._state_lock:
+            self.allowed_files |= paths
+            seen.update(str(entry.get("id") or "") for entry in fresh)
+
+    def _adopt_synced_session_locked(self) -> None:
+        """Call with _state_lock held. Take over latest_session.json when a save from another PC
+        replaced it through sync, so a server left running never serves or overwrites an older lesson.
+        Tabs built on the old copy then get session_conflict."""
+        stamp = _latest_session_stamp()
+        # ponytail: a deleted file (the other PC's 새 수업) is ignored, and a changed file that cannot be read at commit time is still overwritten
+        if stamp is None or stamp == getattr(self, "_latest_stamp", None):
+            return
+        synced = load_latest_session()
+        if synced is None:
+            return  # half-synced or unreadable: look again on the next request
+        self._latest_stamp = stamp
+        if synced == self.latest_session:
+            return  # this server's own save
+        _refresh_session_problem_counts(synced)  # as __init__ does; register_current_session compares refreshed copies
+        if synced == self.latest_session:
+            return  # the same lesson written again (e.g. by an older copy of the app)
+        self.latest_session = synced
+        self._session_revision += 1
+        self.allowed_files.update(collect_session_file_paths(synced))
+        # The synced 최근 수업 may hold new files for lessons already walked: walk them again once.
+        getattr(self, "_history_paths_seen", set()).clear()
 
     def note_shutdown_reason(self, reason: str) -> str:
         normalized = str(reason or "unknown").strip() or "unknown"
@@ -10652,6 +10738,7 @@ class AppHTTPServer(ThreadingHTTPServer):
 
     def session_snapshot_with_revision(self) -> tuple[dict[str, Any] | None, int]:
         with self._state_lock:
+            self._adopt_synced_session_locked()
             snapshot = _clone_jsonish(self.latest_session) if self.latest_session is not None else None
             return snapshot, self._session_revision
 
@@ -10701,6 +10788,7 @@ class AppHTTPServer(ThreadingHTTPServer):
         expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
         updated_snapshot = _clone_jsonish(updated_session)
         with self._state_lock:
+            self._adopt_synced_session_locked()
             if expected_revision is not None and self._session_revision != expected_revision:
                 return None
             if self.latest_session != expected_snapshot:
@@ -10730,6 +10818,7 @@ class AppHTTPServer(ThreadingHTTPServer):
         expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
         updated_snapshot = _clone_jsonish(updated_session)
         with self._state_lock:
+            self._adopt_synced_session_locked()
             if expected_revision is not None and self._session_revision != expected_revision:
                 return None
             if self.latest_session != expected_snapshot:
@@ -10820,7 +10909,11 @@ class AppHTTPServer(ThreadingHTTPServer):
                 if not LATEST_SESSION_JSON.exists():
                     save_latest_session(snapshot)
                 try:
-                    history = _session_history_with_session(_history_for_write(), snapshot)
+                    history = _history_for_write()
+                    entry_id = _session_history_entry(snapshot)["id"]
+                    if history and history[0].get("id") == entry_id and history[0].get("session") == snapshot:
+                        return True  # already the first 최근 수업 entry: no rewrite, keep its time
+                    history = _session_history_with_session(history, snapshot)
                     save_session_history(history)
                 except OSError as exc:
                     print(
@@ -12755,7 +12848,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_session_history(self) -> None:
         history = load_session_history()
-        self._allow_session_files(collect_session_history_file_paths(history))
+        allow_unwalked = getattr(self.app_server, "allow_unwalked_history_paths", None)
+        if callable(allow_unwalked):
+            allow_unwalked(history)
+        else:  # test doubles without the seen set (test_app_server_retry FakeServer)
+            self._allow_session_files(collect_session_history_file_paths(history))
         self._send_json({
             "ok": True,
             "history": _public_session_history(history),
