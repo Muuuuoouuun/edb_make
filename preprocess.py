@@ -53,7 +53,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", 
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
 PDF_NORMALIZED_CACHE_VERSION = 7
-IMAGE_NORMALIZED_CACHE_VERSION = 3
+IMAGE_NORMALIZED_CACHE_VERSION = 4
 HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
@@ -3085,35 +3085,38 @@ def _normalize_pdf_rendered_pages(
     max_dimension: int | None,
 ) -> list[NormalizedPageImage]:
     def _normalize(page: NormalizedPageImage) -> NormalizedPageImage:
-        normalized = normalize_image(
-            page.normalized_path,
-            normalized_output_dir,
-            page_id=page.page_id,
-            page_index=page.page_index,
-            enable_perspective=False,
-            enable_deskew=enable_deskew,
-            enable_margin_crop=enable_margin_crop,
-            max_dimension=max_dimension,
-            base_metadata=dict(page.metadata),
-        )
+        try:
+            normalized = normalize_image(
+                page.normalized_path,
+                normalized_output_dir,
+                page_id=page.page_id,
+                page_index=page.page_index,
+                enable_perspective=False,
+                enable_deskew=enable_deskew,
+                enable_margin_crop=enable_margin_crop,
+                max_dimension=max_dimension,
+                base_metadata=dict(page.metadata),
+            )
+        except Exception as exc:
+            if _is_pdf_resource_error(exc):
+                raise PdfPageProcessingError(source_path, page.page_index + 1, page.page_index + 1, exc, resource_exhausted=True) from exc
+            raise
         normalized.metadata.setdefault("source_pdf_path", str(source_path))
         normalized.metadata["source_type"] = "pdf"
         normalized.metadata["document_like"] = True
         return normalized
 
-    worker_count = 1 if len(rendered) > PDF_PROCESSING_BATCH_PAGES else _resolve_preprocess_page_worker_count(len(rendered))
+    # Results hold no pixels, so peak memory follows the worker count, not
+    # the page count. Out of memory, redo the pages one at a time.
+    worker_count = _resolve_preprocess_page_worker_count(len(rendered))
+    if worker_count > 1:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+                normalized_pages = list(executor.map(_normalize, rendered))
+        except PdfPageProcessingError:
+            worker_count = 1
     if worker_count <= 1:
-        normalized_pages = []
-        for page in rendered:
-            try:
-                normalized_pages.append(_normalize(page))
-            except Exception as exc:
-                if _is_pdf_resource_error(exc):
-                    raise PdfPageProcessingError(source_path, page.page_index + 1, page.page_index + 1, exc, resource_exhausted=True) from exc
-                raise
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-            normalized_pages = list(executor.map(_normalize, rendered))
+        normalized_pages = [_normalize(page) for page in rendered]
     for page in normalized_pages:
         page.metadata["pdf_preprocess_page_worker_count"] = worker_count
     return normalized_pages
@@ -3925,8 +3928,10 @@ def _extract_pdf_media_regions(
     return regions
 
 
-def load_image(source: str | Path) -> Image.Image:
+def load_image(source: str | Path, frame: int = 0) -> Image.Image:
     with Image.open(source) as image:
+        if frame:
+            image.seek(frame)
         oriented = ImageOps.exif_transpose(image)
         if "A" in oriented.getbands() or "transparency" in oriented.info:
             rgba = oriented.convert("RGBA")
@@ -3951,6 +3956,38 @@ def _read_image_dimensions(source: str | Path) -> tuple[int, int] | None:
             return image.size
     except OSError:
         return None
+
+
+# Photos/scans above this (24-200 MP phones, 600-DPI A4) cost ~100 B/px in the
+# chalk cutout but show no more on the board. Cap area, not edge, so tall
+# screenshots keep full width. Manual crops of a 48 MP photo come from a
+# ~12.6 MP page, the same detail 문항 자동 분리 keeps (4096 cap).
+MAX_RASTER_PAGE_PIXELS = 4096 * 3072
+
+
+def raster_page_max_dimension(source: str | Path) -> int | None:
+    if Path(source).suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
+        return None
+    try:
+        with Image.open(source) as image:
+            width, height = image.size  # raw size: EXIF rotation keeps area and long edge
+    except OSError:
+        return None
+    if width * height <= MAX_RASTER_PAGE_PIXELS:
+        return None
+    return int(max(width, height) * math.sqrt(MAX_RASTER_PAGE_PIXELS / (width * height)))
+
+
+def _tiff_page_count(source_path: Path) -> int:
+    # Only TIFF frames are pages: phone JPEGs (MPO) and animated PNG/WebP also
+    # report n_frames > 1, but their extra frames are not worksheet pages.
+    if source_path.suffix.lower() not in {".tif", ".tiff"}:
+        return 1
+    try:
+        with Image.open(source_path) as image:
+            return max(1, int(getattr(image, "n_frames", 1)))
+    except Exception:  # the page read below reports a broken file
+        return 1
 
 
 def _passthrough_image_page_if_possible(
@@ -4359,6 +4396,7 @@ def normalize_image(
     *,
     page_id: str | None = None,
     page_index: int = 0,
+    frame: int = 0,
     enable_perspective: bool = True,
     enable_deskew: bool = True,
     enable_margin_crop: bool = True,
@@ -4369,7 +4407,7 @@ def normalize_image(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    image = load_image(source_path)
+    image = load_image(source_path, frame)
     metadata: dict[str, Any] = dict(base_metadata or {})
     metadata.setdefault("source_type", "image")
 
@@ -4631,7 +4669,8 @@ def prepare_pages(
         return normalized_pages
 
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
-        passthrough = _passthrough_image_page_if_possible(
+        page_count = _tiff_page_count(source_path)
+        passthrough = None if page_count > 1 else _passthrough_image_page_if_possible(
             source_path,
             page_index=0,
             enable_perspective=enable_perspective,
@@ -4670,12 +4709,14 @@ def prepare_pages(
                     max_dimension=max_dimension,
                     source_sha1=image_source_sha1,
                 ),
-                page_index=0,
+                page_index=index,
+                frame=index,
                 enable_perspective=enable_perspective,
                 enable_deskew=enable_deskew,
                 enable_margin_crop=enable_margin_crop,
                 max_dimension=max_dimension,
             )
+            for index in range(page_count)
         ]
         _save_image_normalized_pages_cache(
             source_path,

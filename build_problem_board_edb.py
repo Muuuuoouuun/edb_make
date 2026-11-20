@@ -66,7 +66,7 @@ from page_repair import DEFAULT_GEMINI_REPAIR_MODEL
 from page_tiling import PageTilingOptions, tile_page_columns
 from passage_quality import assess_passage_crop_quality
 from placement_engine import place_problems, normalize_placement_extra_slots
-from preprocess import PDF_PROCESSING_BATCH_PAGES, PdfPageProcessingError, PreparedPage, _is_pdf_resource_error, prepare_source_pages
+from preprocess import PDF_PROCESSING_BATCH_PAGES, PdfPageProcessingError, PreparedPage, _is_pdf_resource_error, prepare_source_pages, raster_page_max_dimension
 from raster_media import detect_color_media_regions, stage2_media_regions
 from structured_schema import BlockType, Box, ContentBlock, PageModel, ProblemUnit, Subject, save_pages_json
 
@@ -3037,6 +3037,8 @@ def build_pages(
     progress: ExportProgress | None = None,
 ) -> tuple[list[PreparedPage], list[PageModel]]:
     render_started_at = time.perf_counter()
+    if max_dimension is None and _normalize_input_intent(input_intent) == "page-as-is":
+        max_dimension = raster_page_max_dimension(source)
     prepared_pages = prepare_source_pages(
         source,
         pdf_dpi=pdf_dpi,
@@ -8006,8 +8008,14 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
                 "continuesAcrossPages": False,
                 "_rangeStart": None,
                 "_rangeEnd": None,
+                "_passageOnly": True,
             },
         )
+        # A file added with 공통 지문만 추출 leaves its questions out on purpose;
+        # its stamp is per problem because one lesson can mix both targets.
+        group["_passageOnly"] = group["_passageOnly"] and _normalize_content_target(
+            str(_session_problem_field(problem, "contentTarget", "content_target") or "")
+        ) == "shared-passages"
 
         problem_number = _coerce_problem_number(
             _session_problem_field(problem, "problemNumber", "problem_number")
@@ -8065,6 +8073,7 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
         child_numbers = _ordered_unique_ints(group["childProblemNumbers"])
         start = group.pop("_rangeStart")
         end = group.pop("_rangeEnd")
+        passage_only = group.pop("_passageOnly")
         if (start is None or end is None) and child_numbers:
             start = min(child_numbers)
             end = max(child_numbers)
@@ -8077,7 +8086,7 @@ def _session_passage_groups(problems: Sequence[dict[str, Any]]) -> list[dict[str
         detected_problem_count = len(group["problemIds"])
         problem_numbers = _ordered_unique_ints(group["problemNumbers"])
         problem_number_set = set(problem_numbers)
-        missing_child_problem_numbers = [
+        missing_child_problem_numbers = [] if passage_only else [
             number for number in child_numbers if number not in problem_number_set
         ]
         problem_count = len(problem_numbers) if problem_numbers else len(core_problem_ids)
@@ -10210,6 +10219,7 @@ def build_ui_session(
         and len(placements) <= len(prepared_pages)
         and resolved_input_intent not in {"single-problem", "page-as-is"}
         and not hwp_counts_match
+        and resolved_content_target != "shared-passages"
     ):
         warning_messages.append(
             "감지된 문항 수가 원본 페이지 수와 비슷합니다. 여러 문제가 있는 페이지라면 검수 화면에서 분리 상태를 확인해 주세요."
@@ -10351,6 +10361,8 @@ def build_ui_session(
                 "confidence": page_quality["confidence"],
                 "aiStatus": page_quality["aiStatus"],
                 **passage_payload,
+                **({"contentTarget": "shared-passages", "content_target": "shared-passages"}
+                   if resolved_content_target == "shared-passages" else {}),
             }
         )
         problem_source_page_ids = list(
