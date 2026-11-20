@@ -21,6 +21,7 @@ import re
 import shutil
 import socket
 import signal
+import ssl
 import struct
 import subprocess
 import sys
@@ -41,7 +42,7 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, unquote, urlparse
-from urllib.request import Request, url2pathname, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, url2pathname, urlopen
 
 from bug_reporting import (
     DEFAULT_BUG_REPORT_URL,
@@ -57,9 +58,14 @@ from user_settings import (
     ai_enabled_from_settings,
     apply_to_env as apply_user_settings_to_env,
     load_user_settings,
+    move_settings as move_user_settings,
     summarize_for_response as summarize_user_settings,
     update_api_keys,
 )
+
+# ponytail: Windows reports a folder that refuses new files (Controlled Folder Access, antivirus folder
+# guards) as a name clash, and tempfile retries it up to os.TMP_MAX (2**31-1) times. 100 random names never all clash.
+tempfile.TMP_MAX = 100
 
 
 CROP_FORMAT_V1 = "v1"
@@ -493,6 +499,15 @@ def is_frozen_app() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def _use_macos_system_roots() -> None:
+    # The Mac app freezes python.org's OpenSSL, which reads CA roots only from its own
+    # Python.framework/.../etc/openssl folder. That folder is missing on teachers' Macs.
+    # ponytail: uses macOS's own root bundle. A CA that exists only in the System keychain
+    # (a school's TLS inspection) still fails; truststore covers that if it ever comes up.
+    if sys.platform == "darwin" and ssl.get_default_verify_paths().cafile is None:
+        os.environ["SSL_CERT_FILE"] = "/etc/ssl/cert.pem"
+
+
 def _windows_documents_directory() -> Path | None:
     """Return the redirected Windows Documents known folder when available."""
     if not sys.platform.startswith("win"):
@@ -526,14 +541,18 @@ def default_frozen_app_home() -> Path:
 
 
 def _app_home_is_writable(home: Path) -> bool:
+    probe = home / ".app_runtime" / f".write-probe-{os.getpid()}"
     try:
-        probe_dir = home / ".app_runtime"
-        probe_dir.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryFile(dir=probe_dir):
-            pass
-        return True
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        # One direct create: tempfile would retry a refused create as a name clash.
+        os.close(os.open(probe, os.O_WRONLY | os.O_CREAT))
     except OSError:
         return False
+    try:
+        probe.unlink()
+    except OSError:
+        pass  # a scanner briefly holding the probe does not make the folder unwritable
+    return True
 
 
 def app_root() -> Path:
@@ -543,12 +562,17 @@ def app_root() -> Path:
             return home
         # Documents is blocked (Windows Controlled Folder Access, macOS privacy denial):
         # start from a per-user folder instead of failing to open at all.
-        if sys.platform.startswith("win"):
-            fallback_base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-        else:
-            fallback_base = Path.home() / "Library" / "Application Support"
-        return (fallback_base / "ClassInEDBMVP").resolve()
+        return _local_app_home()
     return Path(__file__).resolve().parent
+
+
+def _local_app_home() -> Path:
+    """Per-user app folder that OneDrive and iCloud never sync."""
+    if sys.platform.startswith("win"):
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        base = Path.home() / "Library" / "Application Support"
+    return (base / "ClassInEDBMVP").resolve()
 
 
 def resource_root() -> Path:
@@ -560,6 +584,9 @@ def resource_root() -> Path:
 BASE_DIR = app_root()
 # Computed once: app_root() fell back because Documents was blocked, so the UI can say why old work is missing.
 DATA_FOLDER_FALLBACK = is_frozen_app() and BASE_DIR != default_frozen_app_home()
+# Names this data folder in /api/health: loopback is shared by every signed-in OS account.
+# A hash, never the path: /api/health needs no login, and the path shows the user name.
+_DATA_FOLDER_TAG = hashlib.sha256(os.fsencode(BASE_DIR)).hexdigest()[:16]
 RESOURCE_DIR = resource_root()
 UI_DIR = RESOURCE_DIR / "ui_prototype"
 LEGACY_UI_ASSET_ALIASES = {
@@ -568,9 +595,17 @@ LEGACY_UI_ASSET_ALIASES = {
 RUNTIME_DIR = BASE_DIR / ".app_runtime"
 
 
+def _settings_dir() -> Path:
+    # Documents is often OneDrive/iCloud-synced and gets zipped for support: keep the API key local.
+    # A function, not a constant: tests and helpers patch RUNTIME_DIR.
+    if is_frozen_app() and not os.environ.get("EDB_APP_HOME", "").strip():
+        return _local_app_home()
+    return RUNTIME_DIR
+
+
 def _global_ai_enabled() -> bool:
     """Authoritative user preference for every provider-backed AI path."""
-    return ai_enabled_from_settings(load_user_settings(RUNTIME_DIR))
+    return ai_enabled_from_settings(load_user_settings(_settings_dir()))
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
@@ -1941,11 +1976,14 @@ def _update_storage_writer(path: Path):
 
 
 def _update_root() -> Path:
-    # Windows Documents is often OneDrive-synced: keep installers in the local, unsynced profile
-    # unless an explicit EDB_APP_HOME asks for everything in one place.
+    # Documents is often OneDrive- (Windows) or iCloud- (macOS) synced: keep installers in the local,
+    # unsynced profile unless an explicit EDB_APP_HOME asks for everything in one place.
     local = ""
-    if sys.platform.startswith("win") and not os.environ.get("EDB_APP_HOME", "").strip():
-        local = os.environ.get("LOCALAPPDATA", "").strip()
+    if not os.environ.get("EDB_APP_HOME", "").strip():
+        if sys.platform.startswith("win"):
+            local = os.environ.get("LOCALAPPDATA", "").strip()
+        elif sys.platform == "darwin":
+            local = str(Path.home() / "Library" / "Application Support")
     return Path(local) / "ClassInEDBMVP" / "updates" if local else RUNTIME_DIR / "updates"
 
 
@@ -1994,8 +2032,8 @@ def _bug_report_diagnostics() -> tuple[dict[str, Path], dict[str, Any]]:
 
 def _prune_stale_update_downloads(runtime_dir: Path | None = None) -> None:
     """Drop week-old pending-* folders: helper scripts, logs and sometimes a whole installer."""
-    # Windows downloads moved to LOCALAPPDATA; older versions left them in the (often synced)
-    # runtime folder, so that legacy root is swept too.
+    # Downloads moved to LOCALAPPDATA / Application Support; older versions left them in the (often
+    # synced) runtime folder, so that legacy root is swept too.
     roots = {runtime_dir / "updates"} if runtime_dir else {_update_root(), RUNTIME_DIR / "updates"}
     stale_before = time.time() - 7 * 24 * 3600
     for root in roots:
@@ -2140,6 +2178,9 @@ echo "[$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)] updater waiting for process $parent_
 while /bin/kill -0 "$parent_pid" 2>/dev/null; do /bin/sleep 0.25; done
 
 bundle_name="${target_app:t}"
+# The archive's app name; the target keeps whatever name the teacher runs (Finder "Keep Both", a rename).
+# ponytail: installs already running a renamed copy still run their old helper; they need one manual Replace install.
+source_name="${6:-$bundle_name}"
 target_parent="${target_app:h}"
 work_dir="${artifact:h}/apply-$$"
 mount_dir="$work_dir/mount"
@@ -2166,18 +2207,18 @@ if [[ "$artifact_type" == "dmg" ]]; then
   /bin/mkdir -p "$mount_dir"
   /usr/bin/hdiutil attach "$artifact" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
   mounted=1
-  source_app="$mount_dir/$bundle_name"
+  source_app="$mount_dir/$source_name"
 elif [[ "$artifact_type" == "zip" ]]; then
   /bin/mkdir -p "$extract_dir"
   /usr/bin/ditto -x -k "$artifact" "$extract_dir"
-  source_app="$extract_dir/$bundle_name"
+  source_app="$extract_dir/$source_name"
 else
   echo "unsupported macOS update artifact: $artifact_type"
   exit 21
 fi
 
 if [[ ! -d "$source_app" ]]; then
-  echo "update archive does not contain $bundle_name"
+  echo "update archive does not contain $source_name"
   exit 22
 fi
 /usr/bin/ditto "$source_app" "$staged_app"
@@ -2267,6 +2308,8 @@ def _launch_macos_update_helper(artifact_path: Path, artifact_type: str) -> dict
                 artifact_type,
                 str(target_app),
                 str(log_path),
+                # The bundle inside the DMG/zip; packaging names it after appName.
+                f"{load_app_update_config().get('appName') or 'ClassInEDBMVP'}.app",
             ],
             stdin=subprocess.DEVNULL,
             stdout=log_stream,
@@ -2475,7 +2518,12 @@ def ensure_runtime_dirs() -> None:
 def hydrate_user_settings_env() -> None:
     """Load persisted user settings and promote secrets into ``os.environ``
     so pipeline modules pick them up via the usual env-var path."""
-    apply_user_settings_to_env(load_user_settings(RUNTIME_DIR))
+    if _settings_dir() != RUNTIME_DIR:
+        try:
+            move_user_settings(RUNTIME_DIR, _settings_dir())
+        except OSError as exc:  # locked or offline cloud placeholder: retried next launch
+            print(f"[app-server] settings move skipped: {exc}", file=sys.stderr)
+    apply_user_settings_to_env(load_user_settings(_settings_dir()))
 
 
 def write_placeholder_generated_session() -> None:
@@ -2540,24 +2588,51 @@ def enable_fatal_error_logging() -> None:
         print(f"[app-server] faulthandler unavailable: {exc}", file=sys.stderr, flush=True)
 
 
-def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> bool:
+def _local_server_health(host: str, port: int, *, timeout: float = 0.35) -> dict[str, Any] | None:
+    """The /api/health payload when our own copy serving this data folder answers, else None."""
     url = f"http://{host}:{port}/api/health"
     try:
         request = Request(url, headers={"Cache-Control": "no-cache"})
-        with urlopen(request, timeout=timeout) as response:
+        # Never via a proxy: urllib proxies 127.0.0.1 under Windows '<local>' and macOS default exceptions.
+        with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
             if response.status != HTTPStatus.OK:
-                return False
+                return None
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError):
-        return False
+        return None
     except Exception as exc:
         print(f"[app-server] unexpected error in health check: {exc}", file=sys.stderr)
-        return False
-    return bool(
+        return None
+    ours = (
         isinstance(payload, dict)
         and payload.get("ok") is True
         and payload.get("app") == APP_NAME
+        # No "home": a copy from before the tag, still ours. ponytail: a typed, bookmarked or
+        # restored 127.0.0.1:8765 tab still reaches another account's copy; a per-launch token cookie closes that.
+        and payload.get("home", _DATA_FOLDER_TAG) == _DATA_FOLDER_TAG
     )
+    return payload if ours else None
+
+
+def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> bool:
+    return _local_server_health(host, port, timeout=timeout) is not None
+
+
+def _open_running_app(host: str, port: int) -> None:
+    """Open the copy that already runs; on a Mac, first say so when it is another version.
+
+    Replacing the Mac app by hand (a DMG install) leaves its server running, and that
+    old code would then serve the new screen files.
+    """
+    if is_frozen_app() and sys.platform == "darwin":
+        # No version: a copy from before /api/health carried one, so another version.
+        running = (_local_server_health(host, port, timeout=5.0) or {}).get("version")
+        if str(running or "") != str(load_app_update_config().get("version") or ""):
+            _show_macos_alert(
+                "이전 버전의 ClassIn EDB가 아직 실행 중입니다. "
+                "열리는 화면의 ‘···’ 메뉴에서 ‘종료’를 누른 뒤 ‘응용 프로그램’ 폴더에서 ClassInEDBMVP를 다시 열어 주세요."
+            )
+    webbrowser.open(f"http://{host}:{port}/")
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -10563,6 +10638,8 @@ class AppHTTPServer(ThreadingHTTPServer):
         self._shutdown_reason_lock = threading.Lock()
         self._shutdown_reason: str | None = None
         self._started_at = time.time()
+        # Read once: after a hand-installed update, a later read sees the bundle that replaced this one.
+        self._app_version = str(load_app_update_config().get("version") or "")
         # Artifact-producing handlers write files before committing session
         # metadata. Serialize the entire handler so a stale CAS loser cannot
         # overwrite the winner's files before its commit is rejected.
@@ -10628,6 +10705,8 @@ class AppHTTPServer(ThreadingHTTPServer):
             "pid": os.getpid(),
             "sessionEpoch": self.session_epoch(),
             "uptimeSeconds": max(0, int(time.time() - self._started_at)),
+            "version": self._app_version,
+            "home": _DATA_FOLDER_TAG,
         }
 
     def session_snapshot(self) -> dict[str, Any] | None:
@@ -13192,7 +13271,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_user_settings_get(self) -> None:
         self._send_json(
-            {"ok": True, "settings": _with_data_folder_status(summarize_user_settings(RUNTIME_DIR))}
+            {"ok": True, "settings": _with_data_folder_status(summarize_user_settings(_settings_dir()))}
         )
 
     def _handle_user_settings_post(self) -> None:
@@ -13207,7 +13286,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         raw_ai_enabled = payload.get("aiEnabled") if "aiEnabled" in payload else payload.get("ai_enabled")
         try:
             summary = update_api_keys(
-                RUNTIME_DIR,
+                _settings_dir(),
                 gemini_api_key=(raw_key if isinstance(raw_key, str) else "") if has_gemini_key else None,
                 ai_enabled=_coerce_bool(raw_ai_enabled) if has_ai_enabled else None,
             )
@@ -14049,7 +14128,7 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
         if _local_server_is_healthy(host, candidate):
             print(f"{APP_NAME} already running at {url}")
             if open_browser:
-                webbrowser.open(url)
+                _open_running_app(host, candidate)
             return
         try:
             server = AppHTTPServer((host, candidate), handler)
@@ -14062,7 +14141,7 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
             if address_in_use and _local_server_is_healthy(host, candidate, timeout=15.0):
                 print(f"{APP_NAME} already running at {url}")
                 if open_browser:
-                    webbrowser.open(url)
+                    _open_running_app(host, candidate)
                 return
             if not address_in_use or candidate == candidate_ports[-1]:
                 raise
@@ -14125,6 +14204,22 @@ def _startup_log_path() -> Path:
     return log_dir / "ClassInEDBMVP-startup.log"
 
 
+def _show_macos_alert(message: str) -> None:
+    # Text goes in through argv so quotes in the copy cannot break the AppleScript.
+    try:
+        subprocess.run(
+            [
+                "/usr/bin/osascript", "-e", "on run argv", "-e",
+                "display alert (item 1 of argv) message (item 2 of argv) as critical",
+                "-e", "end run", "ClassIn EDB", message,
+            ],
+            check=False,
+            timeout=600,
+        )
+    except Exception:  # a notice must never turn into the 'could not open' dialog or stop the page opening
+        pass
+
+
 def _report_startup_failure(exc: BaseException) -> None:
     """Log the traceback and show a Korean dialog instead of PyInstaller's English one."""
     detail = traceback.format_exc()
@@ -14141,16 +14236,7 @@ def _report_startup_failure(exc: BaseException) -> None:
     message = _startup_error_message(exc)
     try:
         if sys.platform == "darwin":
-            # Text goes in through argv so quotes in the copy cannot break the AppleScript.
-            subprocess.run(
-                [
-                    "/usr/bin/osascript", "-e", "on run argv", "-e",
-                    "display alert (item 1 of argv) message (item 2 of argv) as critical",
-                    "-e", "end run", "ClassIn EDB", message,
-                ],
-                check=False,
-                timeout=600,
-            )
+            _show_macos_alert(message)
         elif sys.platform.startswith("win"):
             import ctypes
 
@@ -14174,7 +14260,7 @@ def main() -> int:
         # closed tab comes back from the app icon. CLI and smoke runs pass flags and serve here.
         if is_frozen_app() and sys.platform == "darwin" and len(sys.argv) == 1:
             if _local_server_is_healthy(args.host, args.port):
-                webbrowser.open(f"http://{args.host}:{args.port}/")
+                _open_running_app(args.host, args.port)
             else:
                 subprocess.Popen(
                     [sys.executable, "--open-browser"],
@@ -14185,6 +14271,8 @@ def main() -> int:
                     close_fds=True,
                 )
             return 0
+        # Before the first HTTPS call: the update check, PIN update, Gemini and 문제 신고 all verify certificates.
+        _use_macos_system_roots()
         ensure_runtime_dirs()
         if args.log_file or is_frozen_app():
             configure_app_logging(args.log_file or None)

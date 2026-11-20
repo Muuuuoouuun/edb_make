@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""User-editable settings persisted under .app_runtime/user_settings.json.
+"""User-editable settings persisted in user_settings.json.
 
 The local app needs a place to keep secrets (currently AI provider API keys)
-between runs without putting them in source control. Settings are written as
-JSON next to the runtime cache so they are covered by the existing
-``.app_runtime/`` gitignore entry.
+between runs without putting them in source control. Source runs write the
+JSON next to the runtime cache, covered by the existing ``.app_runtime/``
+gitignore entry. Packaged builds keep it in the per-user app folder that
+OneDrive/iCloud do not sync (see app_server._settings_dir).
 """
 from __future__ import annotations
 
@@ -51,6 +52,19 @@ def _read_settings_strict(path: Path) -> dict[str, Any]:
             if delay is None or getattr(exc, "winerror", None) not in {5, 32, 33}:
                 raise
             time.sleep(delay)
+
+
+def move_settings(old_dir: Path, new_dir: Path) -> None:
+    """Move the settings file to new_dir once. A locked file raises OSError and stays put (retried next launch)."""
+    with _SETTINGS_LOCK:
+        if settings_path(new_dir).exists():
+            # ponytail: moved once; a copy an older version writes later (another PC on the same OneDrive) stays.
+            return
+        legacy = _read_settings_strict(settings_path(old_dir))
+        if legacy:
+            # Save, then unlink: works across volumes and reuses the atomic writer.
+            save_user_settings(new_dir, legacy)
+            settings_path(old_dir).unlink()
 
 
 def ai_enabled_from_settings(

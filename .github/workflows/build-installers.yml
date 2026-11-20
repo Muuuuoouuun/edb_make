@@ -485,7 +485,8 @@ jobs:
             --expected-download-url "$MACOS_DOWNLOAD_URL" \
             --expected-release-notes-url "$RELEASE_NOTES_URL" \
             --expected-git-commit "$GITHUB_SHA"
-          .venv/bin/python scripts/smoke_packaged_app.py dist/ClassInEDBMVP.app/Contents/MacOS/ClassInEDBMVP
+          # Hides the runner's python.org cert.pem (setup-python ran 'Install Certificates'); teachers' Macs have none.
+          SSL_CERT_FILE=/nonexistent/cert.pem .venv/bin/python scripts/smoke_packaged_app.py dist/ClassInEDBMVP.app/Contents/MacOS/ClassInEDBMVP
         env:
           RELEASE_VERSION: ${{ inputs.version }}
 

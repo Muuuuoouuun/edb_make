@@ -249,7 +249,7 @@ class TestAppAutoUpdate(unittest.TestCase):
             settings = runtime / "user_settings.json"
             settings.write_text("keep")
             with patch.object(app_server, "RUNTIME_DIR", runtime), \
-                    patch.dict(os.environ, {"LOCALAPPDATA": ""}), \
+                    patch.object(app_server, "_update_root", return_value=runtime / "updates"), \
                     patch.object(app_server, "build_app_update_status", return_value=status), \
                     patch.object(app_server, "load_app_update_config", return_value={"updatePinHash": verifier}), \
                     patch.object(app_server, "_check_update_target"), \
@@ -271,7 +271,8 @@ class TestAppAutoUpdate(unittest.TestCase):
             outside.mkdir()
             file = outside / "keep.exe"
             file.write_bytes(b"keep")
-            with patch.object(app_server, "RUNTIME_DIR", runtime), patch.dict(os.environ, {"LOCALAPPDATA": ""}):
+            with patch.object(app_server, "RUNTIME_DIR", runtime), \
+                    patch.object(app_server, "_update_root", return_value=runtime / "updates"):
                 app_server._discard_update_download(file)
                 try:
                     link = runtime / "updates/pending-link"
@@ -284,11 +285,11 @@ class TestAppAutoUpdate(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("zsh"), "zsh is unavailable")
 class TestMacUpdateReplacement(unittest.TestCase):
-    def _run_helper(self, root: Path, *, bad_signature=False, fail_move=""):
+    def _run_helper(self, root: Path, *, bad_signature=False, fail_move="", installed="Test.app", extra_args=()):
         source = root / "source/Test.app"
         source.mkdir(parents=True)
         (source / "version").write_text("new")
-        target = root / "Applications/Test.app"
+        target = root / "Applications" / installed
         target.mkdir(parents=True)
         (target / "version").write_text("old")
         artifact = root / "pending-test/update.zip"
@@ -309,7 +310,8 @@ class TestMacUpdateReplacement(unittest.TestCase):
         helper = root / "helper.zsh"
         helper.write_text(script)
         result = subprocess.run(
-            [shutil.which("zsh"), str(helper), "99999999", str(artifact), "zip", str(target), str(root / "update.log")],
+            [shutil.which("zsh"), str(helper), "99999999", str(artifact), "zip", str(target), str(root / "update.log"),
+             *extra_args],
             env={**os.environ, "EDB_TEST_SOURCE": str(source), "EDB_TEST_OPENED": str(root / "opened")},
             capture_output=True, text=True, timeout=10,
         )
@@ -353,6 +355,16 @@ class TestMacUpdateReplacement(unittest.TestCase):
             self.assertEqual(["Test.app"], [p.name for p in target.parent.iterdir()])
             self.assertEqual([str(target)], (Path(temp) / "opened").read_text().splitlines())
             self.assertFalse((artifact.parent / "update-failed").exists())
+
+    def test_renamed_install_is_replaced_in_place(self):
+        # Finder "Keep Both" or a rename: the archive still holds Test.app, passed as the 6th argument.
+        with TemporaryDirectory(prefix="edb update ") as temp:
+            result, target, artifact = self._run_helper(Path(temp), installed="Test 2.app", extra_args=("Test.app",))
+            self.assertEqual(0, result.returncode, (Path(temp) / "update.log").read_text())
+            self.assertEqual("new", (target / "version").read_text())
+            self.assertEqual([str(target)], (Path(temp) / "opened").read_text().splitlines())
+            self.assertFalse((artifact.parent / "update-failed").exists())
+            self.assertEqual(["Test 2.app"], [p.name for p in target.parent.iterdir()])
 
 
 @unittest.skipUnless(shutil.which("pwsh") or shutil.which("powershell"), "PowerShell is unavailable")

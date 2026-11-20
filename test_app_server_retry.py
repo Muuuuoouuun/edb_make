@@ -84,13 +84,16 @@ class TestStaticAssetCaching(unittest.TestCase):
             def read():
                 return b'{"ok": true, "app": "another-service"}'
 
-        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+        # The probe opens with its own no-proxy opener, not urlopen.
+        with patch.object(app_server, "build_opener") as opener:
+            opener.return_value.open.return_value = FakeResponse()
             self.assertFalse(app_server._local_server_is_healthy("127.0.0.1", 8765))
 
         FakeResponse.read = staticmethod(
             lambda: json.dumps({"ok": True, "app": app_server.APP_NAME}).encode("utf-8")
         )
-        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+        with patch.object(app_server, "build_opener") as opener:
+            opener.return_value.open.return_value = FakeResponse()
             self.assertTrue(app_server._local_server_is_healthy("127.0.0.1", 8765))
 
     @unittest.skipUnless(os.name == "nt", "exclusive bind semantics are Windows-specific")

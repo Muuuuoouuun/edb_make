@@ -13,17 +13,22 @@ import app_server as app
 
 class TestStabilizeStartup(unittest.TestCase):
     def test_macos_plain_open_reopens_running_server_or_starts_one_in_background(self) -> None:
+        # The running copy is this version, so no "older version still running" alert.
+        current = {"ok": True, "app": app.APP_NAME, "version": app.load_app_update_config()["version"]}
         for healthy in (True, False):
             with self.subTest(healthy=healthy), \
                     mock.patch.object(app, "is_frozen_app", return_value=True), \
                     mock.patch.object(app.sys, "platform", "darwin"), \
                     mock.patch.object(app.sys, "argv", ["ClassInEDBMVP"]), \
                     mock.patch.object(app, "_local_server_is_healthy", return_value=healthy), \
+                    mock.patch.object(app, "_local_server_health", return_value=current), \
+                    mock.patch.object(app, "_show_macos_alert") as alert, \
                     mock.patch.object(app.webbrowser, "open") as browser, \
                     mock.patch.object(app.subprocess, "Popen") as popen, \
                     mock.patch.object(app, "run_server") as run_server:
                 self.assertEqual(0, app.main())
                 run_server.assert_not_called()
+                alert.assert_not_called()
                 if healthy:
                     browser.assert_called_once_with("http://127.0.0.1:8765/")
                     popen.assert_not_called()
