@@ -195,7 +195,6 @@ jobs:
               "google-genai",
               "paddleocr",
               "paddlepaddle",
-              "pytesseract",
           }
           installed = {
               str(distribution.metadata.get("Name") or "").strip().lower()

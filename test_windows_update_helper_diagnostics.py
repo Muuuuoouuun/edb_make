@@ -45,7 +45,7 @@ function Start-Process {{
 }}
 & {quote(helper)} -ParentPid {parent_pid} -Installer {quote(installer)} -AppExecutable {quote(executable)} -InstallDir {quote(root)} -LogFile {quote(root / 'helper.log')}
 '''
-        result = subprocess.run([powershell_host(), '-NoProfile', '-NonInteractive', '-Command', command], capture_output=True, text=True, timeout=15, creationflags=helper_creation_flags())
+        result = subprocess.run([powershell_host(), '-NoProfile', '-NonInteractive', '-Command', command], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15, creationflags=helper_creation_flags())
         return result, installer, (root / 'helper.log').read_text(encoding='utf-8-sig'), (root / 'calls').read_text().splitlines() if (root / 'calls').exists() else []
 
     def test_missing_target_is_failure_logged_and_never_restarted(self):

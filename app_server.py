@@ -2725,14 +2725,24 @@ def _command_info(command: list[str]) -> dict[str, Any]:
 
 def describe_runtime_diagnostics() -> dict[str, Any]:
     preprocess = _preprocess_module()
-    pdf_converters = [_command_info(command) for command in preprocess._iter_hwp_pdf_converter_commands()]
+    pdf_commands = preprocess._iter_hwp_pdf_converter_commands()
+    pdf_converters = [_command_info(command) for command in pdf_commands]
     hwp_to_hwpx_converters = [_command_info(command) for command in preprocess._iter_hwp_hwpx_converter_commands()]
     html_converters = [_command_info(command) for command in preprocess._iter_pyhwp_html_converter_commands()]
     text_extractors = [_command_info(command) for command in preprocess._iter_hwp_text_converter_commands()]
     chrome_pdf_converters = [_command_info(command) for command in preprocess._iter_chrome_pdf_commands()]
     hwp_renderers = [_command_info(command) for command in preprocess._iter_rhwp_core_renderer_commands()]
+    if preprocess._bundled_rhwp() is not None:
+        # The installed app renders and reads HWP/HWPX with its bundled rhwp, in-process.
+        hwp_renderers.append({"name": "rhwp-python", "path": "", "args": []})
+        text_extractors.append({"name": "rhwp-python", "path": "", "args": []})
 
-    pdf_ready = bool(pdf_converters)
+    # Stock LibreOffice opens only Hangul 97 files; it counts once it has the H2Orestart extension.
+    stock_libreoffice = [
+        command for command in pdf_commands
+        if "--headless" in command and not preprocess._libreoffice_reads_hwp(command[0])
+    ]
+    pdf_ready = len(pdf_commands) > len(stock_libreoffice)
     html_pdf_ready = bool(html_converters and chrome_pdf_converters)
     hwp_renderer_ready = bool(hwp_renderers)
     hwp_ready = bool(pdf_ready or html_pdf_ready or hwp_renderer_ready)
@@ -2746,7 +2756,12 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
     if not pdf_ready and not hwp_renderer_ready:
         warnings.append("HWPX 파일은 바로 열 수 없어요." if html_pdf_ready else "한글 파일을 바로 열 수 없어요.")
         recommended_actions.append("한글 프로그램에서 PDF로 저장한 뒤 그 PDF를 넣어 주세요.")
-        technical_notes.append("LibreOffice, rhwp, hwp5pdf, airun-hwp, or rhwp-core renderer was not found.")
+        technical_notes.append(
+            "LibreOffice was found without the H2Orestart extension (needs Java 8+), "
+            "so it opens only Hangul 97 files, not HWP 5/HWPX."
+            if stock_libreoffice
+            else "LibreOffice, rhwp, hwp5pdf, airun-hwp, or rhwp-core renderer was not found."
+        )
     if html_converters and not chrome_pdf_converters:
         technical_notes.append(
             "pyhwp HTML fallback is available, but Chrome PDF printing was not found "
@@ -3035,6 +3050,28 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
                 "배포용·암호 문서라면 보호를 해제한 뒤 PDF로 저장해 주세요.",
             ],
         })
+        # preprocess names the protection flags only after every renderer and converter failed.
+        # "copy_protection" (bit 9) is the e-signature reserve bit, not a protection: ignore it.
+        protected = re.search(r"protection flags are set \(([^)]*)\)", message)
+        flags = set(protected.group(1).split(", ")) if protected else set()
+        kind = next((label for names, label in (
+            ({"password", "encrypted_cert"}, "암호가 걸린"),
+            ({"distribution"}, "배포용으로 보호된"),
+            ({"drm"}, "문서 보안이 걸린"),
+        ) if flags & names), "")
+        if kind:
+            payload.update({
+                "code": "hwp_protected_document",
+                "error": f"{kind} 한글 파일이에요. 앱에서 바로 열 수 없으니 한글 프로그램에서 PDF로 저장해 넣어 주세요.",
+                "recoverySteps": [
+                    "한글 프로그램에서 파일을 열고 PDF로 저장한 뒤, 그 PDF를 넣어 주세요.",
+                    "암호를 모르거나 PDF 저장이 막혀 있으면 파일을 만든 사람에게 PDF를 받아 주세요.",
+                ],
+            })
+        elif "libreoffice_profile_in_use" in message:
+            # An open LibreOffice (on a Mac it keeps running with no window) took the conversion.
+            payload["retryable"] = True
+            payload["recoverySteps"].insert(0, "열려 있는 LibreOffice를 완전히 종료한 뒤 다시 시도해 주세요.")
     elif "code" not in payload:
         if isinstance(exc, FileNotFoundError):
             payload.update({

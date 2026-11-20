@@ -72,6 +72,8 @@ If you want OCR later:
 
 ## Fastest Test Path
 
+No sample worksheet is committed (`samples/` and `out_images_sample4/` are gitignored); use any worksheet PDF or image.
+
 ### 1. Build one local test EDB
 
 This command does all of the following:
@@ -84,14 +86,14 @@ This command does all of the following:
 - leaves project `ui_prototype` untouched; legacy UI bridge files are written under the selected output folder
 
 ```powershell
-python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\sample_run --ocr noop --subject korean --record-mode mixed
+python build_problem_board_edb.py C:\path\to\your_file.pdf --output-dir local_test_output\sample_run --ocr noop --subject korean --record-mode mixed
 ```
 
 Main outputs:
 
 - `local_test_output\sample_run\pages.json`
 - `local_test_output\sample_run\board_run_summary.json`
-- `local_test_output\sample_run\record_0001_img_0.edb`
+- `local_test_output\sample_run\your_file.edb`
 
 ### Record modes
 
@@ -107,14 +109,14 @@ Main outputs:
 Recommended first comparison:
 
 ```powershell
-python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\image_only --ocr noop --subject korean --record-mode image-only
-python build_problem_board_edb.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\mixed --ocr noop --subject korean --record-mode mixed
+python build_problem_board_edb.py C:\path\to\your_file.pdf --output-dir local_test_output\image_only --ocr noop --subject korean --record-mode image-only
+python build_problem_board_edb.py C:\path\to\your_file.pdf --output-dir local_test_output\mixed --ocr noop --subject korean --record-mode mixed
 ```
 
 ### 2. Inspect the generated EDB structure
 
 ```powershell
-python inspect_edb.py .\local_test_output\sample_run\record_0001_img_0.edb
+python inspect_edb.py .\local_test_output\sample_run\your_file.edb
 ```
 
 For a mixed export, check whether text and image records both appear in the summary.
@@ -151,21 +153,13 @@ Git-tracked content, or paths that are not ignored by Git.
 If you want only the page analysis output without building an EDB:
 
 ```powershell
-python build_structured_page_json.py out_images_sample4\record_0001_img_0.jpg --output-dir local_test_output\inspect_only --ocr noop --subject korean
+python build_structured_page_json.py C:\path\to\your_file.pdf --output-dir local_test_output\inspect_only --ocr noop --subject korean
 ```
 
 This writes:
 
 - `pages.json`
 - `run_summary.json`
-
-## Testing With Your Own File
-
-Replace the sample source with your own image or PDF path:
-
-```powershell
-python build_problem_board_edb.py C:\path\to\your_file.pdf --output-dir local_test_output\my_run --ocr noop --subject unknown --record-mode mixed
-```
 
 ## Current Recommended Defaults
 

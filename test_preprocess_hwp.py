@@ -1830,7 +1830,7 @@ class TestPreprocessHwp(unittest.TestCase):
             output_dir = tmp_path / "converted"
             expected_pdf = output_dir / "worksheet.pdf"
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 self.assertEqual(["/usr/bin/soffice", "--headless"], cmd[:2])
                 self.assertIn("--convert-to", cmd)
                 self.assertIn("pdf", cmd)
@@ -1841,7 +1841,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]], create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
 
@@ -1868,7 +1868,7 @@ class TestPreprocessHwp(unittest.TestCase):
             expected_pdf = output_dir / "worksheet.pdf"
             calls = []
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 calls.append(cmd)
                 if cmd == ["/usr/local/bin/rhwp", "export-pdf", str(source), "-o", str(expected_pdf)]:
                     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1877,7 +1877,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/local/bin/rhwp"]], create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
 
@@ -1892,7 +1892,7 @@ class TestPreprocessHwp(unittest.TestCase):
             expected_pdf = output_dir / "worksheet.pdf"
             run_count = 0
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 nonlocal run_count
                 run_count += 1
                 output_dir.mkdir(parents=True, exist_ok=True)
@@ -1901,7 +1901,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]], create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
@@ -1917,7 +1917,7 @@ class TestPreprocessHwp(unittest.TestCase):
             expected_pdf = output_dir / "worksheet.pdf"
             run_count = 0
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 nonlocal run_count
                 run_count += 1
                 output_dir.mkdir(parents=True, exist_ok=True)
@@ -1926,7 +1926,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]], create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
                 source.write_bytes(b"hwp v2")
@@ -1944,7 +1944,7 @@ class TestPreprocessHwp(unittest.TestCase):
             expected_pdf = output_dir / "worksheet.pdf"
             calls = []
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 calls.append(cmd)
                 if cmd[0] == "/usr/local/bin/hwpilot":
                     Path(cmd[-1]).write_bytes(b"hwpx")
@@ -1957,7 +1957,7 @@ class TestPreprocessHwp(unittest.TestCase):
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]], create=True),
                 mock.patch.object(preprocess, "_iter_hwp_hwpx_converter_commands", return_value=[["/usr/local/bin/hwpilot"]], create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
 
@@ -2140,7 +2140,7 @@ class TestPreprocessHwp(unittest.TestCase):
             expected_pdf = output_dir / "worksheet" / "worksheet.pdf"
             calls = []
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout, env=None):
+            def fake_run(cmd, timeout, **kwargs):
                 calls.append(cmd)
                 if cmd[:3] == ["/usr/local/bin/airun-hwp", str(staged_source), "--format"]:
                     expected_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -2149,7 +2149,7 @@ class TestPreprocessHwp(unittest.TestCase):
 
             with (
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/local/bin/airun-hwp"]], create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
 
@@ -2171,7 +2171,8 @@ class TestPreprocessHwp(unittest.TestCase):
             expected_pdf = output_dir / "worksheet" / "worksheet.pdf"
             run_envs = []
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout, env=None):
+            def fake_run(cmd, timeout, **kwargs):
+                env = kwargs.get("env")
                 run_envs.append(dict(env or {}))
                 path_dirs = str((env or {}).get("PATH") or "").split(os.pathsep)
                 shim = next((Path(item) / "libreoffice" for item in path_dirs if (Path(item) / "libreoffice").exists()), None)
@@ -2191,7 +2192,7 @@ class TestPreprocessHwp(unittest.TestCase):
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/local/bin/airun-hwp"]], create=True),
                 mock.patch.object(preprocess.sys, "platform", "darwin"),
                 mock.patch.object(preprocess.shutil, "which", side_effect=fake_which),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 self.assertEqual(expected_pdf, preprocess.convert_hwp_to_pdf(source, output_dir))
 
@@ -2207,7 +2208,7 @@ class TestPreprocessHwp(unittest.TestCase):
             expected_pdf = output_dir / "worksheet.pdf"
             calls = []
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 calls.append(cmd)
                 if cmd[0] == "/usr/local/bin/hwp5html":
                     html_root = Path(cmd[cmd.index("--output") + 1])
@@ -2240,6 +2241,7 @@ class TestPreprocessHwp(unittest.TestCase):
                 mock.patch.object(preprocess, "_iter_hwp_hwpx_converter_commands", return_value=[], create=True),
                 mock.patch.object(preprocess, "_iter_pyhwp_html_converter_commands", return_value=[["/usr/local/bin/hwp5html"]], create=True),
                 mock.patch.object(preprocess, "_iter_chrome_pdf_commands", return_value=[["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]], create=True),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
                 mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
                 mock.patch.object(preprocess.subprocess, "Popen", side_effect=FakeChromeProcess),
             ):
@@ -2259,7 +2261,7 @@ class TestPreprocessHwp(unittest.TestCase):
             output_dir = tmp_path / "converted"
             timeouts = []
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 timeouts.append((cmd[0], timeout))
                 if cmd[0] == "/usr/local/bin/hwp5html":
                     html_root = Path(cmd[cmd.index("--output") + 1])
@@ -2290,6 +2292,7 @@ class TestPreprocessHwp(unittest.TestCase):
                 mock.patch.object(preprocess, "_iter_hwp_hwpx_converter_commands", return_value=[], create=True),
                 mock.patch.object(preprocess, "_iter_pyhwp_html_converter_commands", return_value=[["/usr/local/bin/hwp5html"]], create=True),
                 mock.patch.object(preprocess, "_iter_chrome_pdf_commands", return_value=[["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]], create=True),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
                 mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
                 mock.patch.object(preprocess.subprocess, "Popen", side_effect=FakeChromeProcess),
             ):
@@ -2335,7 +2338,7 @@ class TestPreprocessHwp(unittest.TestCase):
             source = tmp_path / "worksheet.hwp"
             source.write_bytes(b"hwp")
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 return subprocess.CompletedProcess(
                     cmd,
                     0,
@@ -2355,7 +2358,7 @@ class TestPreprocessHwp(unittest.TestCase):
                 mock.patch.object(preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]], create=True),
                 mock.patch.object(preprocess, "_iter_hwp_hwpx_converter_commands", return_value=[], create=True),
                 mock.patch.object(preprocess, "inspect_hwp_document", return_value=inspection, create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 with self.assertRaisesRegex(ValueError, "valid HWP.*converter could not load"):
                     preprocess.convert_hwp_to_pdf(source, tmp_path / "converted")
@@ -2366,7 +2369,7 @@ class TestPreprocessHwp(unittest.TestCase):
             source = tmp_path / "worksheet.hwpx"
             source.write_bytes(b"hwpx")
 
-            def fake_run(cmd, check, stdout, stderr, text, timeout):
+            def fake_run(cmd, timeout, **kwargs):
                 return subprocess.CompletedProcess(
                     cmd,
                     0,
@@ -2385,7 +2388,7 @@ class TestPreprocessHwp(unittest.TestCase):
                 mock.patch.object(preprocess, "_iter_hwp_hwpx_converter_commands", return_value=[], create=True),
                 mock.patch.object(preprocess, "_iter_pyhwp_html_converter_commands", return_value=[], create=True),
                 mock.patch.object(preprocess, "inspect_hwpx_document", return_value=inspection, create=True),
-                mock.patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+                mock.patch.object(preprocess, "_run_tool", side_effect=fake_run),
             ):
                 with self.assertRaisesRegex(ValueError, "valid HWPX ZIP.*converter could not load") as raised:
                     preprocess.convert_hwp_to_pdf(source, tmp_path / "converted")

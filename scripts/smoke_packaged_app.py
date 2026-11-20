@@ -17,6 +17,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -581,6 +582,49 @@ def _smoke_pdf_exports(base_url: str, workspace: Path) -> list[dict[str, Any]]:
     return results
 
 
+def _smoke_hwpx_export(base_url: str, workspace: Path) -> dict[str, Any]:
+    # A 2 KB one-page HWPX: the app must open it with its bundled rhwp, with no
+    # LibreOffice, Python or Node on PATH.
+    paragraph_ns = "http://www.hancom.co.kr/hwpml/2011/paragraph"
+    page = ('<hp:secPr><hp:pagePr landscape="WIDELY" width="59528" height="84188" gutterType="LEFT_ONLY">'
+            '<hp:margin header="4252" footer="4252" gutter="0" left="8504" right="8504" top="5668" bottom="4252"/>'
+            '</hp:pagePr></hp:secPr>')
+    paragraphs = "".join(
+        f'<hp:p id="{index}" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0">{page if index == 0 else ""}'
+        f'<hp:t>{index + 1}. 다음 중 옳은 것은?</hp:t></hp:run></hp:p>'
+        for index in range(3)
+    )
+    source = workspace / "HWPX 한글 smoke.hwpx"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("mimetype", "application/hwp+zip")
+        archive.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0" encoding="UTF-8"?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/>'
+            '</ocf:rootfiles></ocf:container>',
+        )
+        archive.writestr(
+            "Contents/content.hpf",
+            '<?xml version="1.0" encoding="UTF-8"?><opf:package xmlns:opf="http://www.idpf.org/2007/opf/"><opf:manifest>'
+            '<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>'
+            '<opf:item id="section0" href="Contents/section0.xml" media-type="application/xml"/></opf:manifest>'
+            '<opf:spine><opf:itemref idref="header"/><opf:itemref idref="section0"/></opf:spine></opf:package>',
+        )
+        archive.writestr(
+            "Contents/header.xml",
+            '<?xml version="1.0" encoding="UTF-8"?><hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head" '
+            'version="1.4" secCnt="1"><hh:refList/></hh:head>',
+        )
+        archive.writestr(
+            "Contents/section0.xml",
+            '<?xml version="1.0" encoding="UTF-8"?><hs:sec xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section" '
+            f'xmlns:hp="{paragraph_ns}">{paragraphs}</hs:sec>',
+        )
+    result = _smoke_edb_export(base_url, source, workspace / "HWPX 출력", input_intent="page-as-is", expected_records=1)
+    result.update(fixture="hwpx", sourcePageCount=1)
+    return result
+
+
 def _isolated_smoke_environment(app_home: Path, empty_path: Path, *, windows: bool = os.name == "nt") -> dict[str, str]:
     environment = {key.upper() if windows else key: value for key, value in os.environ.items()}
     environment["EDB_APP_HOME"] = str(app_home)
@@ -659,6 +703,11 @@ def smoke_packaged_executable(
                 renderer = diagnostics.get("pdfRenderer") or {}
                 if renderer.get("available") is not True or renderer.get("bundled") is not True:
                     raise RuntimeError(f"packaged PDF renderer unavailable: {renderer}")
+                hangul = diagnostics.get("hangul") or {}
+                if hangul.get("hwpReady") is not True or hangul.get("hwpxReady") is not True:
+                    raise RuntimeError(
+                        f"packaged HWP/HWPX support unavailable: {hangul.get('status')} {hangul.get('technicalNotes')}"
+                    )
                 ui_bytes = _bytes_request(f"{base_url}/")
                 if b"<!doctype html" not in ui_bytes[:512].lower():
                     raise RuntimeError("packaged UI root did not return the expected HTML shell")
@@ -698,6 +747,7 @@ def smoke_packaged_executable(
                     )
 
                 pdf_exports = _smoke_pdf_exports(base_url, unicode_workspace)
+                hwpx_export = _smoke_hwpx_export(base_url, unicode_workspace)
                 edb_export = None
                 if edb_source is not None:
                     edb_export = _smoke_edb_export(
@@ -735,6 +785,7 @@ def smoke_packaged_executable(
                     "cleanProcessTree": True,
                     "externalPythonOnPath": False,
                     "pdfExports": pdf_exports,
+                    "hwpxExport": hwpx_export,
                 }
                 if edb_export is not None:
                     result["edbExport"] = edb_export
