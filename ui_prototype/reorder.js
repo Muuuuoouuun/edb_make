@@ -362,7 +362,7 @@
     const looksLikePath = /(?:^file:|[\\/])/.test(withoutSplit);
     const looksLikeFile = /\.(?:pdf|hwp|hwpx|png|jpe?g|webp|tiff?|bmp)(?:\s|$)/i.test(withoutSplit);
     const looksGenerated = /(?:^|[\s_-])page[-_ ]?\d+\s+problem[-_ ]?\d+/i.test(withoutSplit)
-      || /^[a-f0-9]{20,}[_-]/i.test(withoutSplit);
+      || /[a-f0-9]{20,}[_-]/i.test(withoutSplit);
     const isNoisy = !withoutSplit || looksLikePath || looksLikeFile || looksGenerated;
     if (!isNoisy) return raw;
     return `문제 ${order}${splitLabel ? ` · ${splitLabel}` : ''}`;

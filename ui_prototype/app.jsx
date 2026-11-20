@@ -9005,7 +9005,8 @@ function BoardStage({
     boardDropTargetRef.current = target;
     setBoardDropTarget(prev => (
       prev?.id === target?.id && prev?.position === target?.position
-        && prev?.mode === target?.mode && prev?.removableGapPages === target?.removableGapPages ? prev : target
+        && prev?.mode === target?.mode && prev?.removableGapPages === target?.removableGapPages
+        && prev?.pages === target?.pages ? prev : target
     ));
   };
 
@@ -9101,7 +9102,9 @@ function BoardStage({
       return target;
     }
     if (drag && !drag.reorderMode) {
-      setCurrentBoardDropTarget(null);
+      // A plain drag never reorders; say so when it is about to add blank pages.
+      const pages = (drag.pendingPlacement?.extraSlots ?? 0) - placementExtraSlots(drag.item);
+      setCurrentBoardDropTarget(pages > 0 ? { mode: 'space', pages } : null);
       return null;
     }
     const dragDistanceY = drag?.contentDy ?? (drag ? clientY - drag.startY : 0);
@@ -9698,6 +9701,9 @@ function BoardStage({
                   ? `${items.findIndex(item => item.id === boardDropTarget.id) + 1}번 뒤 여백 ${formatClassinPageAmount(boardDropTarget.removableGapPages)} 줄이기 · 아래 문제를 위로 당깁니다`
                   : '이 줄은 더 줄일 뒤 여백이 없습니다'
                 : `${items.findIndex(item => item.id === boardDropTarget.id) + 1}번 ${boardDropTarget.position === 'before' ? '앞' : '뒤'}에 넣기 · 순서 변경`}
+            </div>}
+            {boardDropTarget?.mode === 'space' && <div className="stage-drag-feedback" role="status" aria-live="polite">
+              {`빈 쪽 ${boardDropTarget.pages}개 추가 · 순서는 그대로 · 순서 이동은 ${ALTERNATE_MODIFIER_LABEL}+드래그`}
             </div>}
 
             <div
@@ -11415,7 +11421,6 @@ function SidePanel({
           xRatio: DEFAULT_PLACEMENT_X_RATIO,
           xEdited: false,
           yRatio: DEFAULT_PLACEMENT_Y_RATIO,
-          scaleRatio: maxPlacementScaleRatio(target),
           fitWidth: true,
         },
       })));
@@ -14262,10 +14267,31 @@ function mergeReextractedSharedPassages(baseSession, incomingSession, fileName){
   if (!base) return incoming;
   if (!incoming) return base;
 
+  const incomingFragments = (incoming.problems || []).filter(isPassageFragmentProblem);
+  if (!incomingFragments.length) return base;
+  // Only automatic passages found again are replaced: a group the teacher
+  // stitched or re-cropped, and one the re-run missed, stay as they are.
+  // ponytail: a passage whose only edit is 고화질 or AI box re-recognition still
+  // counts as automatic; add those markers here if teachers report losing them.
+  const handEditedGroupIds = new Set((base.problems || [])
+    .filter(problem => isPassageFragmentProblem(problem) && (
+      problem.manualStitch || problem.manual_stitch
+      || manualCropIsActive(problem.manualCrop || problem.manual_crop)
+    ))
+    .map(passageGroupIdFor)
+    .filter(Boolean));
+  const replacedGroupIds = new Set(incomingFragments
+    .map(passageGroupIdFor)
+    .filter(groupId => groupId && !handEditedGroupIds.has(groupId)));
+
   const retainedProblems = [];
   const removedPassageIds = new Set();
   (base.problems || []).forEach(problem => {
-    if (!isPassageFragmentProblem(problem) || isManualIndependentPassage(problem)) {
+    if (
+      !isPassageFragmentProblem(problem)
+      || isManualIndependentPassage(problem)
+      || !replacedGroupIds.has(passageGroupIdFor(problem))
+    ) {
       retainedProblems.push(problem);
       return;
     }
@@ -14275,9 +14301,6 @@ function mergeReextractedSharedPassages(baseSession, incomingSession, fileName){
     }
     if (problem?.id) removedPassageIds.add(problem.id);
   });
-
-  const incomingFragments = (incoming.problems || []).filter(isPassageFragmentProblem);
-  if (!incomingFragments.length) return base;
 
   const existingProblemIds = new Set(retainedProblems.map(problem => problem?.id).filter(Boolean));
   const basePages = (base.pages || []).map(page => ({
@@ -14316,17 +14339,19 @@ function mergeReextractedSharedPassages(baseSession, incomingSession, fileName){
     });
   });
 
-  const preparedFragments = incomingFragments.map(problem => {
-    const nextId = makeUniqueId(problem.id, existingProblemIds);
-    const incomingPageId = problem.sourcePageId || problem.source_page_id;
-    const nextPageId = incomingPageIdMap.get(incomingPageId) || incomingPageId;
-    return {
-      ...problem,
-      id: nextId,
-      sourcePageId: nextPageId,
-      source_page_id: nextPageId,
-    };
-  });
+  const preparedFragments = incomingFragments
+    .filter(problem => !handEditedGroupIds.has(passageGroupIdFor(problem)))
+    .map(problem => {
+      const nextId = makeUniqueId(problem.id, existingProblemIds);
+      const incomingPageId = problem.sourcePageId || problem.source_page_id;
+      const nextPageId = incomingPageIdMap.get(incomingPageId) || incomingPageId;
+      return {
+        ...problem,
+        id: nextId,
+        sourcePageId: nextPageId,
+        source_page_id: nextPageId,
+      };
+    });
 
   const insertions = new Map();
   preparedFragments.forEach(problem => {
@@ -18922,6 +18947,7 @@ function App(){
     );
     setItems(mapped);
     setSession(nextSession);
+    if (nextSession.session_name) setFileName(nextSession.session_name);
     setLayoutGapModeState(restoredGapMode);
     setPublished(false);
     if (mapped.length === 0) {
@@ -18996,7 +19022,11 @@ function App(){
         };
         if (!sessionResponseRevisionIsStale(conflictPayload)) {
           captureSessionRevision(conflictPayload);
+          // Another window or an app restart saved first: keep this board one Ctrl+Z away.
+          setHistoryStack(prev => appendBoundedHistory(prev, snapshotBefore, UNDO_HISTORY_LIMIT));
           adoptMutatedSession(e.latestSession, snapshotBefore);
+          showToast(`저장된 수업이 바뀌어 최신 상태를 불러왔어요 · 방금 작업은 적용하지 않았어요 · ${PRIMARY_MODIFIER_LABEL}+Z로 이전 칠판을 되돌릴 수 있어요`, 'error');
+          return null;
         }
       }
       showSimpleErrorToast(e, '수정 실패');
@@ -19166,7 +19196,7 @@ function App(){
         status: 'done',
         label: '공통 지문 재추출 완료',
         hint: incomingFragments.length
-          ? `${incomingFragments.length}개 결과를 확인한 뒤 적용할 수 있습니다.`
+          ? `공통 지문 ${incomingFragments.length}개를 찾아 칠판에 반영합니다.`
           : '찾은 공통 지문이 없습니다. 원본과 문항 범위를 확인해 주세요.',
       });
       setRecognitionReview({
@@ -19327,7 +19357,9 @@ function App(){
   };
 
   const undoMutation = useCallback(async () => {
-    if (reviewEditorActive || mutatingRef.current) return false;
+    // A lesson opening, a refresh, 새 수업 or EDB 제작 replaces the board when it lands: ignore the key.
+    if (reviewEditorActive || mutatingRef.current || restoreInFlightRef.current || refreshInFlightRef.current
+      || resetInFlightRef.current || publishInFlightRef.current) return false;
     // Unsaved board edits come off first, one at a time, without touching
     // the saved lesson; only then does undo restore a saved step.
     if (localEditHistoryRef.current.stack.length) {
@@ -19390,7 +19422,8 @@ function App(){
   }, [view, activeId, session, items, fileName, boardColumns, layoutGapMode, applySession, refreshSessionHistory, showSimpleErrorToast, showToast, reviewEditorActive, hasRunningBackgroundJobs]);
 
   const redoMutation = useCallback(async () => {
-    if (reviewEditorActive || mutatingRef.current || hasRunningBackgroundJobs) return false;
+    if (reviewEditorActive || mutatingRef.current || hasRunningBackgroundJobs || restoreInFlightRef.current
+      || refreshInFlightRef.current || resetInFlightRef.current || publishInFlightRef.current) return false;
     const anchor = redoAnchorRef.current;
     const target = redoStackRef.current[redoStackRef.current.length - 1];
     // A redo is a full lesson restore: refuse it once anything moved on.
@@ -19763,7 +19796,8 @@ function App(){
         : '앱을 종료할까요? 브라우저 창은 직접 닫아 주세요.';
     if (!window.confirm(message)) return;
     try {
-      const done = await postShutdown().catch(e => {
+      // A yes to the running-job question above is already the forced quit.
+      const done = await postShutdown(workInProgress).catch(e => {
         if (e?.code === 'shutdown_busy') return null;
         throw e;
       });
@@ -20268,7 +20302,7 @@ function App(){
           .filter(Boolean);
         setReviewFocus({ filter: 'all', problemIds: reextractedIds, source: 'session-passage-reextract' });
         refreshSessionHistory();
-        showToast(`공통 지문 ${incomingFragments.length}개 교체 · 기존 문항 유지`);
+        showToast(`공통 지문 ${incomingFragments.length}개 찾음 · 직접 고친 지문과 기존 문항은 그대로 · ${PRIMARY_MODIFIER_LABEL}+Z로 실행 취소`, { duration: 4500 });
       } else if (review.kind === 'queue-recognition') {
         if (!queueRequestIsCurrent(review.queueGeneration, review.fileKeys || [])) {
           setRecognitionReview(null);
@@ -20625,6 +20659,7 @@ function App(){
     const nextOrder = reordered.map(item => String(item.id)).join('|');
     if (previousOrder === nextOrder) return false;
     const previousIndex = items.findIndex(item => String(item.id) === String(fromId));
+    const savedSession = session;  // what the app still holds if the save below fails
     const snapshotBefore = session
       ? (materializeSessionForItems(session, items, fileName, boardColumns, layoutGapMode) || cloneSession(session))
       : null;
@@ -20679,7 +20714,8 @@ function App(){
               normalizeLayoutGapMode(snapshotBefore.layoutGapMode ?? snapshotBefore.layout_gap_mode)
             );
             setItems(rollbackItems);
-            setSession(snapshotBefore);
+            // The save failed: unsaved board edits stay unsaved (chip, exit warnings, crash draft).
+            setSession(savedSession);
             setActiveId(rollbackItems.some(item => String(item.id) === String(fromId)) ? fromId : rollbackItems[0]?.id || null);
             setHistoryStack(prev => prev[prev.length - 1] === snapshotBefore ? prev.slice(0, -1) : prev);
           }

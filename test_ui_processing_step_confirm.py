@@ -41,6 +41,7 @@ function controller() {
     appendBoundedHistory: require('./ui_prototype/reorder.js').appendBoundedHistory,
     setItems: value => { sandbox.items = typeof value === 'function' ? value(sandbox.items) : value; },
     setSession: value => { sandbox.session = value; },
+    setFileName: value => { sandbox.fileName = value; },
     setPublished: value => { sandbox.published = value; },
     setTweak: (key, value) => {
       assert.equal(key, 'boardColumns', 'session adoption only restores the board column setting');
