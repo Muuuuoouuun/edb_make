@@ -222,7 +222,7 @@ class TestUiQueueActions(unittest.TestCase):
         finish = source.split("const finishManualSplitFlow = useCallback(() => {", 1)[1].split("}, []);", 1)[0]
         self.assertIn("setView('board');", finish)
         strip = source.split("// A queued 직접 자르기 request is one-shot", 1)[1].split("const finishManualSplitFlow", 1)[0]
-        self.assertIn("const { manualSplitPageId, manualSplitPageIds, ...rest } = prev;", strip)
+        self.assertIn("const { manualSplitPageId, manualSplitPageIds, editProblemId, ...rest } = prev;", strip)
 
     def test_review_crop_editors_expand_the_workspace_and_restore_the_side_panel(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -478,7 +478,6 @@ class TestUiQueueActions(unittest.TestCase):
         html = board_document()
 
         self.assertIn("영역 조정", source)
-        self.assertIn("영역 다시 잡기", source)
         self.assertIn("applyExpandedCrop", source)
         self.assertIn("pendingReviewSelectionProblemIdRef", source)
         self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ${PRIMARY_MODIFIER_LABEL}+휠 확대/축소 · Enter 적용 · Esc 취소", source)

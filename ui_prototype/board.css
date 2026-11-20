@@ -8823,6 +8823,16 @@
     .home-dashboard{ padding-block: 20px 24px; }
     .home-dashboard-inner{ gap: 20px; }
     .home-hero-dropzone{ padding-block: 20px; gap: 8px; }
+    /* Short laptop screens (1920x1080 at 150% leaves about 1280x600): the review chrome must leave room for the page. */
+    .workspace-session-actions{ padding: 0 16px; }
+    .workspace-session-actions > summary{ min-height: 28px; }
+    .review-stage-toolbar .review-view-control-group,
+    .review-stage-toolbar .review-zoom-controls{ padding: 0; border: 0; background: transparent; }
+    /* Review bars only: the manual split panel measures its sticky top from the editor bars. */
+    .unified-source-editor:not(.is-editing) .review-actionbar{ position: static; }
+    .review-completion-bar{ min-height: 0; padding-block: 8px; margin-bottom: 8px; }
+    .review-completion-help,
+    .original-toolbar-help{ display: none; }
   }
   /* A tablet workspace also needs one full-width pane for legible page art. */
   @media (max-width: 900px){

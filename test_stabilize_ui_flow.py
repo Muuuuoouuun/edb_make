@@ -66,9 +66,11 @@ class TestStabilizeUiFlow(unittest.TestCase):
         const code = section('  // Warn before the tab closes', '  const refreshSession = useCallback(')
           + '\nglobalThis.shutdownApp = shutdownApp;';
         const render = state => { listeners.clear(); Object.assign(sandbox, state); vm.runInContext('{' + code + '}', sandbox); };
-        render({ sessionEditState: { dirty: false }, workInProgress: false });
+        render({ sessionEditState: { dirty: false }, workInProgress: false, reviewEditorActive: false });
         assert.equal(listeners.has('beforeunload'), false, 'a saved idle board closes without a prompt');
-        render({ sessionEditState: { dirty: true }, workInProgress: false });
+        render({ sessionEditState: { dirty: false }, workInProgress: false, reviewEditorActive: true });
+        assert.equal(listeners.has('beforeunload'), true, 'areas drawn in an open 원본 편집 are unsaved work');
+        render({ sessionEditState: { dirty: true }, workInProgress: false, reviewEditorActive: false });
         const event = { preventDefault() { event.prevented = true; } };
         listeners.get('beforeunload')(event);
         assert.equal(event.prevented, true);

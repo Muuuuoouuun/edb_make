@@ -7909,6 +7909,24 @@ def _materialize_crop_base_image(
     return base_crop_path.resolve().as_uri()
 
 
+def _flag_crop_overlaps_for_review(session: dict[str, Any], problem_id: str) -> None:
+    # A new crop voids the 확인 record (C43). If it still overlaps a neighbour,
+    # flag the pair as the import does, so 검수 offers 확인 instead of only blocking 제작.
+    # ponytail: 직접 자르기 (_mutate_bulk_crop) regions are not re-flagged; call this with
+    # the replacement ids if a drawn region that overlaps its neighbour gets reported.
+    problems = [problem for problem in session.get("problems") or [] if isinstance(problem, dict)]
+    for find_groups, mark_flags in (
+        ("_session_source_problem_overlap_groups", "_mark_source_problem_overlap_review_flags"),
+        ("_session_passage_group_source_reuse_groups", "_mark_passage_group_source_reuse_review_flags"),
+    ):
+        groups = [
+            group
+            for group in _lazy_call("build_problem_board_edb", find_groups, problems)
+            if problem_id in (group.get("problemIds") or [])
+        ]
+        _lazy_call("build_problem_board_edb", mark_flags, problems, groups)
+
+
 def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dict[str, Any]:
     _index, problem = _find_problem(session, problem_id)
     _check_manual_media_anchors(problem)
@@ -8073,6 +8091,7 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     problem["manual_crop"] = crop
     if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
         _refresh_mutated_crop_layout(problem, raw_crop_path_for_board)
+    _flag_crop_overlaps_for_review(session, problem_id)
     _refresh_session_problem_counts(session)
     return session
 
@@ -8411,6 +8430,7 @@ def _mutate_stitch_crop(
         page["problem_ids"] = list(ids)
 
     _refresh_mutated_crop_layout(problem, stitched_path)
+    _flag_crop_overlaps_for_review(session, problem_id)
     _refresh_session_problem_counts(session)
     return session
 
@@ -10118,6 +10138,8 @@ def _mutate_retry_ai_partial(
                 ai_fallback_max_regions=int(ai_config.get("max_regions") or 30),
                 ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 30000),
                 ai_fallback_save_debug=bool(ai_config.get("save_debug")),
+                # Offline, a bad key or no quota must fail the retry, not return local results.
+                fail_on_ai_error=True,
             )
             retry_session = result.get("ui_session") or {}
             retry_problems = [p for p in retry_session.get("problems", []) if isinstance(p, dict)]
@@ -10371,6 +10393,8 @@ def _mutate_retry_ai(
                 ai_fallback_max_regions=int(ai_config.get("max_regions") or 30),
                 ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 30000),
                 ai_fallback_save_debug=bool(ai_config.get("save_debug")),
+                # Offline, a bad key or no quota must fail the retry, not replace the page with local results.
+                fail_on_ai_error=True,
             )
         except Exception as exc:  # noqa: BLE001 - show the actionable pipeline message to the UI
             return {"pageId": page_id, "status": "failed", "error": str(exc)}
@@ -12605,6 +12629,28 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         except FileNotFoundError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
+            return
+
+        rows = new_session.get("ai_retry_summary") or []
+        if rows and not any(row.get("status") == "applied" for row in rows):
+            # Nothing from AI came back: keep the lesson as it was (this clone is never saved).
+            # ponytail: one message for every unapplied row (also a missing page image or an empty
+            # result), and a mixed retry still applies the pages that worked; split by status if needed.
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "ai_retry_not_applied",
+                    "operation": "session_retry_ai",
+                    "retryable": True,
+                    "error": "AI 결과를 받지 못해 문항을 그대로 두었어요.",
+                    "detail": "; ".join(
+                        f"{row.get('pageId') or row.get('problemId')}: {row.get('error') or row.get('status')}"
+                        for row in rows
+                    )[:2000],
+                    "recoverySteps": ["인터넷 연결과 설정 → AI 사용·연결의 Gemini API 키·사용량을 확인한 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.BAD_GATEWAY,
+            )
             return
 
         response_revision = current_revision

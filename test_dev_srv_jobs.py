@@ -396,7 +396,7 @@ def test_quit_asks_again_and_forces_when_the_app_is_still_busy() -> None:
     const sandbox = {
       useRef: value => ({ current: value }), useCallback: fn => fn, useEffect() {},
       showToast: message => toasts.push(message), showSimpleErrorToast() { throw new Error('no error toast'); },
-      sessionEditState: { dirty: false }, workInProgress: false,
+      sessionEditState: { dirty: false }, workInProgress: false, reviewEditorActive: false,
       window: { addEventListener() {}, removeEventListener() {}, confirm: message => { prompts.push(message); return answers.shift(); } },
       postShutdown: async force => {
         calls.push(Boolean(force));

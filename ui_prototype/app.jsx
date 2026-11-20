@@ -2146,9 +2146,9 @@ function OriginalEditToolbar({mode,onModeChange,onCancel,layout,onLayoutChange,d
     return()=>{observer.disconnect();wrap.style.removeProperty('--original-toolbar-height');};
   },[]);
   return <div ref={toolbarRef} className="original-edit-toolbar">
-    <button type="button" className="btn" disabled={disabled} onClick={onCancel}>{Icon.arrowLeft} 편집 닫기</button>
+    <button type="button" className="btn" disabled={disabled} onClick={onCancel}>{Icon.arrowLeft} 취소</button>
     <div className="original-edit-title"><strong>원본 편집</strong><small title={sourceLabel}>{sourceLabel || (multi?'여러 영역을 한 지문으로':'원본에서 범위를 바로 조절하세요')}</small></div>
-    {!multi && <div className="original-mode-tabs" role="group" aria-label="원본 편집 작업">{[['crop','영역 조정'],['split','수동 쪼개기']].map(([value,label])=><button type="button" key={value} aria-pressed={mode===value} disabled={disabled} onClick={()=>onModeChange(value)}>{label}</button>)}</div>}
+    {!multi && <div className="original-mode-tabs" role="group" aria-label="원본 편집 작업">{[['crop','영역 조정'],['split','수동 자르기']].map(([value,label])=><button type="button" key={value} aria-pressed={mode===value} disabled={disabled} onClick={()=>onModeChange(value)}>{label}</button>)}</div>}
     <div className="original-layout-tabs" role="group" aria-label="원본 편집 도구 배치">{[['fixed','고정 패널'],['floating','플로팅']].map(([value,label])=><button type="button" key={value} aria-pressed={layout===value} onClick={()=>onLayoutChange(value)}>{label}</button>)}</div>
     <small className="original-toolbar-help"><kbd>Esc</kbd> {mode==='split'?'선택·이동':'취소'} · <kbd>Enter</kbd> 적용 · Shift+방향키 10px</small>
   </div>;
@@ -2257,7 +2257,7 @@ function BoxEditPanel({
     || finiteNumber(selectedBox?.top, 0) + finiteNumber(selectedBox?.height, 0) > finiteNumber(selectedPage?.height, 1) - 4;
   const sourcePageCount = new Set(segmentList.map(segment => segment.pageId)).size;
   return (
-    <aside ref={panelRef} className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`} aria-label="영역 다시 잡기 확인 패널">
+    <aside ref={panelRef} className={`box-edit-panel ${multi ? 'multi-crop-panel' : ''}`} aria-label="영역 조정 패널">
       <div className="box-edit-panel-head">
         <div>
           <span>선택된 항목</span>
@@ -2270,12 +2270,12 @@ function BoxEditPanel({
       {!multi && <div className="original-live-preview"><strong>칠판에 들어갈 모습</strong><div className="original-preview-board"><BoxEditPreview page={selectedPage} box={selectedBox}/></div><small>{manualSplitBoxSizeLabel(selectedBox)}</small></div>}
       {!multi && <OriginalGeometryControls page={selectedPage} box={selectedBox} originalBox={selectedOriginalBox} onChange={onBoxChange} disabled={busy}/>}
       <div className="box-edit-panel-section">
-        <h3>{multi ? '지문 여러 영역 이어붙이기' : '영역 다시 잡기'}</h3>
+        <h3>{multi ? '지문 여러 영역 이어붙이기' : '영역 조정'}</h3>
         <p>{multi
           ? '분할선이나 페이지를 넘어가는 지문을 여러 번 드래그하세요. 아래 순서대로 한 지문이 됩니다.'
           : '시험지 위의 파란 테두리와 조절점을 직접 움직이세요.'}</p>
       {!multi && <button className="btn" type="button" onClick={onManualSplit} disabled={busy}>
-        {Icon.crop} 연속 자르기·스탬프
+        {Icon.crop} 수동 자르기
       </button>}
       </div>
       {multi && (
@@ -2386,7 +2386,7 @@ function BoxEditPanel({
         </strong>
       </div>
       <div className="box-edit-panel-footer">
-        <button className="btn" type="button" onClick={onReset} disabled={busy || !changed}>초기화</button>
+        <button className="btn" type="button" onClick={onReset} disabled={busy || !changed}>원래 영역으로</button>
         <button
           className="btn primary"
           type="button"
@@ -4502,6 +4502,8 @@ function ReviewStage({
   }, [adjustReviewZoom]);
 
   const cancelManualPageSplit = () => {
+    const regionCount = (manualSplit?.regions || []).length;
+    if (regionCount && !window.confirm(`적용하지 않은 영역 ${regionCount}개가 사라집니다. 편집을 닫을까요?`)) return;
     const wasGuided = !!manualSplit?.guided;
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
@@ -5052,6 +5054,9 @@ function ReviewStage({
     setManualSplitDraftBox(null);
   };
   const cancelBoxEdit = () => {
+    // A single 영역 조정 closes on Esc ('Esc 취소'); several passage areas are worth a question.
+    if (boxEdit?.multi && !boxEditSegmentsEqual(boxEdit.originalSegments, boxEdit.segments)
+      && !window.confirm('적용하지 않은 영역 변경이 사라집니다. 편집을 닫을까요?')) return;
     boxEditDragRef.current = null;
     boxEditCommitRef.current = false;
     setBoxEditDraftBox(null);
@@ -5574,7 +5579,9 @@ function ReviewStage({
       const primaryModifier = evt.ctrlKey || evt.metaKey;
       if (evt.key === 'Escape') {
         evt.preventDefault();
-        cancelBoxEdit();
+        // Like 수동 자르기 (Esc → 선택): leave 영역 추가 first, close the editor on the next Esc.
+        if (boxEdit.addingSegment) toggleBoxEditAddSegment();
+        else cancelBoxEdit();
       } else if (evt.key === 'Enter') {
         // Enter activates focused buttons; Ctrl/Command+Enter explicitly applies.
         if (!primaryModifier && evt.target?.closest?.('button, a, summary, [role="button"]')) return;
@@ -5896,7 +5903,7 @@ function ReviewStage({
   const originalToolbar = reviewEditorActive ? <OriginalEditToolbar mode={manualSplit?'split':'crop'} onModeChange={switchOriginalMode} onCancel={manualSplit?cancelManualPageSplit:cancelBoxEdit} layout={originalLayout} onLayoutChange={setOriginalLayout} disabled={mutating} sourceLabel={(() => { const page=manualSplitPage || pages.find(p=>p.id===boxEdit?.pageId); return page ? sourcePageHeading(page,reviewPageLookup.get(page.id)?.index || 0) : ''; })()} multi={boxEdit?.multi || (manualSplit && manualSplit.selectionProblemIds.length!==1)}/> : null;
   const actionBar = boxEdit ? (
     <div className="review-actionbar box-edit-actionbar">
-      <span className="count-chip">{boxEdit.multi ? '지문 영역 합치기' : '영역 다시 잡기'}</span>
+      <span className="count-chip">{boxEdit.multi ? '지문 영역 합치기' : '영역 조정'}</span>
       <span className="hint">
         {boxEdit.multi
           ? `페이지를 스크롤하며 영역을 추가하세요. 목록 순서대로 한 지문이 됩니다. ${PRIMARY_MODIFIER_LABEL}+휠 확대/축소 · Enter 적용 · Esc 취소`
@@ -6081,15 +6088,18 @@ function ReviewStage({
           )}
           {selectedList.length === 1 && (
             <>
-              <button
-                className="btn"
-                type="button"
-                onClick={() => applyExpandedCrop()}
-                disabled={mutating || !selectedCanBoxEdit}
-                title="선택한 박스 주변 여백까지 포함해 빠르게 영역 조정"
-              >
-                {Icon.crop} 빠른 자르기
-              </button>
+              {/* A stitched passage has no single page crop to widen; it keeps 영역 조정. */}
+              {!isPassageFragmentProblem(selectedSingleProblem) && (
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => applyExpandedCrop()}
+                  disabled={mutating || !selectedCanBoxEdit}
+                  title={`글자가 잘렸을 때 영역을 상하좌우로 넓혀 바로 적용해요 · ${PRIMARY_MODIFIER_LABEL}+Z로 되돌릴 수 있어요`}
+                >
+                  {Icon.crop} 영역 넓히기
+                </button>
+              )}
               <button
                 className="btn"
                 type="button"
@@ -6097,7 +6107,7 @@ function ReviewStage({
                 disabled={mutating || !selectedCanBoxEdit}
                 title={selectedCanBoxEdit ? '원본 페이지 위에서 자르기 틀을 직접 조정' : '원본 페이지 이미지가 있어야 합니다'}
               >
-                {Icon.crop} 영역 다시 잡기
+                {Icon.crop} 영역 조정
               </button>
               <button
                 className="btn"
@@ -6106,7 +6116,7 @@ function ReviewStage({
                 disabled={mutating || !selectedCanManualSplit}
                 title={selectedCanManualSplit ? '선택한 문항을 여러 영역으로 다시 나누기' : '원본 페이지 이미지가 있어야 합니다'}
               >
-                {Icon.pen} 문항 다시 나누기
+                {Icon.pen} 수동 자르기
               </button>
             </>
           )}
@@ -6130,7 +6140,7 @@ function ReviewStage({
                 disabled={mutating || !selectedCanManualSplit}
                 title={selectedCanManualSplit ? '선택한 항목들을 수동 자르기로 다시 나누기' : '같은 원본 페이지의 항목만 수동 자르기할 수 있습니다'}
               >
-                {Icon.pen} 선택 항목 재분할
+                {Icon.pen} 수동 자르기
               </button>
             </>
           </div>
@@ -16885,11 +16895,15 @@ function importResultNotice(scope, incomingSession, restored, fallbackMessage = 
   const checkCount = (sessionReviewSummary(restored).reviewTargets || []).filter(target => target.status !== 'normal'
     && (newProblemIds.has(String(target.id)) || newPageIds.has(target.pageId))).length;
   const countLabel = reviewStageCopyFor(incomingSession, countSessionProblems(newProblems), newPageIds.size).countLabel;
+  // Pages whose Gemini call failed (offline, bad key, quota) were split without AI.
+  const ai = incomingSession?.ai_summary || incomingSession?.aiSummary || {};
+  const aiFailed = ai.requested ? Number((ai.status_counts || ai.statusCounts || {}).error) || 0 : 0;
   return {
     checkCount,
     firstNewProblemId: newProblems[0]?.id || null,
     message: [
       fallbackMessage,
+      aiFailed ? `AI 연결 실패 ${aiFailed}쪽은 AI 없이 나눴어요 · 인터넷 연결과 Gemini API 키·사용량을 확인해 주세요` : '',
       `${countLabel} 칠판에 넣었어요`,
       checkCount > 0 ? `확인 필요 ${checkCount}개` : '순서를 확인하고 EDB 제작을 누르세요',
     ].filter(Boolean).join(' · '),
@@ -17487,6 +17501,7 @@ function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
     pdf_renderer_unavailable: '앱의 PDF 처리 기능 오류', app_dependency_missing: '앱 구성 요소 오류',
     app_internal_error: '앱 내부 오류 · 오류 상세를 확인해 주세요',
     single_problem_too_tall: '한 문항이 칠판 50페이지를 넘습니다',
+    ai_retry_not_applied: '문항은 그대로예요 · 인터넷 연결과 Gemini API 키·사용량을 확인해 주세요',
   };
   if (reasons[error?.code]) return `${fallbackMessage} · ${reasons[error.code]}`;
   if (isNetworkRequestError(error)) {
@@ -17988,8 +18003,11 @@ function App(){
   const [reviewFocus, setReviewFocus] = useState(null);
   const [reviewEditorActive, setReviewEditorActive] = useState(false);
   const sourceEditorWasActiveRef = useRef(false);
+  // Only 영역 조정 started on the 칠판 returns there; an edit made inside 검수 stays in 검수.
+  const editorReturnsToBoardRef = useRef(false);
   const handleSourceEditorMode = useCallback(active => {
-    if (!active && sourceEditorWasActiveRef.current) {
+    if (!active && sourceEditorWasActiveRef.current && editorReturnsToBoardRef.current) {
+      editorReturnsToBoardRef.current = false;
       setView('board');
       setReviewFocus(null);
     }
@@ -18104,10 +18122,15 @@ function App(){
   );
   // Review targets include pages and shared passages, not only board items;
   // open the source editor for those so the user can resolve them.
-  const openFirstReviewTarget = targetSession => {
+  // scope (the import notice's): start at the added file's first check, else the lesson's first.
+  const openFirstReviewTarget = (targetSession, scope = null) => {
     if (!targetSession) return false;
     const summary = sessionReviewSummary(targetSession);
-    const target = (summary.reviewTargets || []).find(candidate => candidate.status !== 'normal');
+    const pending = (summary.reviewTargets || []).filter(candidate => candidate.status !== 'normal');
+    const scopeProblemIds = new Set(scope?.scopeProblemIds || []);
+    const scopePageIds = new Set(scope?.scopePageIds || []);
+    const target = pending.find(candidate => scopeProblemIds.has(String(candidate.id)) || scopePageIds.has(candidate.pageId))
+      || pending[0];
     const itemIds = new Set(items.map(item => String(item.id)));
     const problemId = target?.type === 'problem' ? String(target.problemIds?.[0] || target.id || '') : '';
     if (problemId && itemIds.has(problemId)) {
@@ -18130,7 +18153,7 @@ function App(){
   };
   // Toast actions fire after later renders; read the current session and items, not a stale closure.
   const openPendingReviewRef = useRef(null);
-  openPendingReviewRef.current = () => openFirstReviewTarget(session);
+  openPendingReviewRef.current = scope => openFirstReviewTarget(session, scope);
   // auto-revert to board view if the session is cleared or never had pages
   useEffect(() => {
     if (view === 'review' && !reviewAvailable) setView('board');
@@ -18140,16 +18163,20 @@ function App(){
   useEffect(() => {
     if (view === 'review') return;
     setReviewFocus(prev => {
-      if (!prev || (!prev.manualSplitPageId && !prev.manualSplitPageIds)) return prev;
-      const { manualSplitPageId, manualSplitPageIds, ...rest } = prev;
+      if (!prev || (!prev.manualSplitPageId && !prev.manualSplitPageIds && !prev.editProblemId)) return prev;
+      const { manualSplitPageId, manualSplitPageIds, editProblemId, ...rest } = prev;
       return rest;
     });
   }, [view]);
   const finishManualSplitFlow = useCallback(() => {
     setView('board');
+    setReviewFocus(null);
   }, []);
   useEffect(() => {
-    if (view !== 'review') setReviewEditorActive(false);
+    if (view !== 'review') {
+      setReviewEditorActive(false);
+      editorReturnsToBoardRef.current = false;
+    }
   }, [view]);
   useEffect(() => {
     historyStackRef.current = historyStack;
@@ -19687,10 +19714,11 @@ function App(){
     }
   }, [loading, downloadBusy, publishBusy, backgroundJobs, session, items, fileName, boardColumns, layoutGapMode, pendingFiles.length, recentSessions.length, sessionEditState.dirty, reviewEditorActive, setPendingFilesTracked, setRecentSessionsAuthoritative, activateOperationRecovery, clearOperationRecovery, showToast]);
 
-  // Warn before the tab closes only while edits are unsaved or work is still running.
+  // Warn before the tab closes only while edits are unsaved (an open 원본 편집 counts, as in
+  // 새 수업) or work is still running.
   const leavingAppRef = useRef(false);
   useEffect(() => {
-    if (!sessionEditState.dirty && !workInProgress) return undefined;
+    if (!sessionEditState.dirty && !workInProgress && !reviewEditorActive) return undefined;
     const warnBeforeLeaving = event => {
       if (leavingAppRef.current) return;
       event.preventDefault();
@@ -19698,7 +19726,7 @@ function App(){
     };
     window.addEventListener('beforeunload', warnBeforeLeaving);
     return () => window.removeEventListener('beforeunload', warnBeforeLeaving);
-  }, [sessionEditState.dirty, workInProgress]);
+  }, [sessionEditState.dirty, workInProgress, reviewEditorActive]);
 
   const shutdownApp = useCallback(async () => {
     const message = workInProgress
@@ -20224,7 +20252,7 @@ function App(){
         const appliedKeys = new Set(review.fileKeys || []);
         setPendingFilesTracked(prev => prev.filter(file => !appliedKeys.has(fileQueueKey(file))));
         if (review.jobId) settleBackgroundJob(review.jobId, { status: 'done', label: '처리 완료' }, 0);
-        if (notice?.checkCount > 0) showActionToast(notice.message, '확인하기', () => openPendingReviewRef.current?.());
+        if (notice?.checkCount > 0) showActionToast(notice.message, '확인하기', () => openPendingReviewRef.current?.(nextScope));
         else if (notice) showToast(notice.message, { duration: 4500 });
       } else if (review.kind === 'retry-ai') {
         const currentSnapshot = session
@@ -21654,6 +21682,7 @@ function App(){
           onEditOriginal={id=>{
             setSelectedProblemIds(new Set([id]));setActiveId(id);setMobilePane('stage');
             setReviewFocus({filter:'all',problemIds:[id],editProblemId:id,source:'inspector-original-edit'});
+            editorReturnsToBoardRef.current = view === 'board';
             requestViewChange('review');
           }}
           onDownloadItemImage={downloadItemImage}
