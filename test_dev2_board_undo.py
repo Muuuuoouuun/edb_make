@@ -1,7 +1,7 @@
 """Round-2 board-undo chain: conflict adopt with undo (R1), unnumbered titles (R3),
 passage re-extract merge (R24), plain board drag feedback (R35), 지문 전체 너비
-preset (R61), failed reorder rollback (R66), quit prompt (R72) and undo during
-session loads (R76)."""
+preset (R61), failed reorder rollback (R66) and undo during session loads (R76).
+The quit prompt (R72) is covered in test_dev_srv_jobs.py, whose sandbox follows the quit code."""
 from __future__ import annotations
 
 import unittest
@@ -223,45 +223,6 @@ class TestFailedReorderRollback(unittest.TestCase):
           assert.equal(edit.label, '수업 변경 있음 · 저장 필요');
           assert.equal(sandbox.historyStack.length, 0);
           assert.equal(state.errors.length, 1);
-        })().catch(error => { console.error(error); process.exitCode = 1; });
-        """)
-
-
-class TestQuitAsksOnce(unittest.TestCase):
-    def test_a_quit_the_screen_already_warned_about_is_sent_forced(self) -> None:
-        run_node(NODE_SETUP + r"""
-        const calls = [], prompts = [], toasts = [];
-        let answers = [];
-        const sandbox = {
-          useRef: value => ({ current: value }), useCallback: fn => fn, useEffect() {},
-          showToast: message => toasts.push(message), showSimpleErrorToast() { throw new Error('no error toast'); },
-          sessionEditState: { dirty: false }, workInProgress: true,
-          window: { addEventListener() {}, removeEventListener() {}, confirm: message => { prompts.push(message); return answers.shift(); } },
-          postShutdown: async force => {
-            calls.push(Boolean(force));
-            if (!force) { const error = new Error('busy'); error.code = 'shutdown_busy'; throw error; }
-            return { ok: true };
-          },
-        };
-        vm.createContext(sandbox);
-        vm.runInContext('{' + section('  // Warn before the tab closes', '  const refreshSession = useCallback(')
-          + '\nglobalThis.shutdownApp = shutdownApp;}', sandbox);
-        (async () => {
-          answers = [true];
-          await sandbox.shutdownApp();
-          assert.deepEqual(calls, [true], 'the yes to the running-job question is the forced quit');
-          assert.equal(prompts.length, 1);
-          assert.match(prompts[0], /진행 중인 작업이 있어요/);
-          assert.match(toasts[0], /앱을 종료합니다/);
-          calls.length = 0; prompts.length = 0; answers = [false];
-          await sandbox.shutdownApp();
-          assert.deepEqual(calls, [], 'a declined quit never reaches the app');
-          // Work the screen does not know about still gets the app's own second question.
-          sandbox.workInProgress = false;
-          calls.length = 0; prompts.length = 0; answers = [true, true];
-          await sandbox.shutdownApp();
-          assert.deepEqual(calls, [false, true]);
-          assert.match(prompts[1], /아직 작업이 진행 중/);
         })().catch(error => { console.error(error); process.exitCode = 1; });
         """)
 

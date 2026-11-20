@@ -415,6 +415,17 @@ def test_quit_asks_again_and_forces_when_the_app_is_still_busy() -> None:
       calls.length = 0; answers = [true, false];
       await sandbox.shutdownApp();
       assert.deepEqual(calls, [false], 'declining the second question keeps the app running');
+      // A job the screen already showed: the yes to its question is the forced quit, so one question.
+      sandbox.workInProgress = true;
+      calls.length = 0; prompts.length = 0; toasts.length = 0; answers = [true];
+      await sandbox.shutdownApp();
+      assert.deepEqual(calls, [true]);
+      assert.equal(prompts.length, 1);
+      assert.match(prompts[0], /진행 중인 작업이 있어요/);
+      assert.match(toasts[0], /앱을 종료합니다/);
+      calls.length = 0; answers = [false];
+      await sandbox.shutdownApp();
+      assert.deepEqual(calls, [], 'a declined quit never reaches the app');
     })().catch(error => { console.error(error); process.exitCode = 1; });
     """)
 
