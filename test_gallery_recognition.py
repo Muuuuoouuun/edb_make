@@ -88,7 +88,7 @@ class TestGalleryLabels(unittest.TestCase):
     def test_missing_engine_and_failed_ocr_are_explicit_and_work_is_bounded(self):
         with mock.patch("gallery_recognition.build_ocr_backend", return_value=mock.Mock(name="none")) as build:
             build.return_value.name = "none"
-            with self.assertRaisesRegex(ValueError,"로컬 OCR"):
+            with self.assertRaisesRegex(ValueError,"Tesseract"):
                 local_label_backend()
         seen = []
         def fail(image):

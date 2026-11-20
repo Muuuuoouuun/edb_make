@@ -33,7 +33,8 @@ const sandbox = {
 };
 vm.runInNewContext(source.slice(source.indexOf('const MAX_EXPORT_FILE_BYTES'), source.indexOf('function fileQueueKey')), sandbox);
 (async () => {
-  const files = [{name:'한글 1.pdf',size:200*1048576},{name:'2.pdf',size:512*1048576}];
+  const readable = { arrayBuffer: async () => new ArrayBuffer(1) };
+  const files = [{name:'한글 1.pdf',size:200*1048576,slice:()=>readable},{name:'2.pdf',size:512*1048576,slice:()=>readable}];
   const progress = [];
   const result = await sandbox.uploadSourceFiles(files, {onUploadProgress:value=>progress.push(value.completed)});
   assert.deepEqual(Array.from(result), ['/uploads/한글 1.pdf','/uploads/2.pdf']);

@@ -13044,6 +13044,7 @@ function OperationRecoveryBanner({
     app_dependency_missing: '앱의 필수 구성 요소를 불러오지 못했습니다',
     app_internal_error: '앱 내부 오류가 발생했습니다',
     single_problem_too_tall: '한 문항이 칠판 50페이지를 넘습니다',
+    upload_source_changed: '대기열의 파일을 읽을 수 없습니다',
   };
   const title = failureTitles[error.code] || (localServerUnavailable
     ? (serverConnected ? `${APP_LAUNCH_NAME} 앱 연결이 복구되었습니다` : `${APP_LAUNCH_NAME} 앱을 다시 실행해 주세요`)
@@ -13557,12 +13558,25 @@ function assertExportPayloadFits(files){
   throw error;
 }
 
+// Chrome and Edge refuse to send a picked file that changed, moved or vanished
+// on disk after it was picked; fetch then fails exactly like a lost connection.
+async function assertPickedFileReadable(file){
+  try { await file.slice(0, 1).arrayBuffer(); } catch (readError) {
+    throw Object.assign(new Error('대기열에 넣은 뒤 원본 파일이 바뀌었거나 옮겨졌습니다. 파일을 다시 선택해 주세요.'), {
+      code: 'upload_source_changed', retryable: false, sourceFile: file.name,
+      detail: `${readError?.name || 'Error'}: ${readError?.message || readError}`,
+      recoverySteps: ['‘원본 파일’ 목록에서 이 파일을 고른 뒤 ‘선택 파일 교체…’로 같은 파일을 다시 선택해 주세요.'],
+    });
+  }
+}
+
 async function uploadSourceFiles(files, options = {}){
   assertExportPayloadFits(files);
   const paths = [];
   for (const file of files) {
     options.signal?.throwIfAborted?.();
     options.onUploadProgress?.({ completed: paths.length, total: files.length, fileName: file.name });
+    await assertPickedFileReadable(file);
     const response = await fetch('/api/uploads', {
       method: 'POST',
       signal: options.signal,
@@ -21997,6 +22011,10 @@ function galleryProblemLabel(problem){
     : problem.labelRecognitionAttempted ? '자동 인식으로 번호를 확인하지 못했습니다. 다시 인식하거나 원본을 확인하세요.'
     : '이미지 속 번호와 지문을 자동으로 확인합니다.') };
 }
+// Screen readers need the source and page too: many cards share '번호 확인 필요'.
+function galleryCardName(problem){
+  return `${galleryProblemLabel(problem).label} · ${problem.sourceName} ${problem.pageNumbers.join(', ')}쪽`;
+}
 const galleryNeedsReview = problem => problem.riskFlags?.length > 0 || !galleryProblemLabel(problem).confirmed;
 const galleryNeedsAutoRecognition = problem => !problem.labelRecognitionAttempted && !galleryProblemLabel(problem).confirmed;
 
@@ -22153,8 +22171,16 @@ async function galleryRequest(action, payload){
 function GalleryProblemPreview({ problem, onClose, mode, onModeChange, onDownload, saving, message }){
   const dialogRef = useRef(null);
   const label = galleryProblemLabel(problem);
-  useEffect(() => {
-    dialogRef.current?.showModal();
+  // Closing hands focus back to the card that opened the preview (or the grid).
+  useLayoutEffect(() => {
+    const previousFocus = document.activeElement;
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => {
+      dialog?.close();
+      const target = previousFocus?.isConnected ? previousFocus : document.querySelector('.gallery-grid');
+      target?.focus?.({ preventScroll: true });
+    };
   }, []);
   return (
     <dialog ref={dialogRef} className="gallery-preview" aria-labelledby="gallery-preview-title" onCancel={onClose} onClose={onClose}>
@@ -22194,6 +22220,7 @@ function ProblemGalleryApp({ onBack }){
   const [recognizing, setRecognizing] = useState(false);
   const fileRef = useRef(null);
   const gridRef = useRef(null);
+  const allSourcesRef = useRef(null);
   const anchorRef = useRef(null);
   const hoverTimerRef = useRef(null);
   const busyRef = useRef(false);
@@ -22297,6 +22324,7 @@ function ProblemGalleryApp({ onBack }){
         if (pauseRef.current) break;
         setStatus(`${file.name} · 파일을 올리는 중`);
         try {
+          await assertPickedFileReadable(file);
           const response = await fetch(`/api/parser/upload?name=${encodeURIComponent(file.name)}`, {
             method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file,
           });
@@ -22304,7 +22332,11 @@ function ProblemGalleryApp({ onBack }){
           upsertJob(result.job);
           work.push(result.job);
           setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)));
-        } catch (error) { failures.push(`${file.name}: ${userErrorText(error)}`); }
+        } catch (error) {
+          failures.push(`${file.name}: ${userErrorText(error)}`);
+          // Picking a changed or moved file again would be deduped against this stale entry.
+          if (error.code === 'upload_source_changed') setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)));
+        }
       }
       for (let job of work) {
         while (job.processedPages < job.sourcePageCount && !pauseRef.current) {
@@ -22358,7 +22390,9 @@ function ProblemGalleryApp({ onBack }){
     // Persisted attempts handle refresh; this set covers failures before a save.
     ids.forEach(id => autoAttemptedRef.current.add(id));
     busyRef.current = true; pauseRef.current = false;
-    setBusy(true); setRecognizing(true); setPaused(false); setError(''); closeHover();
+    // The automatic pass starts right after 문제 추출하기: keep that run's per-file failures.
+    const showError = message => setError(previous => automatic && previous ? `${previous}\n${message}` : message);
+    setBusy(true); setRecognizing(true); setPaused(false); if (!automatic) setError(''); closeHover();
     let completed = 0, recognized = 0, unconfirmed = 0, errors = 0;
     try {
       while (completed < ids.length && !pauseRef.current) {
@@ -22369,9 +22403,11 @@ function ProblemGalleryApp({ onBack }){
         completed += batch.length; recognized += result.recognized; unconfirmed += result.unconfirmed; errors += result.errors;
       }
       setStatus(`${pauseRef.current ? '인식을 중지했습니다. ' : ''}${completed}개 확인 · ${recognized}개 인식 · ${unconfirmed}개 번호 확인 필요`);
-      if (errors) setError(`${errors}개 이미지를 읽지 못했습니다. 해당 카드를 다시 선택해 인식할 수 있습니다.`);
+      if (errors) showError(`${errors}개 이미지를 읽지 못했습니다. 해당 카드를 다시 선택해 인식할 수 있습니다.`);
     } catch (error) {
-      setError(userErrorText(error)); setStatus('완료된 인식 결과는 보관됩니다. 다시 시도할 수 있어요.');
+      // A missing engine is an install note, not an alert on every gallery open.
+      if (automatic && error.code === 'ocr_unavailable') setStatus(error.message);
+      else { showError(userErrorText(error)); setStatus('완료된 인식 결과는 보관됩니다. 다시 시도할 수 있어요.'); }
       try { setJobs((await galleryRequest('jobs')).jobs); } catch (_) { /* preserve current results */ }
     } finally {
       busyRef.current = false; setBusy(false); setRecognizing(false); setPaused(false);
@@ -22401,13 +22437,28 @@ function ProblemGalleryApp({ onBack }){
     if (event.target.closest?.('input:not([type="checkbox"]), textarea, select, [contenteditable="true"]')) return;
     if (event.key === 'Escape') {
       event.preventDefault(); event.stopPropagation(); closeHover();
-      if (marquee.dragging()) marquee.stop(true); else clearSelection();
+      // The first Esc only closes an open hover preview; the next one clears the selection.
+      if (marquee.dragging()) marquee.stop(true); else if (!hover) clearSelection();
     } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'a') {
       event.preventDefault();
       if (event.shiftKey) clearSelection(); else setSelected(previous => new Set([...previous, ...filteredIds]));
     }
   };
   const changeSource = id => { setSourceId(id); setPage(1); };
+  const removeJob = async job => {
+    if (busyRef.current || downloadRef.current) return;
+    if (!window.confirm(`'${job.sourceName}' 자료와 추출한 문제 ${job.problems.length}개를 갤러리에서 지울까요?\n컴퓨터에 있는 원본 파일과 이미 받은 PNG·ZIP 파일은 그대로 남아요.`)) return;
+    setError('');
+    try {
+      await galleryRequest('delete', { jobId: job.id });
+      // The focused 삭제 button leaves with its entry; keep keyboard focus off <body>.
+      allSourcesRef.current?.focus({ preventScroll: true });
+      setJobs(previous => previous.filter(existing => existing.id !== job.id));
+      setSelected(previous => new Set([...previous].filter(id => !id.startsWith(`${job.id}:`))));
+      if (sourceId === job.id) changeSource('all');
+      setStatus(`'${job.sourceName}' 자료를 지웠습니다.`);
+    } catch (error) { setError(userErrorText(error)); }
+  };
 
   return (
     <div className="app editor-basic-mode problem-gallery-app" data-density={density}>
@@ -22437,7 +22488,7 @@ function ProblemGalleryApp({ onBack }){
           {files.length > 0 && <div className="gallery-pending"><h3>업로드 대기 · {files.length}</h3>{files.map(file => (
             <div className="gallery-pending-file" key={fileQueueKey(file)}><span title={file.name}>{file.name}</span><button type="button" disabled={busy} aria-label={`${file.name} 대기열에서 제거`} onClick={() => setFiles(previous => previous.filter(candidate => fileQueueKey(candidate) !== fileQueueKey(file)))}>{Icon.close}</button></div>
           ))}</div>}
-          <button type="button" className={`gallery-source ${sourceId === 'all' ? 'on' : ''}`} aria-pressed={sourceId === 'all'} onClick={() => changeSource('all')}><strong>전체 문제</strong><span>{allProblems.length}개</span></button>
+          <button ref={allSourcesRef} type="button" className={`gallery-source ${sourceId === 'all' ? 'on' : ''}`} aria-pressed={sourceId === 'all'} onClick={() => changeSource('all')}><strong>전체 문제</strong><span>{allProblems.length}개</span></button>
           <div className="gallery-source-list">{jobs.map(job => (
             <div className="gallery-source-entry" key={job.id}>
             <button type="button" className={`gallery-source ${sourceId === job.id ? 'on' : ''}`} aria-pressed={sourceId === job.id} onClick={() => changeSource(job.id)}>
@@ -22446,6 +22497,7 @@ function ProblemGalleryApp({ onBack }){
               <progress value={job.processedPages} max={job.sourcePageCount} aria-label={`${job.sourceName} 추출 진행률`} />
             </button>
             <a className="gallery-source-original" href={job.sourceUrl} target="_blank" rel="noreferrer" aria-label={`${job.sourceName} 원본 보기`}>원본 보기 {Icon.arrowRight}</a>
+            <button type="button" className="gallery-source-original gallery-source-delete" disabled={busy || downloading} onClick={() => removeJob(job)} aria-label={`${job.sourceName} 자료 삭제`}>삭제</button>
             </div>
           ))}</div>
         </aside>
@@ -22466,9 +22518,9 @@ function ProblemGalleryApp({ onBack }){
           <div className="gallery-selection-help" id="gallery-selection-help"><span>드래그로 여러 문제 선택 · {PRIMARY_MODIFIER_LABEL}+클릭 추가 선택 · Shift+클릭 범위 선택 · Esc 해제</span><span aria-live="polite">{selected.size}개 선택{hiddenSelectedCount > 0 ? ` · 다른 조건의 ${hiddenSelectedCount}개 포함` : ''}</span></div>
           {visible.length ? <div ref={gridRef} className={`gallery-grid ${marquee.box ? 'is-selecting' : ''}`} tabIndex={0} aria-label="문제 이미지 갤러리" aria-describedby="gallery-selection-help" onPointerDown={marquee.start} onClickCapture={marquee.suppressClick}>{visible.map(problem => (
             <article key={problem.id} data-gallery-id={problem.id} className={`gallery-card ${selected.has(problem.id) ? 'is-selected' : ''}`}>
-              <div className="gallery-card-head"><label><input type="checkbox" checked={selected.has(problem.id)} onChange={event => toggleSelected(problem.id, event?.nativeEvent || event)} aria-label={`${galleryProblemLabel(problem).label} 선택`} /><strong title={galleryProblemLabel(problem).description}>{galleryProblemLabel(problem).label}</strong></label>{problem.riskFlags?.some(flag => flag !== 'number_unconfirmed') && <span className="gallery-review-badge" title="원본과 비교해 문제와 지문의 잘림을 확인하세요">확인 필요</span>}</div>
-              <button type="button" className="gallery-card-image" onPointerEnter={event => scheduleHover(problem, event)} onPointerLeave={closeHover} onFocus={event => scheduleHover(problem, event)} onBlur={closeHover} onClick={event => event?.ctrlKey || event?.metaKey || event?.shiftKey ? toggleSelected(problem.id, event) : openPreview(problem)} aria-label={`${galleryProblemLabel(problem).label} 크게 보기`}><img src={problem.previewUrl} alt={galleryProblemLabel(problem).label} draggable={false} loading="lazy" decoding="async" width={problem.width} height={problem.height} /></button>
-              <div className="gallery-card-footer"><span title={problem.sourceName}>{problem.sourceName}<small>{problem.pageNumbers.join(', ')}쪽</small></span><button className="btn btn-ghost" type="button" disabled={busy || downloading} onClick={() => download(problem.id)} aria-label={`${galleryProblemLabel(problem).label} PNG 다운로드`} title={`${GALLERY_SAVE_OPTIONS.find(option => option.value === saveMode).label} 저장`}>{Icon.download}</button></div>
+              <div className="gallery-card-head"><label><input type="checkbox" checked={selected.has(problem.id)} onChange={event => toggleSelected(problem.id, event?.nativeEvent || event)} aria-label={`${galleryCardName(problem)} 선택`} /><strong title={galleryProblemLabel(problem).description}>{galleryProblemLabel(problem).label}</strong></label>{problem.riskFlags?.some(flag => flag !== 'number_unconfirmed') && <span className="gallery-review-badge" title="원본과 비교해 문제와 지문의 잘림을 확인하세요">확인 필요</span>}</div>
+              <button type="button" className="gallery-card-image" onPointerEnter={event => scheduleHover(problem, event)} onPointerLeave={closeHover} onFocus={event => scheduleHover(problem, event)} onBlur={closeHover} onClick={event => event?.ctrlKey || event?.metaKey || event?.shiftKey ? toggleSelected(problem.id, event) : openPreview(problem)} aria-label={`${galleryCardName(problem)} 크게 보기`}><img src={problem.previewUrl} alt={galleryProblemLabel(problem).label} draggable={false} loading="lazy" decoding="async" width={problem.width} height={problem.height} /></button>
+              <div className="gallery-card-footer"><span title={problem.sourceName}>{problem.sourceName}<small>{problem.pageNumbers.join(', ')}쪽</small></span><button className="btn btn-ghost" type="button" disabled={busy || downloading} onClick={() => download(problem.id)} aria-label={`${galleryCardName(problem)} PNG 다운로드`} title={`${GALLERY_SAVE_OPTIONS.find(option => option.value === saveMode).label} 저장`}>{Icon.download}</button></div>
             </article>
           ))}{marquee.box && <div className="gallery-marquee" aria-hidden="true" style={marquee.box} />}</div> : <div className="gallery-empty">{Icon.fileText}<h2>{allProblems.length ? '조건에 맞는 문제가 없어요' : busy ? '문제를 추출하고 있어요' : jobs.length && !pendingJobs.length ? '인식된 문제가 없어요' : '문제들이 이곳에 모입니다'}</h2><p>{allProblems.length ? '검색어나 원본 자료, 확인 필요 조건을 바꿔보세요.' : busy ? '한 묶음이 끝나면 결과가 차례로 나타납니다.' : jobs.length && !pendingJobs.length ? '원본에 문제 번호와 본문이 있는지 확인하고 다른 자료를 추가해 주세요.' : '자료를 추가하고 문제 추출하기를 눌러주세요.'}</p></div>}
           {pageCount > 1 && <nav className="gallery-pagination" aria-label="문제 갤러리 페이지"><button className="btn" type="button" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)}>이전</button><span>{currentPage} / {pageCount}</span><button className="btn" type="button" disabled={currentPage >= pageCount} onClick={() => setPage(currentPage + 1)}>다음</button></nav>}

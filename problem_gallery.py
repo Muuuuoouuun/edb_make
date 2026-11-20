@@ -374,6 +374,15 @@ class GalleryStore:
             raise ValueError("다운로드할 문제를 찾을 수 없습니다.")
         return gallery_image_filename(job, problem)
 
+    def delete_job(self, job_id: str) -> None:
+        root = self.job_dir(job_id)  # validates the id, so nothing outside the gallery is touched
+        # Manifest first: the source leaves the list even if OneDrive or antivirus briefly
+        # holds one image. ponytail: such a leftover stays until the folder is removed by hand.
+        (root / "manifest.json").unlink(missing_ok=True)
+        shutil.rmtree(root, ignore_errors=True)
+        # Cached ZIPs may hold this source's crops; the next save rebuilds them.
+        shutil.rmtree(self.root / "exports", ignore_errors=True)
+
     def export_images(self, problem_ids: list[str], mode: str = "raw", *, single: bool = False) -> tuple[Path, int]:
         if not isinstance(mode, str) or mode not in EXPORT_MODES:
             raise ValueError("저장 옵션은 기본 자르기, 배경 제거, 둘 다 중에서 선택하세요.")
@@ -405,6 +414,11 @@ class GalleryStore:
         if single and mode != "both":
             return (self._transparent_image(source) if mode == "transparent" else source), 1
         self.root.mkdir(parents=True, exist_ok=True)
+        # The browser downloads each ZIP right after the reply, so an older one is only
+        # a cache. Without this every distinct selection stays on disk forever.
+        for folder in (self.root / "exports").glob("*"):
+            if folder.stat().st_mtime < time.time() - 3600:
+                shutil.rmtree(folder, ignore_errors=True)
         # Immutable crops let repeated saves reuse a completed archive. Partial
         # archives are never published, including after an interrupted process.
         digest = hashlib.sha256(json.dumps([EXPORT_VERSION, EXPORT_NAMING_VERSION, mode, single, fingerprints]).encode()).hexdigest()
