@@ -38,7 +38,7 @@ from functools import lru_cache, partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -3686,6 +3686,7 @@ def _adopt_recovered_output_dir_after_success(
 ) -> bool:
     if not recovered or not any(summary.get("status") == "applied" for summary in summaries):
         return False
+    session["history_key"] = _session_history_key(session)  # still one 최근 수업 entry after the move
     session["output_dir"] = str(output_dir)
     session["outputDir"] = str(output_dir)
     return True
@@ -3758,7 +3759,7 @@ def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dic
 
 def _normalize_edb_part_payload(part: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(part)
-    part_path = Path(str(normalized.get("edbPath") or normalized.get("edb_path") or "")).resolve()
+    part_path = (decode_file_reference(normalized.get("edbPath") or normalized.get("edb_path")) or Path("")).resolve()
     part_index = int(normalized.get("partIndex") or normalized.get("part_index") or 1)
     part_count = int(normalized.get("partCount") or normalized.get("part_count") or 1)
     record_count = int(normalized.get("recordCount") or normalized.get("record_count") or 0)
@@ -4208,6 +4209,20 @@ def _path_from_file_uri(value: str) -> tuple[Path, bool]:
     return Path(raw_path), False
 
 
+@lru_cache(maxsize=16384)
+def _resolved_path(text: str) -> Path:
+    # ponytail: each path is resolved once per run (on Windows resolve() opens the file, and every
+    # 확인, undo or save walks the lesson's ~1,000 paths). A junction retarget, or a path first seen
+    # while its drive was offline, keeps its old answer until restart; /api/file re-resolves uncached,
+    # so that fails closed (403).
+    return Path(text).resolve()
+
+
+def _resolve_unless_network(path: Path) -> Path:
+    # Resolving or stat'ing \\host\... signs in to that host over SMB with the teacher's Windows login.
+    return path if str(path).startswith("\\\\") else _resolved_path(str(path))
+
+
 def decode_file_reference(value: str | None) -> Path | None:
     if not value:
         return None
@@ -4221,10 +4236,22 @@ def decode_file_reference(value: str | None) -> Path | None:
     parsed = urlparse(text)
     if parsed.scheme == "file":
         path, is_unc = _path_from_file_uri(text)
-        return path if is_unc else path.resolve()
-    path = Path(text)
-    if not path.is_absolute():
-        path = (BASE_DIR / path).resolve()
+        if not is_unc:
+            path = _resolve_unless_network(path)
+    else:
+        path = Path(text)
+        if not path.is_absolute():
+            path = _resolve_unless_network(BASE_DIR / path)
+    # Data folder moved (OneDrive folder backup, new PC or user name): a stored path into an old
+    # .app_runtime that is gone reads the same file under the current one. Network paths are never
+    # probed, and paths already under the current runtime fail the prefix test without a syscall.
+    path_text = str(path)
+    if not path_text.startswith("\\\\") and not os.path.normcase(path_text).startswith(
+        os.path.normcase(str(RUNTIME_DIR)) + os.sep
+    ):
+        parts = PureWindowsPath(path_text).parts  # both separators: a Mac also reads a Windows path
+        if RUNTIME_DIR.name in parts and not os.path.exists(path_text):
+            path = RUNTIME_DIR.joinpath(*parts[len(parts) - parts[::-1].index(RUNTIME_DIR.name):])
     return path
 
 
@@ -4241,14 +4268,25 @@ def _path_as_file_uri(path: Path) -> str:
     normalized = str(path).replace("\\", "/")
     if normalized.startswith("//"):
         return f"file://{quote(normalized[2:], safe='/:')}"
-    return path.resolve().as_uri()
+    return _resolved_path(str(path)).as_uri()
 
 
-def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> Any:
-    source_text = str(source_root.resolve())
-    target_text = str(target_root.resolve())
-    source_uri = _path_as_file_uri(source_root)
-    target_uri = _path_as_file_uri(target_root)
+def _remap_artifact_paths(
+    value: Any,
+    source_root: Path,
+    target_root: Path,
+    *,
+    _roots: tuple[str, str, str, str] | None = None,
+) -> Any:
+    if _roots is None:
+        # Resolved once per call tree: a publish remaps tens of thousands of values.
+        _roots = (
+            str(source_root.resolve()),
+            str(target_root.resolve()),
+            _path_as_file_uri(source_root),
+            _path_as_file_uri(target_root),
+        )
+    source_text, target_text, source_uri, target_uri = _roots
     if isinstance(value, str):
         if value.startswith("/api/file"):
             parsed = urlparse(value)
@@ -4258,6 +4296,7 @@ def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> A
                     str(decode_file_reference(raw_path) or raw_path),
                     source_root,
                     target_root,
+                    _roots=_roots,
                 )
                 if isinstance(remapped_path, str) and remapped_path != str(
                     decode_file_reference(raw_path) or raw_path
@@ -4269,13 +4308,13 @@ def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> A
             return f"{target_uri}{value[len(source_uri):]}"
         return value
     if isinstance(value, Path):
-        remapped = _remap_artifact_paths(str(value), source_root, target_root)
+        remapped = _remap_artifact_paths(str(value), source_root, target_root, _roots=_roots)
         return Path(remapped) if isinstance(remapped, str) else value
     if isinstance(value, list):
-        return [_remap_artifact_paths(item, source_root, target_root) for item in value]
+        return [_remap_artifact_paths(item, source_root, target_root, _roots=_roots) for item in value]
     if isinstance(value, dict):
         return {
-            key: _remap_artifact_paths(item, source_root, target_root)
+            key: _remap_artifact_paths(item, source_root, target_root, _roots=_roots)
             for key, item in value.items()
         }
     return value
@@ -5305,6 +5344,15 @@ def _session_publish_summary(
     return summary
 
 
+def _without_placements(value: Any) -> Any:
+    """Copy to keep in the session: EDB parts' per-question "placements" are build-time data nothing reads back."""
+    if isinstance(value, dict):
+        return {key: _without_placements(item) for key, item in value.items() if key != "placements"}
+    if isinstance(value, list):
+        return [_without_placements(item) for item in value]
+    return value
+
+
 def _session_publish_history(
     source_session: dict[str, Any] | None,
     current_summary: dict[str, Any],
@@ -5325,7 +5373,7 @@ def _session_publish_history(
     for raw in [current_summary, *existing]:
         if not isinstance(raw, dict):
             continue
-        item = dict(raw)
+        item = _without_placements(raw)  # also slims entries saved before placements were dropped
         key = str(item.get("edbPath") or item.get("edb_path") or item.get("edbFileName") or item.get("edb_file_name") or "")
         if key and key in seen_paths:
             continue
@@ -5413,11 +5461,18 @@ def _apply_classin_review_result(
     return review
 
 
-def _session_history_key(session: dict[str, Any]) -> str:
+def _session_history_key(session: dict[str, Any], *, folder_only: bool = False) -> str:
+    # Set when a write moved the lesson to outputs/recovered: one 최근 수업 entry follows it there.
+    history_key = str(session.get("history_key") or "").strip()
+    if history_key:
+        return history_key
     for key in ("output_dir", "outputDir", "pages_json_path", "pagesJsonPath"):
         value = str(session.get(key) or "").strip()
         if value:
-            return value
+            # Decoded: after the data folder moves, the old and new spellings give one key.
+            return str(decode_file_reference(value) or value)
+    if folder_only:
+        return ""  # the name|time fallback below can be shared by two different lessons
     name = str(session.get("session_name") or session.get("sessionName") or "session")
     generated_at = str(session.get("generated_at") or session.get("generatedAt") or "")
     source_files = "|".join(str(path) for path in (session.get("input_files") or session.get("inputFiles") or []))
@@ -5483,13 +5538,17 @@ def _session_history_with_session(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     entry = _session_history_entry(session, updated_at=updated_at)
+    key = _session_history_key(entry["session"], folder_only=True)
     seen = {entry["id"]}
     merged = [entry]
     for raw in history:
         if not isinstance(raw, dict):
             continue
         entry_id = str(raw.get("id") or "")
-        if not entry_id or entry_id in seen:
+        snapshot = raw.get("session") if isinstance(raw.get("session"), dict) else raw
+        # Stored ids were hashed from the folder spelling of their day; a moved data folder changes it.
+        # Lessons without a folder keep id-only dedupe.
+        if not entry_id or entry_id in seen or (key and _session_history_key(snapshot, folder_only=True) == key):
             continue
         seen.add(entry_id)
         merged.append(raw)
@@ -5677,8 +5736,8 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         if not value:
             return
         resolved = decode_file_reference(str(value))
-        if resolved and resolved.exists():
-            paths.add(str(resolved.resolve()))
+        if resolved and resolved.exists():  # uncached: a deleted file drops out
+            paths.add(str(_resolved_path(str(resolved))))
 
     def add_edb_part_paths(summary: dict[str, Any]) -> None:
         raw_parts = summary.get("edbParts") if isinstance(summary.get("edbParts"), list) else summary.get("edb_parts")
@@ -6518,6 +6577,7 @@ def _crop_dir_for_session(session: dict[str, Any]) -> Path:
     if recovered_output:
         # Request handlers persist their cloned session only after the mutation
         # completes and wins the session CAS, so failed edits never adopt this.
+        session["history_key"] = _session_history_key(session)  # still one 최근 수업 entry after the move
         session["output_dir"] = str(selected_output_dir)
         session["outputDir"] = str(selected_output_dir)
     return target
@@ -10761,8 +10821,8 @@ class AppHTTPServer(ThreadingHTTPServer):
                 for problem in session.get("problems", []):
                     board = decode_file_reference(problem.get("boardRenderPath"))
                     source = decode_file_reference(problem.get("imagePath"))
-                    if board is not None and source is not None and board.resolve() != source.resolve():
-                        self._board_file_index.setdefault(str(board.resolve()), (_clone_jsonish(problem), theme))
+                    if board is not None and source is not None and _resolved_path(str(board)) != _resolved_path(str(source)):
+                        self._board_file_index.setdefault(str(_resolved_path(str(board))), (_clone_jsonish(problem), theme))
                 self._board_file_index_revision = self._session_revision
             return self._board_file_index.get(path)
 
@@ -11120,7 +11180,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if not _request_host_is_loopback(self.headers):
             self.send_error(HTTPStatus.MISDIRECTED_REQUEST, "loopback Host header required")
             return False
-        if self.command in {"POST", "PUT", "PATCH", "DELETE", "OPTIONS"}:
+        # GET /api/... reads files and rewrites 최근 수업 too, so another site may not call it either.
+        if self.command in {"POST", "PUT", "PATCH", "DELETE", "OPTIONS"} or urlparse(self.path).path.startswith("/api/"):
             if not _browser_write_request_is_trusted(self.headers):
                 self.send_error(HTTPStatus.FORBIDDEN, "cross-site state-changing request rejected")
                 return False
@@ -11955,6 +12016,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         # Keep the stable working root for the next publish; all generated
         # artifact references themselves point at this immutable generation.
+        # Every publish carries the identity over: this session is rebuilt from scratch.
+        new_session["history_key"] = _session_history_key(session)
         new_session["output_dir"] = str(output_dir)
         new_session["outputDir"] = str(output_dir)
         # carry over user-facing labels so the rename doesn't get lost
@@ -12143,8 +12206,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         new_session["classinHandoffPath"] = str(classin_handoff_path)
         new_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
         new_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
-        new_session["edb_parts"] = edb_parts
-        new_session["edbParts"] = edb_parts
+        new_session["edb_parts"] = new_session["edbParts"] = _without_placements(edb_parts)
         new_session["edb_part_count"] = len(edb_parts)
         new_session["edbPartCount"] = len(edb_parts)
         new_session["edb_split"] = len(edb_parts) > 1
@@ -12299,11 +12361,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             layout_diagnostics=layout_diagnostics,
             edb_parts=staged_edb_parts,
         )
-        publish_summary = _remap_artifact_paths(
+        publish_summary = _without_placements(_remap_artifact_paths(
             staged_publish_summary,
             staging_dir,
             final_dir,
-        )
+        ))
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary
         new_session["publishSummary"] = publish_summary
@@ -13473,6 +13535,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         query = parse_qs(parsed.query)
         requested = query.get("path", [None])[0]
         path = decode_file_reference(requested)
+        if path is not None and str(path).startswith("\\\\") and not self._file_is_allowed(str(path)):
+            self.send_error(HTTPStatus.FORBIDDEN, "file not allowed")  # before exists(): no SMB sign-in
+            return
         if path is None or not path.exists():
             self.send_error(HTTPStatus.NOT_FOUND, "file not found")
             return
