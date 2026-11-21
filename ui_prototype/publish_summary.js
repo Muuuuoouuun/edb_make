@@ -14,31 +14,36 @@
     board_placement_overlap: "판서 배치 겹침",
     duplicate_problem_id: "문항 ID 중복",
     duplicate_problem_number: "중복 번호",
+    horizontal_crop_edge_risk: "글자 잘림 확인",
     low_ink_problem_image: "이미지 내용 부족",
     missing_problem_id: "문항 ID 누락",
     missing_problem_image: "문항 이미지 없음",
     passage_missing_child_questions: "문항 누락",
     passage_group_source_reuse: "지문 겹침",
+    passage_quality_review: "지문 품질 확인",
     passage_review_queue_remaining: "지문 확인 필요",
     review_flags_remaining: "검수 플래그 남음",
     small_problem_image: "문항 이미지 작음",
     source_problem_bbox_overlap: "문항 영역 겹침",
-    unreadable_problem_image: "문항 이미지 흐림",
+    step2_page_chrome_artifact_rate: "쪽번호·머리말 많이 섞임",
+    step3_page_chrome_artifact: "쪽번호·머리말 섞임",
+    unreadable_problem_image: "이미지 파일을 열 수 없음",
   };
   const PASSAGE_REVIEW_REASON_LABELS = {
     cross_page_passage_group: "페이지 이어짐",
-    hwp_text_fallback_problem: "HWP 텍스트 fallback",
+    hwp_text_fallback_problem: "HWP 텍스트로 대체",
     marker_document_continuation: "문서 이어짐 표시",
     passage_cross_page_merge_check: "병합 확인",
     passage_fragment: "지문 본문",
     passage_group_source_reuse: "지문 겹침",
     passage_missing_child_questions: "문항 누락",
+    passage_quality_review: "지문 품질 확인",
     source_problem_bbox_overlap: "문항 영역 겹침",
   };
 
   function classinPreflightIssueLabel(type) {
     const normalized = String(type || "").trim();
-    return CLASSIN_PREFLIGHT_ISSUE_LABELS[normalized] || normalized || "기타 주의";
+    return CLASSIN_PREFLIGHT_ISSUE_LABELS[normalized] || "기타 확인 필요";
   }
 
   function classinPreflightIssueLabels(preflight) {

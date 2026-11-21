@@ -8,6 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import app_server
@@ -44,7 +45,7 @@ function Start-Process {{
 }}
 & {quote(helper)} -ParentPid {parent_pid} -Installer {quote(installer)} -AppExecutable {quote(executable)} -InstallDir {quote(root)} -LogFile {quote(root / 'helper.log')}
 '''
-        result = subprocess.run([powershell_host(), '-NoProfile', '-NonInteractive', '-Command', command], capture_output=True, text=True, timeout=15, creationflags=helper_creation_flags())
+        result = subprocess.run([powershell_host(), '-NoProfile', '-NonInteractive', '-Command', command], capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15, creationflags=helper_creation_flags())
         return result, installer, (root / 'helper.log').read_text(encoding='utf-8-sig'), (root / 'calls').read_text().splitlines() if (root / 'calls').exists() else []
 
     def test_missing_target_is_failure_logged_and_never_restarted(self):
@@ -63,8 +64,11 @@ function Start-Process {{
                 self.assertIn(message, log)
                 self.assertFalse(installer.exists())
                 self.assertNotIn('restart requested', log)
+                self.assertTrue((Path(temp) / 'update-failed').exists())
                 if kwargs.get('installer_code'):
-                    self.assertEqual([str(installer)], calls)
+                    # The app already exited, so the kept previous version is reopened.
+                    self.assertEqual([str(installer), str(Path(temp) / 'App.exe')], calls)
+                    self.assertIn('Previous version reopened.', log)
 
     def test_timeout_logs_failure_without_stopping_parent_or_installing(self):
         parent = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(30)'])
@@ -99,12 +103,25 @@ class WindowsHelperLaunchLogging(unittest.TestCase):
             def launch(command, **kwargs):
                 captured.update(kwargs)
                 kwargs['stdout'].write(b'PowerShell startup failure\n')
+                (root / 'update-helper.log').write_text('Updater waiting for the app to exit.')
+                return SimpleNamespace(poll=lambda: None)
             with patch.object(app_server, 'is_frozen_app', return_value=True), patch.object(app_server.sys, 'executable', str(executable)), patch.object(app_server.subprocess, 'Popen', side_effect=launch):
                 result = app_server._launch_windows_update_helper(artifact, 'setup-exe')
             self.assertTrue(result['restartScheduled'])
             self.assertTrue(captured['stdout'].closed)
             self.assertEqual(subprocess.STDOUT, captured['stderr'])
             self.assertIn(b'startup failure', (root / 'update-helper-process.log').read_bytes())
+
+    def test_helper_that_dies_before_logging_keeps_the_app_running(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp); executable = root / 'App.exe'; executable.write_bytes(b'app')
+            artifact = root / 'Setup.exe'; artifact.write_bytes(b'setup')
+            blocked = SimpleNamespace(poll=lambda: 1, returncode=1)
+            with patch.object(app_server, 'is_frozen_app', return_value=True), patch.object(app_server.sys, 'executable', str(executable)), patch.object(app_server.subprocess, 'Popen', return_value=blocked):
+                with self.assertRaises(app_server.AppUpdateError) as caught:
+                    app_server._launch_windows_update_helper(artifact, 'setup-exe')
+            self.assertEqual('update_installer_launch_failed', caught.exception.code)
+            self.assertIn('code 1', caught.exception.detail)
 
 
 @unittest.skipUnless(os.name == 'nt' and powershell_host(), 'Native Windows PowerShell5 regression')
@@ -118,6 +135,7 @@ class NativeWindowsPowerShellLaunch(unittest.TestCase):
  [string]$InstallDir, [string]$LogFile
 )
 $ErrorActionPreference = 'Stop'
+Add-Content -LiteralPath $LogFile -Value 'started'
 $marker = Join-Path (Split-Path -Parent $LogFile) 'helper-executed.txt'
 Set-Content -LiteralPath $marker -Encoding UTF8 -Value ($PID.ToString() + ',' + $PSVersionTable.PSVersion.Major.ToString())
 '''

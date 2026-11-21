@@ -93,16 +93,21 @@ def test_streaming_accepts_binary_larger_than_legacy_json_limit_with_bounded_rea
 def test_streamed_upload_digest_deduplicates_and_never_adds_session_allowed_files(tmp_path):
     first, responses = handler_for()
     first.server = SimpleNamespace(allowed_files=set(), latest_session={"id": "preserve"})
-    second, second_responses = handler_for(filename="another.pdf")
+    second, second_responses = handler_for()  # the same file picked again
     second.server = first.server
+    # The same bytes under another name keep that name: the lesson is named from the stored path (G20).
+    renamed, renamed_responses = handler_for(filename="4월 학력평가 국어.pdf")
+    renamed.server = first.server
     with patch.object(app_server, "UPLOAD_DIR", tmp_path):
         call_upload(first)
         call_upload(second)
+        call_upload(renamed)
     assert responses[0][0]["sourcePath"] == second_responses[0][0]["sourcePath"]
     assert responses[0][0]["sha256"] == hashlib.sha256(b"pdf contents").hexdigest()
+    assert app_server._lesson_name_from_sources([Path(renamed_responses[0][0]["sourcePath"])]) == "4월 학력평가 국어"
     assert first.server.allowed_files == set()
     assert first.server.latest_session == {"id": "preserve"}
-    assert len(list(tmp_path.glob("*.pdf"))) == 1
+    assert len(list(tmp_path.glob("*.pdf"))) == 2
     assert not list(tmp_path.glob(".*.tmp"))
 
 

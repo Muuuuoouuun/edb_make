@@ -27,6 +27,7 @@ function placementSandbox() {
   // Review labels/counts are unrelated to persisted placement. Keep the actual
   // placement normalizers, reflow, serialization, mapping and signatures.
   const sandbox = {
+    hasRunningBackgroundJobs: false,
     riskFlagsFor: entity => entity.riskFlags || [],
     riskFlagLabel: flag => flag,
     deriveProblemStatus: entity => entity.reviewStatus || 'normal',
@@ -141,7 +142,7 @@ class TestUiPlacementSaveState(unittest.TestCase):
             setLayoutGapModeState: mode => { sandbox.layoutGapMode = mode; },
             setItems: update => { sandbox.items = update(sandbox.items); },
             setSession() { throw new Error('local spacing must not overwrite the persisted baseline'); },
-            setPublished() {}, showToast() {},
+            setPublished() {}, showToast() {}, pushLocalEdit() {},
           });
           vm.runInContext(section('  const updateLayoutGapMode =', '  const resetPlacementGaps =')
             + '\nglobalThis.updateLayoutGapMode = updateLayoutGapMode;', sandbox);
@@ -167,7 +168,7 @@ class TestUiPlacementSaveState(unittest.TestCase):
         const restoredSnapshots = [];
         Object.assign(sandbox, {
           session, items, fileName: session.session_name, boardColumns: 1, layoutGapMode: 'compact',
-          useCallback: fn => fn, mutatingRef: { current: false },
+          useCallback: fn => fn, mutatingRef: { current: false }, hasRunningBackgroundJobs: false,
           setMutating() {}, setLoading() {}, setHistoryStack() {},
           adoptMutatedSession() {}, refreshSessionHistory() {}, showSimpleErrorToast() {}, showToast() {},
           postRestore: async snapshot => { restoredSnapshots.push(snapshot); },
@@ -250,7 +251,7 @@ Object.assign(sandbox, {
   recognitionDisabledReason: '', sessionEditState: {},
   activeContinuousFlow: false, columnCount: 1, processedCount: 1, items: [{id: 'p1'}],
   rawCount: 0, s1Count: 0, aiCount: 1, reconstructCount: 0, ALTERNATE_MODIFIER_LABEL: 'Alt',
-  estimateDetailsOpen: false,
+  estimateDetailsOpen: false, boardKeysOpen: false, setBoardKeysOpen() {},
   estimateBarRef: { current: { getBoundingClientRect: () => ({ right: 800, bottom: 120 }) } },
   estimateToggleRef: { current: toggleElement }, estimateDetailsRef: { current: panel },
   previewEstimate: {

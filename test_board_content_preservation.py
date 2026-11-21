@@ -43,6 +43,7 @@ def legacy_problem(tmp_path):
                "bbox": {"left": 0, "top": 0, "width": 600, "height": 1000},
                "preserveMediaMode": "auto", "preserveMediaRegions": detect_color_media_regions(source)}
     app_server._build_guarded_board_payload.cache_clear()
+    app_server._board_render_has_missing_tail_cached.cache_clear()
     return source, raw, board, problem
 
 
@@ -103,7 +104,18 @@ def test_preview_cache_rechecks_replaced_derived_asset_and_leaves_healthy_render
     assert app_server._guarded_board_payload(problem, board) is not None
     _extract_problem_cutout(source).save(board)
     assert app_server._guarded_board_payload(problem, board) is None
-    assert app_server._build_guarded_board_payload.cache_info().misses == 2
+    # The replaced file is re-checked; a healthy render never reaches the repair builder.
+    assert app_server._board_render_has_missing_tail_cached.cache_info().misses == 2
+    assert app_server._build_guarded_board_payload.cache_info().misses == 1
+
+
+def test_healthy_render_tail_check_runs_once_for_every_preview_size(legacy_problem):
+    source, _raw, board, problem = legacy_problem
+    _extract_problem_cutout(source).save(board)
+    for max_dimension in (256, 1024, None, 256):
+        assert app_server._guarded_board_payload(problem, board, max_dimension=max_dimension) is None
+    assert app_server._board_render_has_missing_tail_cached.cache_info().misses == 1
+    assert app_server._build_guarded_board_payload.cache_info().misses == 0
 
 
 def test_s3_and_explicit_original_variant_are_not_replaced(legacy_problem):

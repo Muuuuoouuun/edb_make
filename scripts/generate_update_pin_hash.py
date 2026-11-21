@@ -13,8 +13,8 @@ ITERATIONS = 210_000
 
 def build_verifier(pin: str, *, salt: bytes | None = None) -> str:
     normalized = str(pin or "").strip()
-    if not normalized.isascii() or not normalized.isdigit() or not 4 <= len(normalized) <= 12:
-        raise ValueError("PIN은 ASCII 숫자 4~12자리여야 합니다.")
+    if not normalized.isascii() or not normalized.isalnum() or not 4 <= len(normalized) <= 12:
+        raise ValueError("PIN은 영문·숫자 4~12자리여야 합니다.")
     actual_salt = salt or os.urandom(16)
     digest = hashlib.pbkdf2_hmac(
         "sha256",
@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    pin = os.environ.get(args.pin_env, "") if args.pin_env else getpass.getpass("업데이트 PIN (숫자 4~12자리): ")
+    pin = os.environ.get(args.pin_env, "") if args.pin_env else getpass.getpass("업데이트 PIN (영문·숫자 4~12자리): ")
     try:
         print(build_verifier(pin))
     except ValueError as exc:

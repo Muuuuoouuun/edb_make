@@ -99,6 +99,29 @@
     return problemIdFor(item, index).endsWith("-continuation");
   }
 
+  // Restored HWP-text questions are rendered from text, so their band-shaped
+  // bbox is not a crop. 확인 clears riskFlags, so also read the lasting source.
+  function isHwpTextFallbackProblem(item) {
+    if (riskFlagsFor(item).has("hwp_text_fallback_problem")) return true;
+    const source = item?.problemNumberSource ?? item?.problem_number_source
+      ?? item?.metadata?.problemNumberSource ?? item?.metadata?.problem_number_source;
+    return String(source || "").trim() === "hwp_text_snippet";
+  }
+
+  // True while the teacher's 확인 still covers this exact crop: the server
+  // records the image path and bbox at 확인, and any re-crop or AI 재인식
+  // changes one of them, which re-arms the check (고화질 of the same crop
+  // keeps it: the server moves the record to the new image).
+  function isReviewConfirmedCrop(item) {
+    if (!item?.reviewConfirmedImagePath) return false;
+    if (String(item?.reviewStatus || item?.review_status || "").trim() !== "normal") return false;
+    if (String(item.reviewConfirmedImagePath) !== String(item?.imagePath || item?.image_path || "")) return false;
+    const confirmedBox = bboxFor({ bbox: item.reviewConfirmedBBox });
+    const box = bboxFor(item);
+    if (!confirmedBox || !box) return confirmedBox === box;
+    return ["left", "top", "right", "bottom"].every(key => Math.abs(confirmedBox[key] - box[key]) < 1e-6);
+  }
+
   function numberOrNull(value) {
     const number = Number(value);
     return Number.isFinite(number) ? number : null;
@@ -348,12 +371,12 @@
     const groups = new Map();
     (Array.isArray(problems) ? problems : []).forEach((problem, index) => {
       if (!problem || typeof problem !== "object") return;
-      if (riskFlagsFor(problem).has("hwp_text_fallback_problem") || isSupplementalProblem(problem, index)) return;
+      if (isHwpTextFallbackProblem(problem) || isSupplementalProblem(problem, index)) return;
       const sourcePageId = sourcePageIdFor(problem);
       const bbox = bboxFor(problem);
       if (!sourcePageId || !bbox) return;
       const group = groups.get(sourcePageId) || [];
-      group.push({ problem, bbox, index, passageGroupId: passageGroupIdFor(problem) });
+      group.push({ problem, bbox, index, passageGroupId: passageGroupIdFor(problem), confirmed: isReviewConfirmedCrop(problem) });
       groups.set(sourcePageId, group);
     });
 
@@ -371,6 +394,7 @@
         for (let nextIndex = index + 1; nextIndex < group.length; nextIndex += 1) {
           const next = group[nextIndex];
           if (current.passageGroupId && current.passageGroupId === next.passageGroupId) continue;
+          if (current.confirmed && next.confirmed) continue;
           const nextArea = next.bbox.width * next.bbox.height;
           if (nextArea <= 0) continue;
           const intersectionWidth = Math.max(0, Math.min(current.bbox.right, next.bbox.right) - Math.max(current.bbox.left, next.bbox.left));
@@ -416,10 +440,10 @@
       const sourcePageId = sourcePageIdFor(problem);
       const bbox = bboxFor(problem);
       if (!passageGroupId || !sourcePageId || !bbox) return;
-      if (riskFlagsFor(problem).has("hwp_text_fallback_problem") || isSupplementalProblem(problem, index)) return;
+      if (isHwpTextFallbackProblem(problem) || isSupplementalProblem(problem, index)) return;
       const key = `${passageGroupId}\\n${sourcePageId}`;
       const group = groups.get(key) || [];
-      group.push({ problem, bbox, index, passageGroupId, sourcePageId });
+      group.push({ problem, bbox, index, passageGroupId, sourcePageId, confirmed: isReviewConfirmedCrop(problem) });
       groups.set(key, group);
     });
 
@@ -437,6 +461,7 @@
         if (currentArea <= 0) continue;
         for (let nextIndex = index + 1; nextIndex < group.length; nextIndex += 1) {
           const next = group[nextIndex];
+          if (current.confirmed && next.confirmed) continue;
           const nextArea = next.bbox.width * next.bbox.height;
           if (nextArea <= 0) continue;
           const intersectionWidth = Math.max(0, Math.min(current.bbox.right, next.bbox.right) - Math.max(current.bbox.left, next.bbox.left));

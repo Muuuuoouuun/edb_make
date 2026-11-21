@@ -38,7 +38,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
 
@@ -482,16 +482,17 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         item_mapper = source.split("function mapProblemToItem(problem, idx, rawSession = null){", 1)[1]
         item_mapper = item_mapper.split("async function fetchLatestSession", 1)[0]
         preset = side_panel.split("const applyPlacementPreset = (preset) => {", 1)[1]
-        preset = preset.split("const updateCropDraft", 1)[0]
+        preset = preset.split("const commitPlacement", 1)[0]
 
-        self.assertIn("passageGroupId:", item_mapper)
+        self.assertIn("    passageGroupId,\n", item_mapper)
         self.assertIn("passageRole:", item_mapper)
         self.assertIn("passageRange:", item_mapper)
         self.assertIn("supplementalItem:", item_mapper)
         self.assertIn("const selectedPassageFragments = selectedGroupItems.filter(isPassageFragmentProblem);", side_panel)
         self.assertIn("placementPreset === 'passage-only'", side_panel)
         self.assertIn("setPlacements?.(selectedPassageFragments.map(target => ({", preset)
-        self.assertIn("scaleRatio: maxPlacementScaleRatio(target)", preset)
+        # fitWidth alone widens to the 너비 맞춤 3x; a capped scale left passages at 1-1.6x.
+        self.assertNotIn("scaleRatio", preset)
         self.assertIn("fitWidth: true", preset)
         self.assertIn("setBoardColumns?.(1)", preset)
         self.assertIn("value === 'passage-only' && passageFragmentCount === 0", side_panel)
@@ -559,8 +560,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("ClassIn {band.page}쪽", board_stage)
         self.assertIn("Math.max(1, previewEstimate.classinPageCount)", board_stage)
         self.assertIn(">ClassIn</span>", board_stage)
-        self.assertIn("C{tileClassinStartPage}–C{tileClassinEndPage}", board_stage)
-        self.assertIn("`예상 C${previewEstimate.classinPageCount}`", board_stage)
+        self.assertIn("{tileClassinStartPage}–{tileClassinEndPage}쪽", board_stage)
+        self.assertIn("`예상 ${previewEstimate.classinPageCount}쪽`", board_stage)
         self.assertIn(".page-divider .label .classin-page", board)
 
     def test_board_preview_exposes_estimate_and_active_gap_guides(self) -> None:
@@ -603,9 +604,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         materialize = materialize.split("function rebaseSessionBoardLayout", 1)[0]
 
         self.assertIn("문항 사이 여백", layout_controls)
-        self.assertIn("1.2 맞춤", layout_controls)
+        self.assertIn("쪽 맞춤", layout_controls)
         self.assertIn("빈틈 없이", layout_controls)
-        self.assertIn("1.2p는 ClassIn 한 페이지입니다", layout_controls)
+        self.assertIn("문항을 ClassIn 쪽 경계에 맞춰 배치합니다", layout_controls)
         self.assertIn("최대 6% 이내", layout_controls)
         self.assertIn("사용자가 조절한 배율은 유지", layout_controls)
         self.assertIn("ClassIn 화면 경계를 걸칠 수", layout_controls)
@@ -618,7 +619,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertNotIn("<BoardLayoutControls", item_tab)
         self.assertNotIn("<BoardLayoutControls", settings_tab)
         self.assertNotIn("칠판 동작", settings_tab)
-        self.assertIn("window.confirm('전체 문항 사이의 1.2 맞춤 여백을 제거할까요?", source)
+        self.assertIn("window.confirm('전체 문항 사이의 쪽 맞춤 여백을 제거할까요?", source)
         self.assertIn("snapshot.layoutGapMode = normalizedGapMode", materialize)
         self.assertIn("snapshot.layout_gap_mode = normalizedGapMode", materialize)
         self.assertIn("const strandedProblems = snapshot.problems.filter", materialize)
@@ -632,7 +633,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         side_panel = source.split("function SidePanel", 1)[1]
         side_panel = side_panel.split("function LoadingOverlay", 1)[0]
 
-        self.assertIn('{updateInfo?.updateAvailable && <div className="update-install-card">', side_panel)
+        self.assertIn('{updateInfo?.updateAvailable && !updateAutomaticBlockedReason && <div className="update-install-card">', side_panel)
         self.assertIn("관리자 PIN 업데이트", side_panel)
         self.assertIn("관리자 PIN 확인 후 업데이트", side_panel)
         self.assertIn("const requestUpdateInstall = () =>", side_panel)
@@ -750,7 +751,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("setActiveId(fromId)", reorder_flow)
         self.assertIn("if (session)", remove_flow)
         self.assertIn("await mutateSession('exclude', { problemId: id })", remove_flow)
-        self.assertIn("() => { void undoMutation(); }", remove_flow)
+        self.assertIn("() => { void undoMutationRef.current?.(); }", remove_flow)
+        self.assertIn("undoMutationRef.current = undoMutation;", remove_flow)
         self.assertIn("reflowItemsForBoardOrder(items.filter", remove_flow)
 
     def test_undo_keeps_the_current_workspace_and_active_problem(self) -> None:
@@ -830,7 +832,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn('role="status" aria-live="polite"', items_rail)
         self.assertIn("pendingKeyboardFocusRef.current = item.id", items_rail)
         self.assertIn("setItems(rollbackItems)", reorder_flow)
-        self.assertIn("setSession(snapshotBefore)", reorder_flow)
+        self.assertIn("setSession(savedSession)", reorder_flow)
+        self.assertNotIn("setSession(snapshotBefore)", reorder_flow)
         self.assertIn("순서 저장 실패 · 이전 순서로 복구했습니다", reorder_flow)
         self.assertIn("return true", reorder_flow)
         self.assertIn(".item:focus-visible", board)
@@ -845,8 +848,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         tool_rows = source.split("function hangulRuntimeToolRows", 1)[1]
         tool_rows = tool_rows.split("function listUnique", 1)[0]
 
-        self.assertIn("hangul.hwpRenderers", summary_helper)
-        self.assertIn("렌더 ${rendererCount}", summary_helper)
+        # The summary is teacher copy; tool counts live only in the 자세한 정보 grid.
+        self.assertIn("PDF로 저장해서 사용", summary_helper)
+        self.assertNotIn("렌더 ${rendererCount}", summary_helper)
         self.assertIn("HWP 렌더", tool_rows)
         self.assertIn("hangul.hwpRenderers || []", tool_rows)
 
@@ -860,10 +864,10 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("다운로드 열기", side_panel)
         self.assertIn("const updateDownloadUrl = updateInfo?.downloadUrl || updateInfo?.latest?.downloadUrl || ''", side_panel)
         self.assertIn("updateStatus === 'invalid_feed'", side_panel)
-        self.assertIn("피드 오류", side_panel)
+        self.assertIn("확인 실패", side_panel)
         self.assertIn("isUpdateArchitectureMismatch(updateInfo)", side_panel)
-        self.assertIn("이 기기용 업데이트 파일 없음", side_panel)
-        self.assertIn("현재 아키텍처용 설치 파일을 선택해 주세요", source)
+        self.assertIn("이 컴퓨터용 업데이트 파일이 아직 없습니다", side_panel)
+        self.assertIn("이 컴퓨터용 설치파일이 아직 없습니다", source)
         self.assertIn("updateArchitectureSteps.map", side_panel)
         self.assertIn("unsupported_architecture", source)
         self.assertIn("update_architecture_mismatch", source)
@@ -879,7 +883,7 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
 
         self.assertIn("updateActionBusy||!updateDownloadUrl", compact_bundle)
         self.assertIn("invalid_feed", bundle)
-        self.assertIn("피드 오류", bundle)
+        self.assertIn("확인 실패", bundle)
         self.assertIn("fetch(refresh?'/api/app/update?refresh=1':'/api/app/update')", bundle)
         self.assertIn("fetch('/api/system/open-url'", bundle)
 
@@ -952,7 +956,8 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("문항 영역 겹침", review_stage)
         self.assertIn("sourceProblemOverlapGroups", review_stage)
         self.assertIn("sourceProblemOverlapGroups", summary_helper)
-        self.assertIn("source_problem_overlap_groups", summary_helper)
+        # Recomputed from the current problems, not the import-time list.
+        self.assertIn("findSourceProblemOverlaps(session?.problems || [])", summary_helper)
         self.assertIn("sourceProblemOverlapLabel", summary_helper)
         self.assertIn("source_problem_bbox_overlap", risk_meta)
         self.assertIn("문항 영역 겹침", risk_meta)
@@ -979,9 +984,9 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
         self.assertIn("지문 겹침", review_stage)
         self.assertIn("passageGroupSourceReuseGroups", review_stage)
         self.assertIn("passageGroupSourceReuseDetailLabel", review_stage)
-        self.assertIn("passage_group_source_reuse", review_stage)
+        self.assertIn("focusOverlapProblems(reviewSummary.passageGroupSourceReuseGroups)", review_stage)
         self.assertIn("passageGroupSourceReuseGroups", summary_helper)
-        self.assertIn("passage_group_source_reuse_groups", summary_helper)
+        self.assertIn("findPassageGroupSourceReuse(session?.problems || [])", summary_helper)
         self.assertIn("passageGroupSourceReuseLabel", summary_helper)
         self.assertIn("passageGroupSourceReuseDetailLabel", summary_helper)
 
@@ -993,31 +998,31 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             const summary = sandbox.sessionReviewSummary({
-              passageGroupSourceReuseGroups: [
-                {
-                  passageGroupId: 'hwp-text-passage-31-34',
-                  sourcePageId: 'page-004',
-                  problemIds: ['p31', 'p32'],
-                  overlapAreaRatio: 0.92,
-                },
-              ],
-              passageGroupSourceReuseGroupCount: 1,
+              // A stale import-time list must not decide the chip any more.
+              passageGroupSourceReuseGroups: [],
+              passageGroupSourceReuseGroupCount: 3,
               problems: [
                 {
                   id: 'p31',
+                  title: '31.',
                   reviewStatus: 'check_needed',
                   riskFlags: ['passage_group_source_reuse'],
-                  bbox: { width: 10, height: 10 },
+                  sourcePageId: 'page-004',
+                  passageGroupId: 'hwp-text-passage-31-34',
+                  bbox: { left: 0, top: 0, width: 100, height: 100 },
                 },
                 {
                   id: 'p32',
+                  title: '32.',
                   reviewStatus: 'check_needed',
                   riskFlags: ['passage_group_source_reuse'],
-                  bbox: { width: 10, height: 10 },
+                  sourcePageId: 'page-004',
+                  passageGroupId: 'hwp-text-passage-31-34',
+                  bbox: { left: 0, top: 8, width: 100, height: 92 },
                 },
               ],
               pages: [{ id: 'page-004', problemIds: ['p31', 'p32'], riskFlags: [] }],
@@ -1031,10 +1036,11 @@ class TestUiRuntimeDiagnostics(unittest.TestCase):
             if (summary.passageGroupSourceReuseLabel !== '지문 겹침 1건') {
               throw new Error(`expected short passage group label, got ${summary.passageGroupSourceReuseLabel}`);
             }
-            if (!summary.passageGroupSourceReuseDetailLabel.includes('hwp-text-passage-31-34')) {
-              throw new Error(`expected passage group detail, got ${summary.passageGroupSourceReuseDetailLabel}`);
+            if (summary.passageGroupSourceReuseDetailLabel.includes('hwp-text-passage-31-34')
+              || !summary.passageGroupSourceReuseDetailLabel.includes('31. ↔ 32.')) {
+              throw new Error(`expected question numbers, not ids, got ${summary.passageGroupSourceReuseDetailLabel}`);
             }
-            if (!summary.passageGroupSourceReuseDetailLabel.includes('92%')) {
+            if (!summary.passageGroupSourceReuseDetailLabel.includes('100%')) {
               throw new Error(`expected overlap percent detail, got ${summary.passageGroupSourceReuseDetailLabel}`);
             }
             """
@@ -1156,7 +1162,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             const session = {
@@ -1226,7 +1232,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             const session = {
@@ -1295,7 +1301,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('function normalizePublishSummary');
             if (start < 0 || end < 0) throw new Error('review summary helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             if (typeof sandbox.publishReviewWarningMessage !== 'function') {
@@ -1351,7 +1357,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('const NON_ACTIONABLE_RISK_FLAGS');
             if (start < 0 || end < 0) throw new Error('publish preflight helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             if (typeof sandbox.publishBlockedTarget !== 'function') {
@@ -1459,7 +1465,7 @@ assert.equal(panels.length, 1, 'real errors still open the crash panel');
             const start = source.indexOf('const REVIEW_STATUS_META =');
             const end = source.indexOf('const NON_ACTIONABLE_RISK_FLAGS');
             if (start < 0 || end < 0) throw new Error('publish preflight helper bounds not found');
-            const sandbox = {};
+            const sandbox = { ...require('./ui_prototype/publish_guard.js') };
             sandbox.globalThis = sandbox;
             vm.runInNewContext(source.slice(start, end), sandbox);
             if (typeof sandbox.applyPublishPreflightIssuesToSession !== 'function') {

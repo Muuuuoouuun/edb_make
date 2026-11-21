@@ -204,7 +204,14 @@ class TestWindowsInstallerUpgradePolicy(unittest.TestCase):
         ).read_text(encoding="utf-8")
         payload_delete = 'Type: filesandordirs; Name: "{app}\\_internal"'
 
-        self.assertIn("CloseApplications=yes", installer)
+        self.assertIn("CloseApplications=force", installer)
+        # The windowless server must be stopped before InstallDelete runs or
+        # uninstall removes files, without deleting any user work.
+        code = installer.split("[Code]", 1)[1]
+        self.assertIn("'/F /T /IM {#AppName}.exe'", code)
+        self.assertIn("function PrepareToInstall(", code)
+        self.assertIn("CurUninstallStep = usUninstall", code)
+        self.assertNotIn("DelTree", code)
         self.assertIn(payload_delete, installer)
         install_delete = installer.split("[InstallDelete]", 1)[1].split("[Icons]", 1)[0]
         self.assertNotIn("{userdocs}", install_delete)

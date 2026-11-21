@@ -27,6 +27,12 @@ DEFAULT_BUG_REPORT_URL = "https://reports.classin.cloud/v1/edb-reports"
 MAX_DESCRIPTION_CHARS = 4_000
 MAX_CONTACT_CHARS = 240
 MAX_LOG_CHARS = 24_000
+# Per extra log, in JSON characters, so four of them still leave room for app.log.
+MAX_EXTRA_LOG_CHARS = 4_000
+# The collector rejects diagnostics whose JSON exceeds 24,000 characters; keep a margin.
+MAX_DIAGNOSTICS_JSON_CHARS = 22_000
+# Only these server-chosen logs ride along: the newest update attempt and the startup failure log.
+EXTRA_LOG_NAMES = ("updateHelper", "updateHelperProcess", "updateInstall", "startup")
 MAX_REMOTE_RESPONSE_BYTES = 64_000
 MAX_RUNTIME_ERRORS = 10
 REPORT_TIMEOUT_SECONDS = 8.0
@@ -69,6 +75,12 @@ _DOCUMENT_NAME_PATTERN = re.compile(
     + r"\."
     + _DOCUMENT_EXTENSION
     + r"\b"
+)
+# A quoted name may contain spaces ('3학년 2반 홍길동.pdf'); _DOCUMENT_NAME_PATTERN
+# only catches the last word before the extension.
+_QUOTED_DOCUMENT_NAME_PATTERN = re.compile(
+    r"(['\"‘“])[^'\"’”\r\n]*?\." + _DOCUMENT_EXTENSION + r"(['\"’”])",
+    re.IGNORECASE,
 )
 _SECRET_FIELD_PATTERN = re.compile(
     r"(?i)^(?:api[_ -]?key|authorization|bearer|password|secret|token)$"
@@ -270,6 +282,7 @@ def _redact_filesystem_references(value: str) -> str:
     text = _LOCAL_DOCUMENT_PATH_PATTERN.sub("[local-path]", text)
     text = _GENERIC_POSIX_DOCUMENT_PATH_PATTERN.sub("[local-path]", text)
     text = _KNOWN_LOCAL_PATH_PATTERN.sub("[local-path]", text)
+    text = _QUOTED_DOCUMENT_NAME_PATTERN.sub(r"\1[document]\2", text)
     text = _DOCUMENT_NAME_PATTERN.sub("[document]", text)
     for index, url in enumerate(protected_urls):
         text = text.replace(f"\x00edb-web-url-{index}\x00", url)
@@ -413,7 +426,7 @@ def _decode_log_bytes(raw: bytes, *, file_prefix: bytes = b"") -> str:
             return raw.decode("utf-8", errors="replace")
 
 
-def _read_log_tail(log_file: Path | None) -> str:
+def _read_log_tail(log_file: Path | None, max_chars: int = MAX_LOG_CHARS) -> str:
     if log_file is None or not log_file.is_file():
         return ""
     try:
@@ -421,11 +434,26 @@ def _read_log_tail(log_file: Path | None) -> str:
             file_prefix = stream.read(4)
             stream.seek(0, os.SEEK_END)
             size = stream.tell()
-            stream.seek(max(0, size - (MAX_LOG_CHARS * 4)), os.SEEK_SET)
+            stream.seek(max(0, size - (max_chars * 4)), os.SEEK_SET)
             tail = _decode_log_bytes(stream.read(), file_prefix=file_prefix)
     except OSError:
         return ""
-    return redact_sensitive_text(tail)[-MAX_LOG_CHARS:]
+    # Failed request lines keep /api/file paths percent-encoded (C%3A%5CUsers...).
+    return redact_sensitive_text(unquote(tail))[-max_chars:]
+
+
+def _json_length(value: Any) -> int:
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def _json_tail(text: str, limit: int) -> str:
+    """Return the newest part of ``text`` whose JSON string form fits in ``limit``."""
+
+    while text and _json_length(text) > limit:
+        # One character becomes at most 6 JSON characters (NUL -> \u0000), so cutting
+        # excess // 6 never trims past the limit.
+        text = text[max(1, (_json_length(text) - limit) // 6):]
+    return text
 
 
 def build_bug_report(
@@ -433,6 +461,8 @@ def build_bug_report(
     *,
     app_config: dict[str, Any],
     log_file: Path | None = None,
+    extra_logs: dict[str, Path] | None = None,
+    extra_diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the remote collector payload from an untrusted local request."""
 
@@ -474,7 +504,27 @@ def build_bug_report(
             "systemRelease": _bounded_text(platform.release(), 160),
             "pythonVersion": _bounded_text(platform.python_version(), 40),
         }
-        log_tail = _read_log_tail(log_file)
+        extra = extra_diagnostics or {}
+        arch = _bounded_text(extra.get("arch"), 40)
+        if arch:
+            diagnostics["arch"] = arch
+        for flag in ("dataFolderFallback", "lastUpdateFailed"):
+            if flag in extra:
+                diagnostics[flag] = bool(extra[flag])
+        # Which HWP converters are missing: the teacher-facing hangul summary no longer says.
+        notes = extra.get("hangulNotes")
+        if isinstance(notes, list):
+            diagnostics["hangulNotes"] = [_bounded_text(note, 200) for note in notes[:5]]
+        extra_tails = {
+            name: tail
+            for name in EXTRA_LOG_NAMES
+            if (tail := _json_tail(_read_log_tail((extra_logs or {}).get(name), MAX_EXTRA_LOG_CHARS), MAX_EXTRA_LOG_CHARS))
+        }
+        if extra_tails:
+            diagnostics["extraLogs"] = extra_tails
+        # The app log gets whatever room the smaller, capped fields leave.
+        room = MAX_DIAGNOSTICS_JSON_CHARS - _json_length(diagnostics) - len(',"logTail":')
+        log_tail = _json_tail(_read_log_tail(log_file), room)
         if log_tail:
             diagnostics["logTail"] = log_tail
         report["diagnostics"] = diagnostics

@@ -126,7 +126,8 @@ class TestUiSidebarHierarchy(unittest.TestCase):
           publishOpen: false, useMemo: fn => fn(), useEffect() {},
           useState: initial => [sandbox.publishOpen, update => { sandbox.publishOpen = update(sandbox.publishOpen); }],
           sessionPublishSummary: () => summary, sessionPublishHistory: () => [],
-          openPublishedEdb() {}, openOutputFolder() {}, openClassinHandoff() {},
+          publishPreflightIssueButtons: () => [],
+          openPublishedEdb() {}, openOutputFolder() {},
         });
         compile(sandbox, section('function PublishResultPanel(', 'function SidebarDisclosure('));
         const props = { session: {}, visible: true, onDownloadPublish: value => downloads.push(value), publishDownloadBusy: false };

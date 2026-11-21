@@ -21,6 +21,7 @@ import re
 import shutil
 import socket
 import signal
+import ssl
 import struct
 import subprocess
 import sys
@@ -28,6 +29,7 @@ import tempfile
 import threading
 import time
 import traceback
+import unicodedata
 import uuid
 import webbrowser
 import zipfile
@@ -37,10 +39,11 @@ from functools import lru_cache, partial
 from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, quote, unquote, urlparse
-from urllib.request import Request, url2pathname, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, url2pathname, urlopen
 
 from bug_reporting import (
     DEFAULT_BUG_REPORT_URL,
@@ -56,9 +59,14 @@ from user_settings import (
     ai_enabled_from_settings,
     apply_to_env as apply_user_settings_to_env,
     load_user_settings,
+    move_settings as move_user_settings,
     summarize_for_response as summarize_user_settings,
     update_api_keys,
 )
+
+# ponytail: Windows reports a folder that refuses new files (Controlled Folder Access, antivirus folder
+# guards) as a name clash, and tempfile retries it up to os.TMP_MAX (2**31-1) times. 100 random names never all clash.
+tempfile.TMP_MAX = 100
 
 
 CROP_FORMAT_V1 = "v1"
@@ -85,7 +93,7 @@ MANUAL_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX = 6.0
 MANUAL_PASSAGE_CENTER_DIVIDER_MIN_RATIO = 0.30
 MANUAL_PASSAGE_CENTER_DIVIDER_MAX_RATIO = 0.70
 PUBLISH_RECOVERY_STEPS = [
-    "같은 작업에서 다시 제작해 주세요. 편집 내용은 최근 작업에 보관됩니다.",
+    "같은 작업에서 다시 제작해 주세요. 편집 내용은 최근 수업 목록에 보관됩니다.",
     "계속 실패하면 PNG 묶음으로 먼저 보관한 뒤 오류 정보를 복사해 신고해 주세요.",
 ]
 
@@ -109,7 +117,8 @@ def _publish_failure_payload(
 ) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"{message}: {exc}",
+        "error": f"{message.rstrip('.')}.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": code,
         "operation": "session_publish",
         "retryable": retryable,
@@ -125,13 +134,10 @@ def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, 
     ):
         return _publish_failure_payload(
             code="publish_path_too_long",
-            message="EDB 제작 경로가 너무 깁니다",
+            message="저장 폴더 경로가 너무 길어 EDB를 저장하지 못했습니다",
             exc=exc,
             retryable=False,
-            recovery_steps=[
-                "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-                "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-            ],
+            recovery_steps=["오류 상세를 복사해 문제 신고로 보내 주세요. 편집 내용은 그대로 있습니다."],
         )
     if stage == "prepare" and isinstance(exc, FileNotFoundError):
         return _publish_failure_payload(
@@ -143,34 +149,29 @@ def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, 
     if isinstance(exc, FileNotFoundError):
         return _publish_failure_payload(
             code="publish_asset_missing",
-            message="EDB 제작에 필요한 원본 파일을 찾지 못했습니다",
+            message="EDB를 만들 문항 이미지를 찾지 못했습니다",
             exc=exc,
             retryable=False,
-            recovery_steps=[
-                "최근 작업에서 원본 PDF 또는 이미지가 열리는지 확인해 주세요.",
-                "파일이 이동되었다면 원본 PDF를 다시 등록하고 제작해 주세요.",
-            ],
+            recovery_steps=["원본 PDF를 다시 등록한 뒤 다시 제작해 주세요."],
         )
-    if isinstance(exc, ValueError) and ("page limit" in text or "50" in text and "page" in text):
-        return _publish_failure_payload(
-            code="publish_page_limit_exceeded",
-            message="ClassIn 보드 페이지 제한을 초과했습니다",
-            exc=exc,
-            retryable=False,
-            recovery_steps=[
-                "문항을 나누거나 일부 문항을 제외한 뒤 다시 제작해 주세요.",
-                "계속 필요하면 여러 EDB로 나누어 제작해 주세요.",
-            ],
-        )
+    # Classify first so a single too-tall problem gets its specific copy.
     classified = _classified_processing_error(exc) if isinstance(exc, Exception) else None
     if classified is not None:
         return {**classified, "operation": "session_publish", "stage": stage}
+    if isinstance(exc, ValueError) and ("page limit" in text or "classin limit" in text):
+        return _publish_failure_payload(
+            code="publish_page_limit_exceeded",
+            message="자동 분할 후에도 ClassIn 50페이지 제한을 넘었습니다",
+            exc=exc,
+            retryable=False,
+            recovery_steps=["오류 상세를 복사해 문제 신고로 보내 주세요."],
+        )
     definitions = {
         "prepare": ("publish_output_unavailable", "제작 파일을 저장할 폴더를 준비하지 못했습니다"),
         "build": ("publish_build_failed", "EDB 제작 데이터 생성에 실패했습니다"),
         "write": ("edb_write_failed", "EDB 파일 저장 또는 검증에 실패했습니다"),
-        "handoff": ("publish_handoff_failed", "ClassIn 전달 파일 생성에 실패했습니다"),
-        "commit": ("publish_session_commit_failed", "완성 파일을 현재 작업에 반영하지 못했습니다"),
+        "handoff": ("publish_handoff_failed", "ClassIn 전달 파일을 만들지 못했습니다"),
+        "commit": ("publish_session_commit_failed", "완성된 EDB를 작업에 반영하지 못했습니다"),
     }
     code, message = definitions.get(stage, ("publish_failed", "EDB 제작에 실패했습니다"))
     return _publish_failure_payload(code=code, message=message, exc=exc)
@@ -179,42 +180,36 @@ def _publish_stage_failure_payload(stage: str, exc: BaseException) -> dict[str, 
 def _recognition_retry_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"AI 재인식 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "error": "저장 폴더 경로가 너무 길어 AI 재인식 결과를 저장하지 못했습니다.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": "recognition_retry_path_too_long",
         "operation": "session_retry_ai",
         "retryable": False,
-        "recoverySteps": [
-            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-        ],
+        "recoverySteps": ["오류 상세를 복사해 문제 신고로 보내 주세요. 편집 내용은 그대로 있습니다."],
     }
 
 
 def _session_mutation_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"편집 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "error": "저장 폴더 경로가 너무 길어 편집 내용을 저장하지 못했습니다.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": "session_mutation_path_too_long",
         "operation": "session_mutate",
         "retryable": False,
-        "recoverySteps": [
-            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-        ],
+        "recoverySteps": ["오류 상세를 복사해 문제 신고로 보내 주세요. 방금 한 편집은 저장되지 않았을 수 있습니다."],
     }
 
 
 def _image_enhancement_path_failure_payload(exc: SessionWritePathTooLong) -> dict[str, Any]:
     return {
         "ok": False,
-        "error": f"고화질 이미지 결과를 저장할 경로가 너무 깁니다: {exc.path}",
+        "error": "저장 폴더 경로가 너무 길어 고화질 이미지를 저장하지 못했습니다.",
+        "detail": f"{type(exc).__name__}: {exc}",
         "code": "image_enhancement_path_too_long",
         "operation": "session_enhance_image",
         "retryable": False,
-        "recoverySteps": [
-            "사용자 지정 출력 폴더라면 더 짧은 경로를 선택해 주세요.",
-            "관리 경로에서도 반복되면 EDB_APP_HOME을 더 짧은 폴더로 설정해 주세요.",
-        ],
+        "recoverySteps": ["오류 상세를 복사해 문제 신고로 보내 주세요. 편집 내용은 그대로 있습니다."],
     }
 
 
@@ -364,6 +359,33 @@ def run_problem_export(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "run_problem_export", *args, **kwargs)
 
 
+# Live conversion stage per client progressId. Each entry is replaced whole and
+# dict get/set/pop are atomic, so the progress poll never waits on the export.
+_EXPORT_PROGRESS: dict[str, dict[str, Any]] = {}
+
+# Gallery (문제 추출) jobs touch only RUNTIME_DIR/problem-gallery, never lesson files. They skip the
+# lesson lock and wait only for each other (manifest read-modify-write, shared export .tmp names).
+_gallery_job_lock = threading.Lock()  # ponytail: one gallery job at a time; per-job locks if two tabs must extract at once
+
+
+def _run_with_export_progress(progress_id: str, run: Any, *args: Any, should_cancel: Any = None, **kwargs: Any) -> Any:
+    if not progress_id and should_cancel is None:
+        return run(*args, **kwargs)
+
+    def report(stage: str, done: int, total: int) -> None:
+        # ponytail: cancel lands only at progress points (stage starts, each recognized page); PDF render
+        # (~0.6 s/page) and asset building run to the next one; add a hook in prepare_source_pages if teachers still wait.
+        if should_cancel is not None and should_cancel():
+            raise _lazy_attr("build_problem_board_edb", "ExportCancelled")()
+        if progress_id:
+            _EXPORT_PROGRESS[progress_id] = {"stage": str(stage), "done": int(done), "total": int(total)}
+
+    try:
+        return run(*args, progress=report, **kwargs)
+    finally:
+        _EXPORT_PROGRESS.pop(progress_id, None)
+
+
 def write_classin_handoff_manifest(*args: Any, **kwargs: Any) -> Any:
     return _lazy_call("build_problem_board_edb", "write_classin_handoff_manifest", *args, **kwargs)
 
@@ -477,12 +499,23 @@ _update_pin_failures = 0
 _update_pin_blocked_until = 0.0
 _update_install_lock = threading.Lock()
 _update_install_started = False
+# Bytes of the PIN update's installer received so far; one writer, read lock-free by the progress route.
+_update_download_progress = {"received": 0, "total": 0}
 _runtime_diagnostics_cache_lock = threading.Lock()
 _runtime_diagnostics_cache: tuple[float, dict[str, Any]] | None = None
 
 
 def is_frozen_app() -> bool:
     return bool(getattr(sys, "frozen", False))
+
+
+def _use_macos_system_roots() -> None:
+    # The Mac app freezes python.org's OpenSSL, which reads CA roots only from its own
+    # Python.framework/.../etc/openssl folder. That folder is missing on teachers' Macs.
+    # ponytail: uses macOS's own root bundle. A CA that exists only in the System keychain
+    # (a school's TLS inspection) still fails; truststore covers that if it ever comes up.
+    if sys.platform == "darwin" and ssl.get_default_verify_paths().cafile is None:
+        os.environ["SSL_CERT_FILE"] = "/etc/ssl/cert.pem"
 
 
 def _windows_documents_directory() -> Path | None:
@@ -517,10 +550,39 @@ def default_frozen_app_home() -> Path:
     return (documents_directory / "ClassInEDBMVP").resolve()
 
 
+def _app_home_is_writable(home: Path) -> bool:
+    probe = home / ".app_runtime" / f".write-probe-{os.getpid()}"
+    try:
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        # One direct create: tempfile would retry a refused create as a name clash.
+        os.close(os.open(probe, os.O_WRONLY | os.O_CREAT))
+    except OSError:
+        return False
+    try:
+        probe.unlink()
+    except OSError:
+        pass  # a scanner briefly holding the probe does not make the folder unwritable
+    return True
+
+
 def app_root() -> Path:
     if is_frozen_app():
-        return default_frozen_app_home()
+        home = default_frozen_app_home()
+        if os.environ.get("EDB_APP_HOME", "").strip() or _app_home_is_writable(home):
+            return home
+        # Documents is blocked (Windows Controlled Folder Access, macOS privacy denial):
+        # start from a per-user folder instead of failing to open at all.
+        return _local_app_home()
     return Path(__file__).resolve().parent
+
+
+def _local_app_home() -> Path:
+    """Per-user app folder that OneDrive and iCloud never sync."""
+    if sys.platform.startswith("win"):
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+    else:
+        base = Path.home() / "Library" / "Application Support"
+    return (base / "ClassInEDBMVP").resolve()
 
 
 def resource_root() -> Path:
@@ -530,6 +592,11 @@ def resource_root() -> Path:
 
 
 BASE_DIR = app_root()
+# Computed once: app_root() fell back because Documents was blocked, so the UI can say why old work is missing.
+DATA_FOLDER_FALLBACK = is_frozen_app() and BASE_DIR != default_frozen_app_home()
+# Names this data folder in /api/health: loopback is shared by every signed-in OS account.
+# A hash, never the path: /api/health needs no login, and the path shows the user name.
+_DATA_FOLDER_TAG = hashlib.sha256(os.fsencode(BASE_DIR)).hexdigest()[:16]
 RESOURCE_DIR = resource_root()
 UI_DIR = RESOURCE_DIR / "ui_prototype"
 LEGACY_UI_ASSET_ALIASES = {
@@ -538,9 +605,17 @@ LEGACY_UI_ASSET_ALIASES = {
 RUNTIME_DIR = BASE_DIR / ".app_runtime"
 
 
+def _settings_dir() -> Path:
+    # Documents is often OneDrive/iCloud-synced and gets zipped for support: keep the API key local.
+    # A function, not a constant: tests and helpers patch RUNTIME_DIR.
+    if is_frozen_app() and not os.environ.get("EDB_APP_HOME", "").strip():
+        return _local_app_home()
+    return RUNTIME_DIR
+
+
 def _global_ai_enabled() -> bool:
     """Authoritative user preference for every provider-backed AI path."""
-    return ai_enabled_from_settings(load_user_settings(RUNTIME_DIR))
+    return ai_enabled_from_settings(load_user_settings(_settings_dir()))
 UPLOAD_DIR = RUNTIME_DIR / "uploads"
 LATEST_SESSION_JSON = RUNTIME_DIR / "latest_session.json"
 SESSION_HISTORY_JSON = RUNTIME_DIR / "session_history.json"
@@ -611,10 +686,12 @@ class AppUpdateError(RuntimeError):
         *,
         status: HTTPStatus = HTTPStatus.CONFLICT,
         recovery_steps: list[str] | None = None,
+        detail: str = "",
     ) -> None:
         self.code = code
         self.status = status
         self.recovery_steps = list(recovery_steps or [])
+        self.detail = detail
         super().__init__(message)
 
 
@@ -622,8 +699,25 @@ class ArtifactCleanupBusy(RuntimeError):
     """Raised when cleanup would race an artifact-producing request."""
 
 
+class SessionHistoryUnreadable(OSError):
+    """A strict history read failed: writers keep the file as it is, cleanup deletes nothing."""
+
+
+class SessionHistoryCorrupt(SessionHistoryUnreadable):
+    """The history file holds no readable list. Writers may replace it; cleanup still deletes nothing."""
+
+
 class SessionRevisionConflict(RuntimeError):
     """Raised when a destructive request no longer targets the current session."""
+
+
+class JobCancelled(Exception):
+    """The teacher cancelled an AI job; stop before calling the API again or saving."""
+
+
+def _stop_if_cancelled(should_cancel) -> None:
+    if should_cancel is not None and should_cancel():
+        raise JobCancelled()
 
 
 class SessionWritePathTooLong(OSError):
@@ -641,6 +735,14 @@ class SessionWritePathTooLong(OSError):
 
 def default_output_root() -> Path:
     return RUNTIME_DIR / DEFAULT_OUTPUT_ROOT_NAME
+
+
+def _with_data_folder_status(settings_summary: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **settings_summary,
+        "dataFolderFallback": DATA_FOLDER_FALLBACK,
+        "dataFolder": str(BASE_DIR) if DATA_FOLDER_FALLBACK else "",
+    }
 
 
 def _fsync_parent_directory(path: Path) -> None:
@@ -662,9 +764,17 @@ def _is_windows_file_busy(exc: OSError) -> bool:
     return getattr(exc, "winerror", None) in {5, 32, 33}
 
 
-def _replace_file_with_retry(source: Path, target: Path) -> None:
+# A finished publish folder is renamed into place in one step. OneDrive and
+# virus scanners can hold a file inside it for a few seconds after the write.
+_DIR_REPLACE_DELAYS = (0.1, 0.2, 0.4, 0.8, 1.5, 2.0)
+
+
+def _replace_file_with_retry(
+    source: Path,
+    target: Path,
+    delays: tuple[float, ...] = (0.05, 0.1, 0.2, 0.4, 0.8),
+) -> None:
     """Keep atomic replacement, allowing short-lived Windows scanner/sync locks."""
-    delays = (0.05, 0.1, 0.2, 0.4, 0.8)
     for attempt in range(len(delays) + 1):
         try:
             os.replace(source, target)
@@ -878,9 +988,13 @@ def _recover_interrupted_session_reset() -> bool:
     return True
 
 
-def _atomically_clear_persisted_session_state() -> None:
-    """Clear all persisted session pointers as one recoverable transaction."""
-    targets = (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)
+def _atomically_clear_persisted_session_state(keep_history: bool = False) -> None:
+    """Clear persisted session pointers (and the history unless kept) as one recoverable transaction."""
+    targets = (
+        (LATEST_SESSION_JSON, GENERATED_SESSION_JS)
+        if keep_history
+        else (LATEST_SESSION_JSON, SESSION_HISTORY_JSON, GENERATED_SESSION_JS)
+    )
     stamp = uuid.uuid4().hex
     moved: list[tuple[Path, Path]] = []
     marker = _session_reset_transaction_path()
@@ -928,6 +1042,13 @@ def _atomically_clear_persisted_session_state() -> None:
             except OSError:
                 pass
             raise
+        if not keep_history:
+            # 초기화 empties 최근 수업 for good: a sync conflict copy would bring its lessons back.
+            for copy in _history_conflict_copies():
+                try:
+                    copy.unlink()
+                except OSError:
+                    pass
         tombstone_cleanup_failed = False
         for _target, tombstone in moved:
             try:
@@ -982,6 +1103,10 @@ def _cached_update_status(cache_key: tuple[str, ...]) -> dict[str, Any] | None:
 
 
 def _remember_update_status(cache_key: tuple[str, ...], status: dict[str, Any]) -> dict[str, Any]:
+    if status.get("channelStatus") in {"invalid_feed", "invalid_config"} and "detail" not in status:
+        # Every bad feed/config branch exits here: show one Korean sentence, keep the diagnosis copyable.
+        status["detail"] = str(status.get("error") or "")
+        status["error"] = "업데이트 정보가 올바르지 않아 확인을 멈췄습니다. 관리자에게 알려 주세요."
     snapshot = _clone_jsonish(status)
     with _update_status_cache_lock:
         _update_status_cache[cache_key] = (time.monotonic() + UPDATE_STATUS_CACHE_TTL_SECONDS, snapshot)
@@ -1013,8 +1138,23 @@ def _normalized_app_arch(value: Any) -> str:
     return aliases.get(arch, arch)
 
 
+@lru_cache(maxsize=1)
+def _macos_rosetta_translated() -> bool:
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"], capture_output=True, text=True, timeout=2
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.stdout.strip() == "1"
+
+
 def _app_arch_key() -> str:
-    return _normalized_app_arch(platform.machine())
+    arch = _normalized_app_arch(platform.machine())
+    # An Intel build under Rosetta reports x64; select the native Apple silicon build instead.
+    if arch == "x64" and sys.platform == "darwin" and _macos_rosetta_translated():
+        return "arm64"
+    return arch
 
 
 def _app_update_config_alias_conflict_error(label: str, source: dict[str, Any], *field_names: str) -> str:
@@ -1069,11 +1209,12 @@ def build_update_pin_verifier(
     iterations: int = UPDATE_PIN_PBKDF2_ITERATIONS,
 ) -> str:
     normalized_pin = str(pin or "").strip()
-    if not normalized_pin.isascii() or not normalized_pin.isdigit():
-        raise ValueError("update PIN must contain ASCII digits only")
+    # Case-sensitive ASCII letters and digits; digit-only PINs from earlier builds still verify.
+    if not normalized_pin.isascii() or not normalized_pin.isalnum():
+        raise ValueError("update PIN must contain ASCII letters or digits only")
     if not UPDATE_PIN_MIN_LENGTH <= len(normalized_pin) <= UPDATE_PIN_MAX_LENGTH:
         raise ValueError(
-            f"update PIN must contain {UPDATE_PIN_MIN_LENGTH}-{UPDATE_PIN_MAX_LENGTH} digits"
+            f"update PIN must contain {UPDATE_PIN_MIN_LENGTH}-{UPDATE_PIN_MAX_LENGTH} letters or digits"
         )
     if not 100_000 <= int(iterations) <= 2_000_000:
         raise ValueError("update PIN PBKDF2 iterations are outside the allowed range")
@@ -1094,7 +1235,7 @@ def verify_update_pin(pin: Any, verifier: Any) -> bool:
     normalized_pin = str(pin or "").strip()
     if parsed is None:
         return False
-    if not normalized_pin.isascii() or not normalized_pin.isdigit():
+    if not normalized_pin.isascii() or not normalized_pin.isalnum():
         return False
     if not UPDATE_PIN_MIN_LENGTH <= len(normalized_pin) <= UPDATE_PIN_MAX_LENGTH:
         return False
@@ -1326,11 +1467,14 @@ def _fetch_update_feed(feed_url: str) -> dict[str, Any]:
     return data
 
 
-def _select_platform_update(feed: dict[str, Any], platform_key: str) -> dict[str, Any]:
+def _select_platform_update(feed: dict[str, Any], platform_key: str, arch: str = "") -> dict[str, Any]:
     selected = dict(feed)
     platforms = feed.get("platforms")
     if isinstance(platforms, dict):
-        platform_payload = platforms.get(platform_key)
+        # One feed serves both Mac architectures: "macos-x64" beside the generic "macos".
+        platform_payload = platforms.get(f"{platform_key}-{arch}") if arch else None
+        if platform_payload is None:
+            platform_payload = platforms.get(platform_key)
         if platform_payload is None and platform_key == "macos":
             platform_payload = platforms.get("darwin")
         if platform_payload is None and platform_key == "windows":
@@ -1599,6 +1743,13 @@ def build_app_update_status() -> dict[str, Any]:
         ),
         "automaticUpdateReady": False,
     }
+    if status["automaticUpdateSupported"]:
+        try:
+            _check_update_target(platform_key)
+        except AppUpdateError as exc:
+            # The UI then hides the PIN install and shows these steps (e.g. move the Mac app first).
+            status["automaticUpdateBlockedReason"] = str(exc)
+            status["automaticUpdateBlockedSteps"] = list(exc.recovery_steps)
     if not feed_url:
         if config_error:
             status["channelStatus"] = "invalid_config"
@@ -1613,10 +1764,19 @@ def build_app_update_status() -> dict[str, Any]:
         return _remember_update_status(cache_key, status)
     try:
         feed = _fetch_update_feed(feed_url)
-        selected = _select_platform_update(feed, platform_key)
+        selected = _select_platform_update(feed, platform_key, current_arch)
     except Exception as exc:
         status["channelStatus"] = "error"
-        status["error"] = str(exc)
+        status["detail"] = f"{type(exc).__name__}: {exc}"
+        # HTTPError is an OSError too, so check it first.
+        if isinstance(exc, HTTPError) and exc.code == 404:
+            # Nothing is published yet: a normal state, not a failure.
+            status["channelStatus"] = "no_release"
+            status["error"] = "아직 받을 수 있는 업데이트가 없습니다. 나중에 다시 확인해 주세요."
+        elif isinstance(exc, OSError) and not isinstance(exc, HTTPError):
+            status["error"] = "업데이트 서버에 연결하지 못했습니다. 인터넷 연결을 확인한 뒤 다시 확인해 주세요."
+        else:
+            status["error"] = "업데이트 정보를 확인하지 못했습니다. 잠시 후 다시 확인해 주세요."
         return _remember_update_status(cache_key, status)
     if selected.get("platformSupported") is False:
         status["channelStatus"] = "unsupported_platform"
@@ -1703,17 +1863,19 @@ def build_app_update_status() -> dict[str, Any]:
         status["updateAvailable"] = False
         status["channelStatus"] = "unsupported_architecture"
         status["code"] = "update_architecture_mismatch"
-        status["error"] = (
+        status["error"] = "이 기기에 맞는 업데이트 파일이 아직 없습니다."
+        status["detail"] = (
             f"update architecture {feed_arch!r} is not compatible with this device ({current_arch!r})"
         )
         status["availableDownloadUrl"] = status.get("downloadUrl") or ""
         status["downloadUrl"] = ""
         if isinstance(status.get("latest"), dict):
             status["latest"]["downloadUrl"] = ""
-        status["recoverySteps"] = [
-            f"{current_arch}용 설치 파일을 선택해 주세요.",
-            "지원 파일이 보이지 않으면 오류 정보와 함께 신고해 주세요.",
-        ]
+        if platform_key == "macos":
+            device_label = {"arm64": "Apple 실리콘 Mac", "x64": "Intel Mac"}.get(current_arch, "이 Mac")
+        else:
+            device_label = "Windows PC" if platform_key == "windows" else "이 기기"
+        status["recoverySteps"] = [f"관리자에게 {device_label}용 설치 파일을 요청해 주세요."]
         return _remember_update_status(cache_key, status)
     comparison = compare_app_versions(current_version, latest_version)
     if comparison > 0 and not download_url:
@@ -1731,6 +1893,10 @@ def build_app_update_status() -> dict[str, Any]:
         and status.get("sizeBytes")
     )
     return _remember_update_status(cache_key, status)
+
+
+# Where teachers get a Gemini API key; the only page /api/system/open-url opens besides update URLs.
+GEMINI_KEY_HELP_URL = "https://aistudio.google.com/apikey"
 
 
 def _allowed_update_urls() -> set[str]:
@@ -1778,8 +1944,9 @@ def _update_artifact_details(status: dict[str, Any]) -> tuple[str, str, str, int
     if not expected_sha256 or expected_size is None:
         raise AppUpdateError(
             "update_integrity_metadata_required",
-            "자동 업데이트에는 파일 크기와 SHA-256 검증 정보가 필요합니다.",
-            recovery_steps=["관리자에게 업데이트 피드의 sizeBytes와 sha256 등록을 요청해 주세요."],
+            "업데이트 파일을 확인할 정보가 없어 자동으로 설치할 수 없습니다.",
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치하거나 관리자에게 알려 주세요."],
+            detail="update feed is missing sizeBytes or sha256 for this artifact",
         )
     if expected_size > MAX_UPDATE_ARTIFACT_BYTES:
         raise AppUpdateError("update_artifact_too_large", "업데이트 파일이 허용 크기를 초과합니다.")
@@ -1825,14 +1992,85 @@ def _update_storage_writer(path: Path):
         _perform_update_storage(output.close)
 
 
+def _update_root() -> Path:
+    # Documents is often OneDrive- (Windows) or iCloud- (macOS) synced: keep installers in the local,
+    # unsynced profile unless an explicit EDB_APP_HOME asks for everything in one place.
+    local = ""
+    if not os.environ.get("EDB_APP_HOME", "").strip():
+        if sys.platform.startswith("win"):
+            local = os.environ.get("LOCALAPPDATA", "").strip()
+        elif sys.platform == "darwin":
+            local = str(Path.home() / "Library" / "Application Support")
+    return Path(local) / "ClassInEDBMVP" / "updates" if local else RUNTIME_DIR / "updates"
+
+
+_UPDATE_FAILURE_SEEN = False  # the startup update check consumes the marker; bug reports still need it
+
+
+def _consume_update_failure_marker() -> bool:
+    """Report once that an update helper gave up (it leaves ``update-failed`` in its folder)."""
+    global _UPDATE_FAILURE_SEEN
+    found = False
+    for marker in _update_root().glob("pending-*/update-failed"):
+        try:
+            marker.unlink()
+            found = True
+        except OSError:
+            pass
+    _UPDATE_FAILURE_SEEN = _UPDATE_FAILURE_SEEN or found
+    return found
+
+
+def _bug_report_diagnostics() -> tuple[dict[str, Path], dict[str, Any]]:
+    """Newest update attempt's logs, the startup log and a few flags support asks about first."""
+    logs = {"startup": _startup_log_path()}
+    try:
+        newest = max(_update_root().glob("pending-*"), key=lambda path: path.stat().st_mtime, default=None)
+        update_failed = _UPDATE_FAILURE_SEEN or any(_update_root().glob("pending-*/update-failed"))
+    except OSError:
+        newest, update_failed = None, _UPDATE_FAILURE_SEEN
+    if newest is not None:
+        logs.update(
+            updateHelper=newest / "update-helper.log",
+            updateHelperProcess=newest / "update-helper-process.log",
+            updateInstall=newest / "update-install.log",
+        )
+    try:
+        hangul_notes = cached_runtime_diagnostics()["hangul"]["technicalNotes"]
+    except Exception:  # a broken converter probe must never block the report itself
+        hangul_notes = None
+    return logs, {
+        "arch": _app_arch_key(),
+        "dataFolderFallback": is_frozen_app() and BASE_DIR != default_frozen_app_home(),
+        "lastUpdateFailed": update_failed,
+        "hangulNotes": hangul_notes,
+    }
+
+
+def _prune_stale_update_downloads(runtime_dir: Path | None = None) -> None:
+    """Drop week-old pending-* folders: helper scripts, logs and sometimes a whole installer."""
+    # Downloads moved to LOCALAPPDATA / Application Support; older versions left them in the (often
+    # synced) runtime folder, so that legacy root is swept too.
+    roots = {runtime_dir / "updates"} if runtime_dir else {_update_root(), RUNTIME_DIR / "updates"}
+    stale_before = time.time() - 7 * 24 * 3600
+    for root in roots:
+        for stale in root.glob("pending-*"):
+            try:
+                if not stale.is_symlink() and stale.stat().st_mtime < stale_before:
+                    shutil.rmtree(stale)
+            except OSError:
+                pass
+
+
 def _download_update_artifact(
     status: dict[str, Any],
     *,
     runtime_dir: Path | None = None,
 ) -> Path:
     download_url, file_name, _artifact_type, expected_size, expected_sha256 = _update_artifact_details(status)
-    update_root = (runtime_dir or RUNTIME_DIR) / "updates"
+    update_root = runtime_dir / "updates" if runtime_dir else _update_root()
     _perform_update_storage(update_root.mkdir, parents=True, exist_ok=True)
+    _prune_stale_update_downloads(runtime_dir)
     download_dir = Path(_perform_update_storage(tempfile.mkdtemp, prefix="pending-", dir=update_root))
     partial_path = download_dir / f"{file_name}.part"
     final_path = download_dir / file_name
@@ -1864,6 +2102,7 @@ def _download_update_artifact(
                         "update_size_mismatch",
                         "업데이트 파일 크기가 배포 정보와 일치하지 않습니다.",
                     )
+            _update_download_progress.update(received=0, total=expected_size)
             while True:
                 chunk = response.read(1024 * 1024)
                 if not chunk:
@@ -1876,6 +2115,7 @@ def _download_update_artifact(
                     )
                 digest.update(chunk)
                 _perform_update_storage(output.write, chunk)
+                _update_download_progress["received"] = total
             _perform_update_storage(output.flush)
             _perform_update_storage(os.fsync, output.fileno())
         if total != expected_size:
@@ -1887,7 +2127,8 @@ def _download_update_artifact(
             raise AppUpdateError(
                 "update_checksum_mismatch",
                 "업데이트 파일 무결성 검증에 실패했습니다.",
-                recovery_steps=["파일을 실행하지 않았습니다. 관리자에게 업데이트 피드를 확인해 달라고 요청해 주세요."],
+                recovery_steps=["받은 파일은 실행하지 않았습니다. 잠시 후 다시 시도하고, 계속되면 관리자에게 알려 주세요."],
+                detail="downloaded artifact sha256 does not match the update feed",
             )
         _perform_update_storage(os.replace, partial_path, final_path)
         return final_path
@@ -1901,7 +2142,11 @@ def _download_update_artifact(
             "업데이트 파일을 다운로드하지 못했습니다. 인터넷 연결과 배포 서버 상태를 확인해 주세요.",
             status=HTTPStatus.BAD_GATEWAY,
             recovery_steps=["인터넷 연결을 확인한 뒤 다시 시도해 주세요."],
+            detail=f"{type(exc).__name__}: {exc}",
         ) from exc
+    finally:
+        # The checksum and helper launch follow; a later attempt must not start from a stale 100%.
+        _update_download_progress.update(received=0, total=0)
 
 
 def _current_macos_bundle_path(executable: Path | None = None) -> Path | None:
@@ -1910,6 +2155,32 @@ def _current_macos_bundle_path(executable: Path | None = None) -> Path | None:
         if path.suffix.lower() == ".app":
             return path
     return None
+
+
+def _check_update_target(platform_key: str) -> Path:
+    """Return the installed app to replace, or fail before anything is downloaded."""
+    if platform_key not in UPDATE_PLATFORM_ARTIFACT_TYPES:
+        raise AppUpdateError("unsupported_update_platform", "이 운영체제의 자동 업데이트는 아직 지원하지 않습니다.")
+    target = _current_macos_bundle_path() if platform_key == "macos" else Path(sys.executable).absolute()
+    if target is None or not is_frozen_app():
+        raise AppUpdateError("update_requires_packaged_app", "설치된 앱에서만 자동 업데이트할 수 있습니다.")
+    writable = target.exists() and os.access(target.parent, os.W_OK)
+    # Translocated apps and apps opened straight from the DMG run from read-only places.
+    if platform_key == "macos" and (
+        "AppTranslocation" in str(target) or (not writable and str(target).startswith("/Volumes/"))
+    ):
+        raise AppUpdateError(
+            "update_translocated_app",
+            "앱이 ‘응용 프로그램’ 폴더 밖에서 실행 중이라 자동 업데이트할 수 없습니다.",
+            recovery_steps=["앱을 종료하고 ‘응용 프로그램’ 폴더로 옮긴 뒤 다시 열어 주세요."],
+        )
+    if not writable:
+        raise AppUpdateError(
+            "update_target_not_writable",
+            "이 계정에는 앱을 업데이트할 권한이 없습니다.",
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치하거나 관리자에게 요청해 주세요."],
+        )
+    return target
 
 
 MACOS_UPDATE_HELPER = r'''#!/bin/zsh
@@ -1924,6 +2195,9 @@ echo "[$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)] updater waiting for process $parent_
 while /bin/kill -0 "$parent_pid" 2>/dev/null; do /bin/sleep 0.25; done
 
 bundle_name="${target_app:t}"
+# The archive's app name; the target keeps whatever name the teacher runs (Finder "Keep Both", a rename).
+# ponytail: installs already running a renamed copy still run their old helper; they need one manual Replace install.
+source_name="${6:-$bundle_name}"
 target_parent="${target_app:h}"
 work_dir="${artifact:h}/apply-$$"
 mount_dir="$work_dir/mount"
@@ -1931,10 +2205,16 @@ extract_dir="$work_dir/extract"
 staged_app="$target_parent/.${bundle_name}.updating.$$"
 backup_app="$target_parent/.${bundle_name}.backup.$$"
 mounted=0
+installed=0
 cleanup() {
   if [[ "$mounted" == "1" ]]; then /usr/bin/hdiutil detach "$mount_dir" -force >/dev/null 2>&1 || true; fi
   /bin/rm -rf "$work_dir" "$staged_app"
   /bin/rm -f "$artifact"
+  if [[ "$installed" != "1" ]]; then
+    # Tell the next launch the update did not finish, then reopen the kept previous app.
+    /usr/bin/touch "${artifact:h}/update-failed" 2>/dev/null || true
+    if [[ -d "$target_app" ]]; then /usr/bin/open "$target_app" >/dev/null 2>&1 || true; fi
+  fi
 }
 trap cleanup EXIT
 /bin/mkdir -p "$work_dir"
@@ -1944,18 +2224,18 @@ if [[ "$artifact_type" == "dmg" ]]; then
   /bin/mkdir -p "$mount_dir"
   /usr/bin/hdiutil attach "$artifact" -nobrowse -readonly -mountpoint "$mount_dir" >/dev/null
   mounted=1
-  source_app="$mount_dir/$bundle_name"
+  source_app="$mount_dir/$source_name"
 elif [[ "$artifact_type" == "zip" ]]; then
   /bin/mkdir -p "$extract_dir"
   /usr/bin/ditto -x -k "$artifact" "$extract_dir"
-  source_app="$extract_dir/$bundle_name"
+  source_app="$extract_dir/$source_name"
 else
   echo "unsupported macOS update artifact: $artifact_type"
   exit 21
 fi
 
 if [[ ! -d "$source_app" ]]; then
-  echo "update archive does not contain $bundle_name"
+  echo "update archive does not contain $source_name"
   exit 22
 fi
 /usr/bin/ditto "$source_app" "$staged_app"
@@ -1969,6 +2249,7 @@ if ! /bin/mv "$target_app" "$backup_app"; then
   exit 24
 fi
 if /bin/mv "$staged_app" "$target_app"; then
+  installed=1
   /bin/rm -rf "$backup_app" "$artifact"
   /usr/bin/open "$target_app"
   echo "update installed and app relaunched"
@@ -1990,12 +2271,14 @@ WINDOWS_UPDATE_HELPER = r'''param(
 $ErrorActionPreference = 'Stop'
 # Keep installer diagnostics separate: Inno Setup owns its /LOG file.
 $installerLog = Join-Path (Split-Path -Parent $LogFile) 'update-install.log'
+$appExited = $false
 try {
   Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Updater waiting for the app to exit.'
   $parent = Get-Process -Id $ParentPid -ErrorAction SilentlyContinue
   if ($parent -and -not $parent.WaitForExit(120000)) {
     throw "app did not exit within 120 seconds; update cancelled"
   }
+  $appExited = $true
   $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $InstallDir + '"'), ('/LOG="' + $installerLog + '"'))
   $process = Start-Process -FilePath $Installer -ArgumentList $arguments -Wait -PassThru
   if ($process.ExitCode -ne 0 -and $process.ExitCode -ne 3010) {
@@ -2009,6 +2292,15 @@ try {
 } catch {
   # Detached helpers have no console. Persist errors before propagating failure.
   Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value ('Update failed: ' + $_.Exception.ToString()) -ErrorAction SilentlyContinue
+  # Tell the next launch the update did not finish.
+  Set-Content -LiteralPath (Join-Path (Split-Path -Parent $LogFile) 'update-failed') -Value (Get-Date -Format o) -ErrorAction SilentlyContinue
+  # Reopen the previous version only once the app is gone; never start a second copy.
+  if ($appExited -and (Test-Path -LiteralPath $AppExecutable -PathType Leaf)) {
+    try {
+      Start-Process -FilePath $AppExecutable -ErrorAction Stop
+      Add-Content -LiteralPath $LogFile -Encoding UTF8 -Value 'Previous version reopened.' -ErrorAction SilentlyContinue
+    } catch {}
+  }
   throw
 } finally {
   Remove-Item -LiteralPath $Installer -Force -ErrorAction SilentlyContinue
@@ -2017,24 +2309,7 @@ try {
 
 
 def _launch_macos_update_helper(artifact_path: Path, artifact_type: str) -> dict[str, Any]:
-    target_app = _current_macos_bundle_path()
-    if target_app is None or not is_frozen_app():
-        raise AppUpdateError(
-            "update_requires_packaged_app",
-            "자동 업데이트는 설치된 macOS 앱에서만 사용할 수 있습니다.",
-        )
-    if "AppTranslocation" in str(target_app):
-        raise AppUpdateError(
-            "update_translocated_app",
-            "격리 실행 중인 앱은 자동으로 교체할 수 없습니다.",
-            recovery_steps=["앱을 응용 프로그램 폴더로 옮겨 다시 실행해 주세요."],
-        )
-    if not target_app.exists() or not os.access(target_app.parent, os.W_OK):
-        raise AppUpdateError(
-            "update_target_not_writable",
-            "현재 앱 설치 위치에 업데이트를 덮어쓸 권한이 없습니다.",
-            recovery_steps=["쓰기 가능한 응용 프로그램 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
-        )
+    target_app = _check_update_target("macos")
     helper_path = artifact_path.parent / "apply-macos-update.zsh"
     log_path = artifact_path.parent / "update-install.log"
     helper_path.write_text(MACOS_UPDATE_HELPER, encoding="utf-8")
@@ -2050,6 +2325,8 @@ def _launch_macos_update_helper(artifact_path: Path, artifact_type: str) -> dict
                 artifact_type,
                 str(target_app),
                 str(log_path),
+                # The bundle inside the DMG/zip; packaging names it after appName.
+                f"{load_app_update_config().get('appName') or 'ClassInEDBMVP'}.app",
             ],
             stdin=subprocess.DEVNULL,
             stdout=log_stream,
@@ -2065,18 +2342,7 @@ def _launch_macos_update_helper(artifact_path: Path, artifact_type: str) -> dict
 def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> dict[str, Any]:
     if artifact_type != "setup-exe":
         raise AppUpdateError("unsupported_update_artifact", "Windows 자동 업데이트는 Setup.exe만 지원합니다.")
-    if not is_frozen_app():
-        raise AppUpdateError(
-            "update_requires_packaged_app",
-            "자동 업데이트는 설치된 Windows 앱에서만 사용할 수 있습니다.",
-        )
-    executable = Path(sys.executable).absolute()
-    if not executable.is_file() or not os.access(executable.parent, os.W_OK):
-        raise AppUpdateError(
-            "update_target_not_writable",
-            "현재 앱 설치 위치에 업데이트를 덮어쓸 권한이 없습니다.",
-            recovery_steps=["쓰기 가능한 폴더에 앱을 설치한 뒤 다시 시도해 주세요."],
-        )
+    executable = _check_update_target("windows")
     helper_path = artifact_path.parent / "apply-windows-update.ps1"
     log_path = artifact_path.parent / "update-helper.log"
     helper_path.write_text(WINDOWS_UPDATE_HELPER, encoding="utf-8-sig")
@@ -2088,7 +2354,7 @@ def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> di
     # Capture PowerShell parse/startup errors as well as the helper's own log.
     log_stream = (artifact_path.parent / "update-helper-process.log").open("ab")
     try:
-        subprocess.Popen(
+        process = subprocess.Popen(
             [
                 "powershell.exe",
                 "-NoProfile",
@@ -2116,6 +2382,19 @@ def _launch_windows_update_helper(artifact_path: Path, artifact_type: str) -> di
         )
     finally:
         log_stream.close()
+    # Policy or antivirus can kill PowerShell before the helper's first log line;
+    # then keep this app running instead of shutting down with nothing to reopen it.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not log_path.exists():
+        if process.poll() is not None:
+            raise AppUpdateError(
+                "update_installer_launch_failed",
+                "업데이트를 시작하지 못했습니다.",
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요."],
+                detail=f"update helper exited with code {process.returncode} before writing {log_path.name}",
+            )
+        time.sleep(0.1)
     return {"platform": "windows", "targetName": executable.name, "restartScheduled": True}
 
 
@@ -2131,8 +2410,10 @@ def _launch_update_helper(artifact_path: Path, status: dict[str, Any], artifact_
     except Exception as exc:
         raise AppUpdateError(
             "update_installer_launch_failed",
-            f"업데이트 설치 도우미를 시작하지 못했습니다: {exc}",
+            "업데이트를 시작하지 못했습니다.",
             status=HTTPStatus.INTERNAL_SERVER_ERROR,
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요."],
+            detail=f"{type(exc).__name__}: {exc}",
         ) from exc
     raise AppUpdateError("unsupported_update_platform", "이 운영체제의 자동 업데이트는 아직 지원하지 않습니다.")
 
@@ -2140,7 +2421,7 @@ def _launch_update_helper(artifact_path: Path, status: dict[str, Any], artifact_
 def _discard_update_download(artifact_path: Path) -> None:
     """Discard only the temporary update directory owned by this runtime."""
     download_dir = artifact_path.parent
-    update_root = RUNTIME_DIR / "updates"
+    update_root = _update_root()
     try:
         if (
             update_root.is_symlink()
@@ -2203,7 +2484,8 @@ def prepare_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, An
         raise AppUpdateError(
             "update_pin_not_configured",
             "이 배포본에는 업데이트 PIN이 설정되어 있지 않습니다.",
-            recovery_steps=["배포 설정에 updatePinHash를 등록한 설치본을 사용해 주세요."],
+            recovery_steps=["‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요."],
+            detail="app_update_config.json has no updatePinHash",
         )
     if _parse_update_pin_verifier(verifier) is None:
         raise AppUpdateError("invalid_update_pin_config", "업데이트 PIN 설정이 올바르지 않습니다.")
@@ -2211,6 +2493,7 @@ def prepare_app_update(pin: Any, *, expected_update: Any = None) -> dict[str, An
     if expected_update is not None:
         _validate_confirmed_update(status, expected_update)
     _download_url, file_name, artifact_type, _expected_size, _expected_sha256 = _update_artifact_details(status)
+    _check_update_target(str(status.get("platform") or "").strip().lower())
     artifact_path = _download_update_artifact(status)
     try:
         helper = _launch_update_helper(artifact_path, status, artifact_type)
@@ -2252,7 +2535,12 @@ def ensure_runtime_dirs() -> None:
 def hydrate_user_settings_env() -> None:
     """Load persisted user settings and promote secrets into ``os.environ``
     so pipeline modules pick them up via the usual env-var path."""
-    apply_user_settings_to_env(load_user_settings(RUNTIME_DIR))
+    if _settings_dir() != RUNTIME_DIR:
+        try:
+            move_user_settings(RUNTIME_DIR, _settings_dir())
+        except OSError as exc:  # locked or offline cloud placeholder: retried next launch
+            print(f"[app-server] settings move skipped: {exc}", file=sys.stderr)
+    apply_user_settings_to_env(load_user_settings(_settings_dir()))
 
 
 def write_placeholder_generated_session() -> None:
@@ -2267,13 +2555,47 @@ def read_generated_session_js() -> str:
     return EMPTY_GENERATED_SESSION_JS
 
 
+APP_LOG_MAX_BYTES = 10 * 1024 * 1024
+_app_log_stream: Any = None
+_app_log_rotate_lock = threading.Lock()
+
+
 def configure_app_logging(log_file: str | Path | None = None) -> None:
+    global _app_log_stream
     target = Path(log_file).expanduser() if log_file else APP_LOG_FILE
     target.parent.mkdir(parents=True, exist_ok=True)
     stream = target.open("a", encoding="utf-8", buffering=1)
     sys.stdout = stream
     sys.stderr = stream
+    _app_log_stream = stream
+    # In place, never renamed: a macOS Dock relaunch runs this while the serving copy still writes the file.
+    _rotate_app_log_if_large()
     print(f"\n[{datetime.now().isoformat(timespec='seconds')}] {APP_NAME} starting")
+
+
+def _rotate_app_log_if_large() -> None:
+    """Copy a too-large app.log to app.log.1 and empty it, keeping the open stream.
+
+    print() and faulthandler write through the one handle opened at launch.
+    Windows cannot rename an open file, and a macOS relaunch may run while the
+    serving copy writes it, so the file is copied and then truncated. The stream
+    is in append mode, so later writes start at the new end.
+    """
+    # ponytail: lines written between the copy and the truncate are lost; fine for a diagnostic log.
+    stream = _app_log_stream
+    if stream is None or not _app_log_rotate_lock.acquire(blocking=False):
+        return
+    try:
+        if os.fstat(stream.fileno()).st_size <= APP_LOG_MAX_BYTES:
+            return
+        stream.flush()
+        target = Path(stream.name)
+        shutil.copyfile(target, target.with_name(target.name + ".1"))
+        stream.truncate(0)
+    except (OSError, ValueError):
+        pass
+    finally:
+        _app_log_rotate_lock.release()
 
 
 def enable_fatal_error_logging() -> None:
@@ -2283,24 +2605,51 @@ def enable_fatal_error_logging() -> None:
         print(f"[app-server] faulthandler unavailable: {exc}", file=sys.stderr, flush=True)
 
 
-def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> bool:
+def _local_server_health(host: str, port: int, *, timeout: float = 0.35) -> dict[str, Any] | None:
+    """The /api/health payload when our own copy serving this data folder answers, else None."""
     url = f"http://{host}:{port}/api/health"
     try:
         request = Request(url, headers={"Cache-Control": "no-cache"})
-        with urlopen(request, timeout=timeout) as response:
+        # Never via a proxy: urllib proxies 127.0.0.1 under Windows '<local>' and macOS default exceptions.
+        with build_opener(ProxyHandler({})).open(request, timeout=timeout) as response:
             if response.status != HTTPStatus.OK:
-                return False
+                return None
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, json.JSONDecodeError):
-        return False
+        return None
     except Exception as exc:
         print(f"[app-server] unexpected error in health check: {exc}", file=sys.stderr)
-        return False
-    return bool(
+        return None
+    ours = (
         isinstance(payload, dict)
         and payload.get("ok") is True
         and payload.get("app") == APP_NAME
+        # No "home": a copy from before the tag, still ours. ponytail: a typed, bookmarked or
+        # restored 127.0.0.1:8765 tab still reaches another account's copy; a per-launch token cookie closes that.
+        and payload.get("home", _DATA_FOLDER_TAG) == _DATA_FOLDER_TAG
     )
+    return payload if ours else None
+
+
+def _local_server_is_healthy(host: str, port: int, *, timeout: float = 0.35) -> bool:
+    return _local_server_health(host, port, timeout=timeout) is not None
+
+
+def _open_running_app(host: str, port: int) -> None:
+    """Open the copy that already runs; on a Mac, first say so when it is another version.
+
+    Replacing the Mac app by hand (a DMG install) leaves its server running, and that
+    old code would then serve the new screen files.
+    """
+    if is_frozen_app() and sys.platform == "darwin":
+        # No version: a copy from before /api/health carried one, so another version.
+        running = (_local_server_health(host, port, timeout=5.0) or {}).get("version")
+        if str(running or "") != str(load_app_update_config().get("version") or ""):
+            _show_macos_alert(
+                "다른 버전의 ClassInEDBMVP가 이미 실행 중입니다. "
+                "열리는 화면의 ‘···’ 메뉴에서 ‘종료’를 누른 뒤 ‘응용 프로그램’ 폴더에서 ClassInEDBMVP를 다시 열어 주세요."
+            )
+    webbrowser.open(f"http://{host}:{port}/")
 
 
 def _coerce_bool(value: Any, *, default: bool = False) -> bool:
@@ -2468,42 +2817,69 @@ def _command_info(command: list[str]) -> dict[str, Any]:
 
 def describe_runtime_diagnostics() -> dict[str, Any]:
     preprocess = _preprocess_module()
-    pdf_converters = [_command_info(command) for command in preprocess._iter_hwp_pdf_converter_commands()]
+    pdf_commands = preprocess._iter_hwp_pdf_converter_commands()
+    pdf_converters = [_command_info(command) for command in pdf_commands]
     hwp_to_hwpx_converters = [_command_info(command) for command in preprocess._iter_hwp_hwpx_converter_commands()]
     html_converters = [_command_info(command) for command in preprocess._iter_pyhwp_html_converter_commands()]
     text_extractors = [_command_info(command) for command in preprocess._iter_hwp_text_converter_commands()]
     chrome_pdf_converters = [_command_info(command) for command in preprocess._iter_chrome_pdf_commands()]
     hwp_renderers = [_command_info(command) for command in preprocess._iter_rhwp_core_renderer_commands()]
+    if preprocess._bundled_rhwp() is not None:
+        # The installed app renders and reads HWP/HWPX with its bundled rhwp, in-process.
+        hwp_renderers.append({"name": "rhwp-python", "path": "", "args": []})
+        text_extractors.append({"name": "rhwp-python", "path": "", "args": []})
+    else:
+        # A source run renders with rhwp-python in a subprocess, as _render_hwp_pages_with_rhwp_python does.
+        hwp_renderers.extend(_command_info(command) for command in preprocess._iter_rhwp_python_renderer_commands())
 
-    pdf_ready = bool(pdf_converters)
+    # Stock LibreOffice opens only Hangul 97 files; it counts once it has the H2Orestart extension.
+    stock_libreoffice = [
+        command for command in pdf_commands
+        if "--headless" in command and not preprocess._libreoffice_reads_hwp(command[0])
+    ]
+    pdf_ready = len(pdf_commands) > len(stock_libreoffice)
     html_pdf_ready = bool(html_converters and chrome_pdf_converters)
     hwp_renderer_ready = bool(hwp_renderers)
     hwp_ready = bool(pdf_ready or html_pdf_ready or hwp_renderer_ready)
     hwpx_ready = bool(pdf_ready or hwp_renderer_ready)
+    # warnings/recommendedActions are teacher copy; tool names and settings stay in technicalNotes
+    # for support and bug reports.
     warnings: list[str] = []
     recommended_actions: list[str] = []
+    technical_notes: list[str] = []
 
     if not pdf_ready and not hwp_renderer_ready:
-        warnings.append("LibreOffice, rhwp, hwp5pdf, airun-hwp, or rhwp-core renderer was not found.")
-        recommended_actions.append("LibreOffice/rhwp/HWP PDF 변환기, airun-hwp, 또는 rhwp-core 렌더러를 설치하거나, HWP/HWPX를 PDF로 내보낸 뒤 업로드해 주세요.")
+        warnings.append("HWPX 파일은 바로 열 수 없어요." if html_pdf_ready else "한글 파일을 바로 열 수 없어요.")
+        recommended_actions.append("한글 프로그램에서 PDF로 저장한 뒤 그 PDF를 넣어 주세요.")
+        technical_notes.append(
+            "LibreOffice was found without the H2Orestart extension (needs Java 8+), "
+            "so it opens only Hangul 97 files, not HWP 5/HWPX."
+            if stock_libreoffice
+            else "LibreOffice, rhwp, hwp5pdf, airun-hwp, or rhwp-core renderer was not found."
+        )
     if html_converters and not chrome_pdf_converters:
-        warnings.append("pyhwp HTML fallback is available, but Chrome PDF printing was not found.")
-        recommended_actions.append("Chrome을 설치하거나 EDB_CHROME 환경 변수로 Chrome 실행 파일 경로를 지정해 주세요.")
+        technical_notes.append(
+            "pyhwp HTML fallback is available, but Chrome PDF printing was not found "
+            "(install Chrome or set EDB_CHROME)."
+        )
     if not text_extractors:
-        warnings.append("hwp5txt/unhwp/rhwp/hwpilot/kordoc text extractor was not found; HWP 문항 수 사전 점검이 약해집니다.")
-        recommended_actions.append("pyhwp/hwp5txt, unhwp, rhwp, HWPilot, 또는 kordoc를 설치하면 HWP 내부 텍스트 기반 문항 수 QA가 더 정확해집니다.")
+        warnings.append("한글 파일의 문항 수 사전 점검이 약해질 수 있어요.")
+        technical_notes.append("hwp5txt/unhwp/rhwp/hwpilot/kordoc text extractor was not found.")
     if not hwp_to_hwpx_converters:
-        recommended_actions.append("선택 사항: HWPilot을 설치하면 HWP→HWPX 정규화 경로를 추가로 사용할 수 있습니다.")
+        technical_notes.append("Optional: HWPilot adds the HWP to HWPX normalization path.")
 
     if hwp_ready and hwpx_ready:
         status = "ready"
         label = "준비됨"
+        summary = "바로 열기 가능"
     elif hwp_ready or hwpx_ready:
         status = "partial"
         label = "부분 준비"
+        summary = "HWP 바로 열기 가능 · HWPX는 PDF로 저장해서 사용"
     else:
         status = "blocked"
-        label = "확인 필요"
+        label = "PDF로 저장 필요"
+        summary = "PDF로 저장해서 사용"
 
     tool_counts = {
         "pdfConverters": len(pdf_converters),
@@ -2513,17 +2889,6 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
         "chromePdfConverters": len(chrome_pdf_converters),
         "hwpRenderers": len(hwp_renderers),
     }
-    summary_parts = [
-        f"PDF {tool_counts['pdfConverters']}",
-        f"텍스트 {tool_counts['textExtractors']}",
-        f"브리지 {tool_counts['hwpToHwpxConverters']}",
-    ]
-    if hwp_renderers:
-        summary_parts.append(f"렌더 {tool_counts['hwpRenderers']}")
-    if html_pdf_ready:
-        summary_parts.append("HTML fallback")
-    if warnings:
-        summary_parts.append(f"주의 {len(warnings)}")
 
     return {
         "ok": True,
@@ -2535,7 +2900,7 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
         "hangul": {
             "status": status,
             "label": label,
-            "summary": " · ".join(summary_parts),
+            "summary": summary,
             "toolCounts": tool_counts,
             "pdfReady": pdf_ready,
             "hwpReady": hwp_ready,
@@ -2550,6 +2915,7 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
             "hwpRenderers": hwp_renderers,
             "warnings": warnings,
             "recommendedActions": recommended_actions,
+            "technicalNotes": technical_notes,
         },
     }
 
@@ -2586,7 +2952,9 @@ def _processing_error_context(exc: BaseException) -> dict[str, Any]:
                 context.setdefault(key, str(value) if isinstance(value, Path) else value)
         current = getattr(current, "cause", None) or current.__cause__
     if context.get("sourceFile"):
-        context.setdefault("fileName", Path(str(context["sourceFile"])).name)
+        # The teacher's own file name: no folder, no managed-upload digest prefix or name-hash tail.
+        path = Path(str(context["sourceFile"]))
+        context["sourceFile"] = context["fileName"] = _MANAGED_UPLOAD_NAME.sub(r"\1", path.stem) + path.suffix
     return context
 
 
@@ -2612,7 +2980,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
                 reason_text = reason_text.replace(re.split(r"[\\/]", filename)[-1], "")
     pdf_open_failure = any(
         type(item).__name__ in {"FileDataError", "EmptyFileError"}
-        or str(item).lower().startswith("failed to open pdf document ")
+        or str(item).lower().startswith(("failed to open pdf document ", "pdf document has no pages"))
         for item in causes
     )
     native_cv2_causes = [item for item in causes if type(item).__module__ == "cv2"]
@@ -2632,7 +3000,13 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     elif any(isinstance(item, PermissionError) or isinstance(item, OSError) and _is_windows_file_busy(item) for item in causes):
         code, kind = "runtime_storage_access_denied", "storage_access_denied"
         summary = "작업 폴더에 파일을 저장하지 못했습니다. 파일 잠금 또는 폴더 쓰기 권한을 확인해 주세요."
-        steps = ["해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.", "OneDrive 동기화 상태와 Windows 보안의 제어된 폴더 액세스 알림을 확인해 주세요.", "계속 실패하면 쓰기 가능한 작업 폴더에서 다시 실행한 뒤 오류 상세를 복사해 신고해 주세요."]
+        steps = [
+            "해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.",
+            "시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더에서 ClassInEDBMVP의 접근을 허용해 주세요."
+            if sys.platform == "darwin"
+            else "OneDrive 동기화가 끝났는지, Windows 보안이 접근을 막지 않았는지 확인해 주세요.",
+            "계속 실패하면 오류 상세를 복사해 신고해 주세요.",
+        ]
         retryable = True
     elif (
         any(isinstance(item, MemoryError) or isinstance(item, OSError) and (item.errno == errno.ENOMEM or getattr(item, "winerror", None) in {8, 14, 1455}) for item in causes)
@@ -2644,16 +3018,16 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     ):
         code, kind = "processing_memory_exhausted", "memory_exhausted"
         summary = "처리할 자료가 사용 가능한 메모리보다 커서 작업을 완료하지 못했습니다."
-        steps = ["다른 프로그램을 닫아 메모리를 확보해 주세요.", "PDF를 더 작은 페이지 묶음으로 나누거나 이미지 해상도를 낮춘 뒤 다시 시도해 주세요."]
-        retryable = False
+        steps = ["다른 프로그램을 닫은 뒤 다시 시도해 주세요.", "계속 실패하면 PDF를 나누거나 이미지 해상도를 낮춰 다시 등록해 주세요."]
+        retryable = True
     elif any(isinstance(item, OSError) and (
         item.errno == errno.ENOSPC or getattr(item, "winerror", None) == 112
         or any(signal in reason_text for signal in ("disk full", "no space left on device", "not enough space on the disk"))
     ) for item in causes):
         code, kind = "runtime_storage_full", "storage_full"
         summary = "디스크의 남은 용량이 부족해 원본 또는 변환 파일을 저장하지 못했습니다."
-        steps = ["작업 폴더가 있는 디스크의 여유 공간을 확보해 주세요.", "파일을 나누어 다시 등록해 주세요. 기존 편집 내용과 원본은 유지됩니다."]
-        retryable = False
+        steps = ["작업 폴더가 있는 디스크의 여유 공간을 확보해 주세요.", "공간을 확보한 뒤 다시 시도해 주세요. 기존 편집 내용과 원본은 그대로 있습니다."]
+        retryable = True
         for item in causes:
             if getattr(item, "available_bytes", None) is not None:
                 context["availableBytes"] = item.available_bytes
@@ -2669,7 +3043,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     elif not pdf_open_failure and ("bundled pymupdf" in reason_text or "pymupdf is required to render pdf" in reason_text):
         code, kind = "pdf_renderer_unavailable", "app_dependency_missing"
         summary = "앱 내부의 PDF 변환 기능을 불러오지 못했습니다. 파일 용량 문제가 아닌 프로그램 설치 오류입니다."
-        steps = ["최신 설치파일로 앱을 다시 설치해 주세요. 별도 Python 설치는 필요하지 않습니다.", "계속 실패하면 아래 오류 상세를 복사해 버그 리포트로 보내 주세요."]
+        steps = ["최신 설치파일로 앱을 다시 설치해 주세요. 별도 Python 설치는 필요하지 않습니다.", "계속 실패하면 아래 오류 상세를 복사해 문제 신고로 보내 주세요."]
         retryable = False
     elif not pdf_open_failure and ("password protected" in reason_text or "password-protected" in reason_text or "encrypted pdf" in reason_text):
         code, kind = "pdf_password_protected", "invalid_document"
@@ -2689,7 +3063,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     elif getattr(exc, "code", "") == "pdf_page_processing_failed":
         code, kind = "pdf_page_processing_failed", "app_internal_error"
         summary = "PDF 페이지를 처리하던 중 프로그램 오류가 발생했습니다. 용량 초과로 확인된 오류는 아닙니다."
-        steps = ["아래 파일명과 페이지 범위, 오류 상세를 복사해 버그 리포트로 보내 주세요.", "원본 파일과 기존 편집 내용은 유지됩니다."]
+        steps = ["아래 파일명과 페이지 범위, 오류 상세를 복사해 문제 신고로 보내 주세요.", "원본 파일과 기존 편집 내용은 유지됩니다."]
         retryable = False
     elif isinstance(exc, (ImportError, ModuleNotFoundError)):
         code, kind = "app_dependency_missing", "app_dependency_missing"
@@ -2701,7 +3075,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
     ):
         code, kind = "app_internal_error", "app_internal_error"
         summary = "프로그램 내부 오류로 작업을 완료하지 못했습니다. 파일 용량 초과로 확인된 오류는 아닙니다."
-        steps = ["오류 상세를 복사해 버그 리포트로 보내 주세요.", "앱을 다시 실행한 뒤 같은 작업을 시도해 주세요. 기존 편집 내용은 유지됩니다."]
+        steps = ["오류 상세를 복사해 문제 신고로 보내 주세요.", "앱을 다시 실행한 뒤 같은 작업을 시도해 주세요. 기존 편집 내용은 유지됩니다."]
         retryable = True
     else:
         return None
@@ -2743,28 +3117,14 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
         "detail": f"{type(exc).__name__}: {message}",
         **_processing_error_context(exc),
     }
-    if isinstance(exc, PermissionError) or (
-        isinstance(exc, OSError) and _is_windows_file_busy(exc)
-    ):
-        payload.update({
-            "code": "runtime_storage_access_denied",
-            "errorKind": "storage_access_denied",
-            "error": "작업 폴더에 파일을 저장하지 못했습니다. 파일 잠금 또는 폴더 쓰기 권한을 확인해 주세요.",
-            "detail": message,
-            "retryable": True,
-            "recoverySteps": [
-                "해당 파일을 사용 중인 프로그램을 닫고 잠시 후 다시 시도해 주세요.",
-                "OneDrive 동기화 상태와 Windows 보안의 제어된 폴더 액세스 알림을 확인해 주세요.",
-                "계속 실패하면 쓰기 가능한 작업 폴더로 실행하거나 오류 내용을 복사해 신고해 주세요. 원본 파일과 대기열은 유지됩니다.",
-            ],
-        })
-        return payload
+    # PermissionError / file-busy is already classified above as runtime_storage_access_denied.
     if isinstance(exc, FileNotFoundError) and (
         "problem_crops" in message or "problem_cutouts" in message
     ):
         payload.update({
             "code": "recognition_asset_missing",
             "operation": "session_export",
+            "error": "문항 이미지 파일을 찾지 못했습니다.",
             "retryable": True,
             "recoverySteps": [
                 "같은 원본 파일로 문제 인식을 다시 시도해 주세요.",
@@ -2777,12 +3137,38 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
         or "valid HWPX" in message
         or "한컴오피스" in message
     ):
-        payload["errorKind"] = "hangul_conversion_failed"
-        payload["recoverySteps"] = [
-            "한컴오피스에서 원본 HWP/HWPX를 PDF로 내보낸 뒤 PDF를 다시 업로드해 주세요.",
-            "또는 HWP/HWPX를 PDF로 변환할 수 있는 로컬 변환기를 설치한 뒤 다시 실행해 주세요.",
-            "암호, 배포용, DRM, 복사 방지 문서라면 보호를 해제하거나 권한 있는 PDF 내보내기를 사용해 주세요.",
-        ]
+        payload.update({
+            "code": "hwp_conversion_failed",
+            "errorKind": "hangul_conversion_failed",
+            "error": "한글(HWP) 파일을 PDF로 바꾸지 못했습니다. 한컴오피스에서 PDF로 저장한 뒤 등록해 주세요.",
+            "retryable": False,
+            "recoverySteps": [
+                "한컴오피스(한글)에서 파일을 열어 PDF로 저장한 뒤, 그 PDF를 등록해 주세요.",
+                "배포용·암호 문서라면 보호를 해제한 뒤 PDF로 저장해 주세요.",
+            ],
+        })
+        # preprocess names the protection flags only after every renderer and converter failed.
+        # "copy_protection" (bit 9) is the e-signature reserve bit, not a protection: ignore it.
+        protected = re.search(r"protection flags are set \(([^)]*)\)", message)
+        flags = set(protected.group(1).split(", ")) if protected else set()
+        kind = next((label for names, label in (
+            ({"password", "encrypted_cert"}, "암호가 걸린"),
+            ({"distribution"}, "배포용으로 보호된"),
+            ({"drm"}, "문서 보안이 걸린"),
+        ) if flags & names), "")
+        if kind:
+            payload.update({
+                "code": "hwp_protected_document",
+                "error": f"{kind} 한글 파일이에요. 앱에서 바로 열 수 없으니 한글 프로그램에서 PDF로 저장해 넣어 주세요.",
+                "recoverySteps": [
+                    "한글 프로그램에서 파일을 열고 PDF로 저장한 뒤, 그 PDF를 넣어 주세요.",
+                    "암호를 모르거나 PDF 저장이 막혀 있으면 파일을 만든 사람에게 PDF를 받아 주세요.",
+                ],
+            })
+        elif "libreoffice_profile_in_use" in message:
+            # An open LibreOffice (on a Mac it keeps running with no window) took the conversion.
+            payload["retryable"] = True
+            payload["recoverySteps"].insert(0, "열려 있는 LibreOffice를 완전히 종료한 뒤 다시 시도해 주세요.")
     elif "code" not in payload:
         if isinstance(exc, FileNotFoundError):
             payload.update({
@@ -2790,17 +3176,38 @@ def _export_error_payload(exc: Exception) -> dict[str, Any]:
                 "error": "원본 파일을 찾을 수 없습니다. 파일이 이동되거나 삭제되었는지 확인해 주세요.",
                 "retryable": False, "recoverySteps": ["원본 파일을 다시 선택해 등록해 주세요."],
             })
+        elif isinstance(exc, ValueError) and "공통 지문" in message and "찾지 못했" in message:
+            # build_problem_board_edb raises these for an empty shared-passage / questions target.
+            passages = "제외한" not in message
+            payload.update({
+                "code": "content_target_empty", "errorKind": "content_target_empty",
+                "error": "이 자료에서 여러 문항이 함께 쓰는 공통 지문을 찾지 못했습니다." if passages
+                else "이 자료에서 공통 지문을 제외한 문항을 찾지 못했습니다.",
+                "retryable": False,
+                "recoverySteps": [
+                    "‘문항 AI 인식’으로 등록하거나 ‘수동 자르기’로 지문 영역을 지정해 주세요." if passages
+                    else "‘문항 AI 인식’으로 다시 등록해 주세요.",
+                ],
+            })
         elif isinstance(exc, ValueError):
             payload.update({
                 "code": "invalid_input", "errorKind": "invalid_input",
-                "error": f"입력 자료 또는 처리 요청을 처리하지 못했습니다. 원인: {message}",
+                # Korean messages are already written for teachers; English ones stay in detail.
+                "error": message if re.search(r"[가-힣]", message) else "이 파일을 처리하지 못했습니다.",
                 "retryable": False,
-                "recoverySteps": ["아래 오류 상세를 확인해 원본 파일이나 선택한 옵션을 점검해 주세요.", "같은 정상 파일에서도 반복되면 오류 상세를 복사해 신고해 주세요."],
+                "recoverySteps": ["원본을 PDF로 다시 저장한 뒤 등록해 주세요.", "반복되면 오류 상세를 복사해 문제 신고로 보내 주세요."],
+            })
+        elif type(exc).__name__ == "UnidentifiedImageError":
+            payload.update({
+                "code": "image_invalid_document", "errorKind": "invalid_document",
+                "error": "이미지 파일이 손상되었거나 지원하지 않는 형식입니다.",
+                "retryable": False,
+                "recoverySteps": ["이미지를 PNG나 JPG로 다시 저장한 뒤 등록해 주세요."],
             })
         elif isinstance(exc, OSError):
             payload.update({
                 "code": "runtime_storage_error", "errorKind": "storage_error",
-                "error": f"파일을 읽거나 저장하는 중 운영체제 오류가 발생했습니다. 원인: {message}",
+                "error": "파일을 읽거나 저장하지 못했습니다.",
                 "retryable": True,
                 "recoverySteps": ["원본 파일과 작업 폴더에 접근할 수 있는지 확인해 주세요.", "반복되면 오류 상세를 복사해 신고해 주세요."],
             })
@@ -2970,6 +3377,12 @@ def _truncate_utf8_bytes(value: str, max_bytes: int) -> str:
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
+def _truncate_utf16_units(value: str, max_units: int) -> str:
+    """Cut to Windows path units; a surrogate pair cut in half is dropped whole."""
+    encoded = value.encode("utf-16-le", errors="surrogatepass")
+    return encoded[: max(0, max_units) * 2].decode("utf-16-le", errors="ignore")
+
+
 def _sanitize_path_component_token(value: str | None) -> str:
     raw = str(value or "").strip()
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in raw)
@@ -3025,7 +3438,9 @@ def sanitize_upload_file_name(
     *,
     max_bytes: int = UPLOAD_FILE_NAME_MAX_BYTES,
 ) -> str:
-    raw = Path(value or "upload.bin").name
+    # macOS hands out decomposed (NFD) Hangul: compose it first so the byte cut below
+    # never splits a syllable and the lesson name reads the same on Windows.
+    raw = Path(unicodedata.normalize("NFC", value or "upload.bin")).name
     invalid = '<>:"/\\|?*'
     safe = "".join(ch if ch not in invalid and ord(ch) >= 32 else "_" for ch in raw).strip(" .")
     if not safe:
@@ -3051,21 +3466,30 @@ def sanitize_edb_file_name(
     *,
     fallback_stem: str = "classin",
     max_bytes: int = SAFE_PATH_COMPONENT_MAX_BYTES,
+    max_units: int | None = None,
+    suffix: str | None = None,
 ) -> str:
     stem_max_bytes = min(
         EDB_FILE_STEM_MAX_BYTES,
         max(1, int(max_bytes) - EDB_PART_SUFFIX_RESERVED_BYTES),
     )
+    stem_max_units = None if max_units is None else max(1, int(max_units) - EDB_PART_SUFFIX_RESERVED_BYTES)
 
-    def _clean_stem(raw: str | None, fallback: str) -> str:
-        candidate = Path(str(raw or "")).name.strip()
+    def _clean_stem(raw: str | None, fallback: str, suffix: str | None = None) -> str:
+        candidate = Path(unicodedata.normalize("NFC", str(raw or ""))).name.strip()
         if candidate.lower().endswith(".edb"):
             candidate = candidate[:-4]
         candidate = candidate.strip(" .")
+        if stem_max_units is not None:
+            # Windows counts path length in UTF-16 units: a Hangul syllable costs 1 unit there
+            # but 3 bytes in UTF-8. Cut only the name, so the suffix added below always survives.
+            suffix_units = _windows_path_units(f"_{suffix}") if suffix else 0
+            candidate = _truncate_utf16_units(candidate, stem_max_units - suffix_units).strip(" .")
         if not candidate:
             return fallback
         safe = sanitize_output_dir_name(
             candidate,
+            suffix=suffix,
             max_bytes=stem_max_bytes,
         ).strip(" ._")
         safe = _truncate_utf8_bytes(safe, stem_max_bytes).rstrip(" ._") or fallback
@@ -3074,8 +3498,20 @@ def sanitize_edb_file_name(
         return _finalize_safe_path_component(safe, max_bytes=stem_max_bytes)
 
     fallback = _clean_stem(fallback_stem, "classin")
-    stem = _clean_stem(value, fallback) if value is not None else fallback
+    stem = _clean_stem(value, fallback, suffix) if value is not None else fallback
     return f"{stem}.edb"
+
+
+# A managed upload is stored as <sha256>_<teacher's name>_<10-hex name hash><ext>; the tail
+# goes only when the prefix is there, so 'plain_0123456789.pdf' keeps its name.
+_MANAGED_UPLOAD_NAME = re.compile(r"^[0-9a-f]{40,64}_(.+?)(?:_[0-9a-f]{10})?$")
+
+
+def _lesson_name_from_sources(source_paths: list[Path]) -> str:
+    """Readable lesson name: the first file's name without the managed upload digest
+    prefix and its name-hash tail (the tail goes only when the prefix is there)."""
+    stem = _MANAGED_UPLOAD_NAME.sub(r"\1", source_paths[0].stem).strip() or "새 수업"
+    return stem if len(source_paths) == 1 else f"{stem} 외 {len(source_paths) - 1}개"
 
 
 def _managed_upload_target_name(
@@ -3166,10 +3602,13 @@ def _managed_publish_artifact_paths(
         max_bytes=SAFE_PATH_COMPONENT_MAX_BYTES,
         minimum_bytes=EDB_PART_SUFFIX_RESERVED_BYTES + 1,
     )
+    # The build time ends the name, so each rebuild downloads as its own file instead of
+    # the browser saving 'name (1).edb' next to an older build with the toast's name.
     edb_name = sanitize_edb_file_name(
         requested_edb_name,
         fallback_stem=fallback_stem,
-        max_bytes=edb_name_budget,
+        max_units=edb_name_budget,
+        suffix=time.strftime("%m%d_%H%M%S"),
     )
     return edb_name, staging_dir, final_dir
 
@@ -3295,6 +3734,7 @@ def _adopt_recovered_output_dir_after_success(
 ) -> bool:
     if not recovered or not any(summary.get("status") == "applied" for summary in summaries):
         return False
+    session["history_key"] = _session_history_key(session)  # still one 최근 수업 entry after the move
     session["output_dir"] = str(output_dir)
     session["outputDir"] = str(output_dir)
     return True
@@ -3367,7 +3807,7 @@ def validate_edb_file(path: str | Path, *, expected_min_records: int = 1) -> dic
 
 def _normalize_edb_part_payload(part: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(part)
-    part_path = Path(str(normalized.get("edbPath") or normalized.get("edb_path") or "")).resolve()
+    part_path = (decode_file_reference(normalized.get("edbPath") or normalized.get("edb_path")) or Path("")).resolve()
     part_index = int(normalized.get("partIndex") or normalized.get("part_index") or 1)
     part_count = int(normalized.get("partCount") or normalized.get("part_count") or 1)
     record_count = int(normalized.get("recordCount") or normalized.get("record_count") or 0)
@@ -3817,6 +4257,20 @@ def _path_from_file_uri(value: str) -> tuple[Path, bool]:
     return Path(raw_path), False
 
 
+@lru_cache(maxsize=16384)
+def _resolved_path(text: str) -> Path:
+    # ponytail: each path is resolved once per run (on Windows resolve() opens the file, and every
+    # 확인, undo or save walks the lesson's ~1,000 paths). A junction retarget, or a path first seen
+    # while its drive was offline, keeps its old answer until restart; /api/file re-resolves uncached,
+    # so that fails closed (403).
+    return Path(text).resolve()
+
+
+def _resolve_unless_network(path: Path) -> Path:
+    # Resolving or stat'ing \\host\... signs in to that host over SMB with the teacher's Windows login.
+    return path if str(path).startswith("\\\\") else _resolved_path(str(path))
+
+
 def decode_file_reference(value: str | None) -> Path | None:
     if not value:
         return None
@@ -3830,10 +4284,23 @@ def decode_file_reference(value: str | None) -> Path | None:
     parsed = urlparse(text)
     if parsed.scheme == "file":
         path, is_unc = _path_from_file_uri(text)
-        return path if is_unc else path.resolve()
-    path = Path(text)
-    if not path.is_absolute():
-        path = (BASE_DIR / path).resolve()
+        if not is_unc:
+            path = _resolve_unless_network(path)
+    else:
+        path = Path(text)
+        if not path.is_absolute():
+            path = _resolve_unless_network(BASE_DIR / path)
+    # Data folder moved (OneDrive folder backup, new PC or user name, or off a network share): a stored
+    # path into an old .app_runtime reads the same file under the current one. A \\host path is never
+    # stat'ed (R12): it moves only when its copy under the current runtime exists. Paths already under
+    # the current runtime fail the prefix test without a syscall.
+    path_text = str(path)
+    if not os.path.normcase(path_text).startswith(os.path.normcase(str(RUNTIME_DIR)) + os.sep):
+        parts = PureWindowsPath(path_text).parts  # both separators: a Mac also reads a Windows path
+        if RUNTIME_DIR.name in parts:
+            moved = RUNTIME_DIR.joinpath(*parts[len(parts) - parts[::-1].index(RUNTIME_DIR.name):])
+            if os.path.exists(moved) if path_text.startswith("\\\\") else not os.path.exists(path_text):
+                path = moved
     return path
 
 
@@ -3850,14 +4317,25 @@ def _path_as_file_uri(path: Path) -> str:
     normalized = str(path).replace("\\", "/")
     if normalized.startswith("//"):
         return f"file://{quote(normalized[2:], safe='/:')}"
-    return path.resolve().as_uri()
+    return _resolved_path(str(path)).as_uri()
 
 
-def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> Any:
-    source_text = str(source_root.resolve())
-    target_text = str(target_root.resolve())
-    source_uri = _path_as_file_uri(source_root)
-    target_uri = _path_as_file_uri(target_root)
+def _remap_artifact_paths(
+    value: Any,
+    source_root: Path,
+    target_root: Path,
+    *,
+    _roots: tuple[str, str, str, str] | None = None,
+) -> Any:
+    if _roots is None:
+        # Resolved once per call tree: a publish remaps tens of thousands of values.
+        _roots = (
+            str(source_root.resolve()),
+            str(target_root.resolve()),
+            _path_as_file_uri(source_root),
+            _path_as_file_uri(target_root),
+        )
+    source_text, target_text, source_uri, target_uri = _roots
     if isinstance(value, str):
         if value.startswith("/api/file"):
             parsed = urlparse(value)
@@ -3867,6 +4345,7 @@ def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> A
                     str(decode_file_reference(raw_path) or raw_path),
                     source_root,
                     target_root,
+                    _roots=_roots,
                 )
                 if isinstance(remapped_path, str) and remapped_path != str(
                     decode_file_reference(raw_path) or raw_path
@@ -3878,13 +4357,13 @@ def _remap_artifact_paths(value: Any, source_root: Path, target_root: Path) -> A
             return f"{target_uri}{value[len(source_uri):]}"
         return value
     if isinstance(value, Path):
-        remapped = _remap_artifact_paths(str(value), source_root, target_root)
+        remapped = _remap_artifact_paths(str(value), source_root, target_root, _roots=_roots)
         return Path(remapped) if isinstance(remapped, str) else value
     if isinstance(value, list):
-        return [_remap_artifact_paths(item, source_root, target_root) for item in value]
+        return [_remap_artifact_paths(item, source_root, target_root, _roots=_roots) for item in value]
     if isinstance(value, dict):
         return {
-            key: _remap_artifact_paths(item, source_root, target_root)
+            key: _remap_artifact_paths(item, source_root, target_root, _roots=_roots)
             for key, item in value.items()
         }
     return value
@@ -3954,6 +4433,22 @@ def _parse_file_preview_max_dimension(query: dict[str, list[str]]) -> int | None
     return max(FILE_PREVIEW_MIN_DIMENSION, min(FILE_PREVIEW_MAX_DIMENSION, requested))
 
 
+@lru_cache(maxsize=2048)
+def _board_render_has_missing_tail_cached(
+    board_path: str,
+    board_modified_ns: int,
+    board_size: int,
+    source_path: str,
+    source_modified_ns: int,
+    source_size: int,
+) -> bool:
+    """Pixel-only decision, so one check serves every preview size and option."""
+    from PIL import Image
+
+    with Image.open(source_path) as loaded, Image.open(board_path) as rendered:
+        return bool(_lazy_call("image_reconstruction_backend", "board_render_has_missing_tail", loaded, rendered))
+
+
 @lru_cache(maxsize=32)
 def _build_guarded_board_payload(
     board_path: str,
@@ -3965,13 +4460,14 @@ def _build_guarded_board_payload(
     render_options: str,
     max_dimension: int | None,
 ) -> bytes | None:
-    """Repair a clipped derived preview in memory, leaving source files intact."""
+    """Repair a clipped derived preview in memory, leaving source files intact.
+
+    Callers first confirm _board_render_has_missing_tail_cached; the stats are cache-key inputs.
+    """
     del board_modified_ns, board_size, source_modified_ns, source_size
     from PIL import Image
 
-    with Image.open(source_path) as loaded, Image.open(board_path) as rendered:
-        if not _lazy_call("image_reconstruction_backend", "board_render_has_missing_tail", loaded, rendered):
-            return None
+    with Image.open(source_path) as loaded:
         source = loaded.copy()
 
     options = json.loads(render_options)
@@ -4017,11 +4513,14 @@ def _guarded_board_payload(
     }
     try:
         board_stat, source_stat = board_path.stat(), source.stat()
-        return _build_guarded_board_payload(
+        file_key = (
             str(board_path.resolve()), board_stat.st_mtime_ns, board_stat.st_size,
             str(source.resolve()), source_stat.st_mtime_ns, source_stat.st_size,
-            json.dumps(options, sort_keys=True), max_dimension,
         )
+        # The healthy (common) case stops here on a cache hit: no image decode per preview size.
+        if not _board_render_has_missing_tail_cached(*file_key):
+            return None
+        return _build_guarded_board_payload(*file_key, json.dumps(options, sort_keys=True), max_dimension)
     except (OSError, ValueError):
         # An unavailable legacy source must not prevent the remaining session
         # from opening. Normal file/download error handling still applies.
@@ -4557,7 +5056,7 @@ def _session_publish_preflight_blocked_payload(
         "code": "publish_preflight_blocked",
         "operation": "session_publish",
         "retryable": False,
-        "error": "ClassIn 사전점검에서 제작 전 확인 문제가 발견되어 EDB publish를 중단했습니다.",
+        "error": "제작 전 확인이 필요한 문항이 있어 EDB 제작을 멈췄습니다.",
         "errorKind": "publish_preflight_blocked",
         "error_kind": "publish_preflight_blocked",
         "classinPreflight": preflight,
@@ -4568,10 +5067,7 @@ def _session_publish_preflight_blocked_payload(
         "classin_preflight_passed": False,
         "classinPreflightIssueCount": int(preflight.get("issueCount") or 0),
         "classin_preflight_issue_count": int(preflight.get("issueCount") or 0),
-        "recoverySteps": [
-            "표시된 문항 오류를 수정하거나 원본 PDF를 다시 등록해 주세요.",
-            "수정 후 같은 작업에서 다시 제작해 주세요.",
-        ],
+        "recoverySteps": ["표시된 문항을 고친 뒤 다시 제작해 주세요."],
         "blockingDuplicateProblemNumberGroups": duplicate_groups,
         "blocking_duplicate_problem_number_groups": duplicate_groups,
         "blockingIssueTypes": issue_types,
@@ -4897,6 +5393,15 @@ def _session_publish_summary(
     return summary
 
 
+def _without_placements(value: Any) -> Any:
+    """Copy to keep in the session: EDB parts' per-question "placements" are build-time data nothing reads back."""
+    if isinstance(value, dict):
+        return {key: _without_placements(item) for key, item in value.items() if key != "placements"}
+    if isinstance(value, list):
+        return [_without_placements(item) for item in value]
+    return value
+
+
 def _session_publish_history(
     source_session: dict[str, Any] | None,
     current_summary: dict[str, Any],
@@ -4917,7 +5422,7 @@ def _session_publish_history(
     for raw in [current_summary, *existing]:
         if not isinstance(raw, dict):
             continue
-        item = dict(raw)
+        item = _without_placements(raw)  # also slims entries saved before placements were dropped
         key = str(item.get("edbPath") or item.get("edb_path") or item.get("edbFileName") or item.get("edb_file_name") or "")
         if key and key in seen_paths:
             continue
@@ -5005,11 +5510,20 @@ def _apply_classin_review_result(
     return review
 
 
-def _session_history_key(session: dict[str, Any]) -> str:
+def _session_history_key(session: dict[str, Any], *, folder_only: bool = False) -> str:
+    # Set when a write moved the lesson to outputs/recovered: one 최근 수업 entry follows it there.
+    history_key = str(session.get("history_key") or "").strip()
+    if history_key:
+        return history_key
     for key in ("output_dir", "outputDir", "pages_json_path", "pagesJsonPath"):
         value = str(session.get(key) or "").strip()
         if value:
-            return value
+            # The id (and R40's history_key) hash the stored spelling, so every PC that syncs this folder
+            # lists the lesson under one id (conflict copies, R87). The dedupe key is decoded: a moved
+            # data folder's old and new spellings still match.
+            return str(decode_file_reference(value) or value) if folder_only else value
+    if folder_only:
+        return ""  # the name|time fallback below can be shared by two different lessons
     name = str(session.get("session_name") or session.get("sessionName") or "session")
     generated_at = str(session.get("generated_at") or session.get("generatedAt") or "")
     source_files = "|".join(str(path) for path in (session.get("input_files") or session.get("inputFiles") or []))
@@ -5022,7 +5536,7 @@ def _session_history_entry(session: dict[str, Any], *, updated_at: str | None = 
     counts = _session_problem_count_payload(problems)
     output_dir = str(session_snapshot.get("output_dir") or session_snapshot.get("outputDir") or "")
     generated_at = str(session_snapshot.get("generated_at") or session_snapshot.get("generatedAt") or "")
-    session_name = str(session_snapshot.get("session_name") or session_snapshot.get("sessionName") or "새 세션")
+    session_name = str(session_snapshot.get("session_name") or session_snapshot.get("sessionName") or "새 수업")
     history_key = _session_history_key(session_snapshot)
     entry_id = hashlib.sha1(history_key.encode("utf-8", errors="ignore")).hexdigest()[:16]
     publish_summary = session_snapshot.get("publishSummary")
@@ -5075,13 +5589,17 @@ def _session_history_with_session(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     entry = _session_history_entry(session, updated_at=updated_at)
+    key = _session_history_key(entry["session"], folder_only=True)
     seen = {entry["id"]}
     merged = [entry]
     for raw in history:
         if not isinstance(raw, dict):
             continue
         entry_id = str(raw.get("id") or "")
-        if not entry_id or entry_id in seen:
+        snapshot = raw.get("session") if isinstance(raw.get("session"), dict) else raw
+        # Stored ids were hashed from the folder spelling of their day; a moved data folder changes it.
+        # Lessons without a folder keep id-only dedupe.
+        if not entry_id or entry_id in seen or (key and _session_history_key(snapshot, folder_only=True) == key):
             continue
         seen.add(entry_id)
         merged.append(raw)
@@ -5115,6 +5633,15 @@ def content_disposition_attachment(filename: str) -> str:
     return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{encoded}"
 
 
+def _latest_session_stamp() -> tuple[int, int, int] | None:
+    """Identity of latest_session.json on disk. A sync tool (OneDrive, iCloud) that replaces the file changes it."""
+    try:
+        stat = LATEST_SESSION_JSON.stat()
+    except OSError:
+        return None
+    return stat.st_ino, stat.st_mtime_ns, stat.st_size
+
+
 def load_latest_session() -> dict[str, Any] | None:
     with _session_storage_lock:
         _recover_interrupted_session_reset()
@@ -5129,14 +5656,33 @@ def load_latest_session() -> dict[str, Any] | None:
 
 def save_latest_session(session: dict[str, Any], path: Path | None = None) -> None:
     target = path or LATEST_SESSION_JSON
-    payload = json.dumps(session, ensure_ascii=False, indent=2)
+    # Compact: indent=2 makes json use its slow pure-Python encoder on every save.
+    payload = json.dumps(session, ensure_ascii=False, separators=(",", ":"))
     with _session_storage_lock:
         if path is None or target == LATEST_SESSION_JSON:
             _recover_interrupted_session_reset()
         _atomic_write_text(target, payload)
 
 
-def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
+def _read_text_retrying_busy(path: Path) -> str:
+    """Read a small state file, waiting out short Windows scanner/sync locks."""
+    for delay in (0.1, 0.3, 0.8, None):
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            if delay is None or not _is_windows_file_busy(exc):
+                raise
+            time.sleep(delay)
+
+
+def load_session_history(path: Path | None = None, *, strict: bool = False) -> list[dict[str, Any]]:
+    """Return saved history. ``strict`` raises SessionHistoryUnreadable for a file that exists
+    but cannot be read (SessionHistoryCorrupt when it holds no list) instead of returning [],
+    so a locked or offline file is never replaced and cleanup never mistakes it for "no history".
+    """
+    if path is None:
+        # Lessons only a sync conflict copy holds stay listed and protected from cleanup.
+        return _with_history_conflict_copies(load_session_history(SESSION_HISTORY_JSON, strict=strict), strict=strict)
     target = path or SESSION_HISTORY_JSON
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
@@ -5144,17 +5690,66 @@ def load_session_history(path: Path | None = None) -> list[dict[str, Any]]:
         if not target.exists():
             return []
         try:
-            payload = json.loads(target.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            payload = json.loads(_read_text_retrying_busy(target) if strict else target.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except OSError as exc:
+            if strict:
+                raise SessionHistoryUnreadable(f"{type(exc).__name__}: {exc}") from exc
+            return []
+        except ValueError as exc:  # JSON or UTF-8 decode error
+            if strict:
+                raise SessionHistoryCorrupt(f"{type(exc).__name__}: {exc}") from exc
             return []
     if not isinstance(payload, list):
+        if strict:
+            raise SessionHistoryCorrupt(f"session history is {type(payload).__name__}, not a list")
         return []
     return [entry for entry in payload if isinstance(entry, dict)]
 
 
+def _history_conflict_copies() -> list[Path]:
+    # OneDrive keeps the other PC's version as 'session_history-PC명.json', iCloud as 'session_history 2.json'.
+    return sorted(SESSION_HISTORY_JSON.parent.glob(f"{SESSION_HISTORY_JSON.stem}?*{SESSION_HISTORY_JSON.suffix}"))
+
+
+def _with_history_conflict_copies(history: list[dict[str, Any]], *, strict: bool) -> list[dict[str, Any]]:
+    """Add lessons only a sync conflict copy holds (the main file wins for the same id).
+    A corrupt copy is skipped; an unreadable one raises only when strict (cleanup then deletes nothing)."""
+    # ponytail: copies stay until 초기화, so 최근 수업 can list more than 10 while one holds lessons the main file dropped
+    seen = {str(entry.get("id") or "") for entry in history}
+    extra: list[dict[str, Any]] = []
+    for copy in _history_conflict_copies():
+        try:
+            entries = load_session_history(copy, strict=strict)
+        except SessionHistoryCorrupt:
+            continue  # holds no list; must never reach _history_for_write as "main file corrupt"
+        for entry in entries:
+            entry_id = str(entry.get("id") or "")
+            if entry_id and entry_id not in seen:
+                seen.add(entry_id)
+                extra.append(entry)
+    if not extra:
+        return history
+    return sorted(history + extra, key=lambda entry: str(entry.get("updatedAt") or ""), reverse=True)
+
+
+def _history_for_write(path: Path | None = None) -> list[dict[str, Any]]:
+    """Strict read for writers: a corrupt file counts as empty so the save replaces it;
+    a locked or unreadable one raises SessionHistoryUnreadable (an OSError) and stays untouched.
+    Sync conflict copies are merged leniently: writers never change them, so an unreadable one just waits."""
+    target = path or SESSION_HISTORY_JSON
+    try:
+        history = load_session_history(target, strict=True)
+    except SessionHistoryCorrupt:
+        history = []
+    return _with_history_conflict_copies(history, strict=False) if target == SESSION_HISTORY_JSON else history
+
+
 def save_session_history(history: list[dict[str, Any]], path: Path | None = None) -> None:
     target = path or SESSION_HISTORY_JSON
-    payload = json.dumps(history, ensure_ascii=False, indent=2)
+    # Compact for the same reason as save_latest_session: this rewrites up to 10 full lessons per save.
+    payload = json.dumps(history, ensure_ascii=False, separators=(",", ":"))
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
             _recover_interrupted_session_reset()
@@ -5174,8 +5769,13 @@ def remember_session_history(
     with _session_storage_lock:
         if path is None or target == SESSION_HISTORY_JSON:
             _recover_interrupted_session_reset()
+        try:
+            existing = _history_for_write(target)
+        except OSError as exc:
+            print(f"[app-server] session history unreadable, left unchanged: {exc}", file=sys.stderr)
+            return []
         history = _session_history_with_session(
-            load_session_history(target),
+            existing,
             session,
             updated_at=updated_at,
             limit=limit,
@@ -5202,8 +5802,15 @@ def persist_latest_session_with_history(
         # save_latest_session call can restore an OLD history tombstone after
         # this merge was already calculated, then overwrite it with [NEW].
         _recover_interrupted_session_reset()
+        try:
+            existing = _history_for_write()
+        except OSError as exc:
+            # Keep the unreadable history file as it is; overwriting it would
+            # wipe the teacher's recent lessons.
+            save_latest_session(session)
+            return [], exc
         history = _session_history_with_session(
-            load_session_history(),
+            existing,
             session,
             updated_at=updated_at,
             limit=limit,
@@ -5223,8 +5830,8 @@ def collect_session_file_paths(session: dict[str, Any]) -> set[str]:
         if not value:
             return
         resolved = decode_file_reference(str(value))
-        if resolved and resolved.exists():
-            paths.add(str(resolved.resolve()))
+        if resolved and resolved.exists():  # uncached: a deleted file drops out
+            paths.add(str(_resolved_path(str(resolved))))
 
     def add_edb_part_paths(summary: dict[str, Any]) -> None:
         raw_parts = summary.get("edbParts") if isinstance(summary.get("edbParts"), list) else summary.get("edb_parts")
@@ -5330,6 +5937,14 @@ def collect_session_history_file_paths(history: list[dict[str, Any]]) -> set[str
     return paths
 
 
+def _history_seen_key(entry: Any) -> str:
+    """AppHTTPServer._history_paths_seen key. A lesson changed on another PC keeps its id but gets a
+    new updatedAt, so its new files are walked once more; '' (no id) means walk it every time."""
+    if not isinstance(entry, dict) or not entry.get("id"):
+        return ""
+    return f"{entry['id']}|{entry.get('updatedAt') or ''}"
+
+
 def _session_artifact_protection_paths(session: dict[str, Any] | None) -> set[Path]:
     if not isinstance(session, dict):
         return set()
@@ -5363,6 +5978,18 @@ def _path_is_protected(path: Path, protected_paths: set[Path]) -> bool:
     return path in protected_paths or any(parent in protected_paths for parent in path.parents)
 
 
+FINISHED_ARTIFACT_SUFFIXES = {".edb", ".zip"}
+
+
+def _is_finished_artifact(root_name: str, relative: Path) -> bool:
+    """Teachers' finished files: retention cleanup never selects them, referenced or not."""
+    return (
+        root_name == "exports"
+        or relative.suffix.lower() in FINISHED_ARTIFACT_SUFFIXES
+        or "published" in relative.parts[:-1]
+    )
+
+
 def cleanup_runtime_artifacts(
     *,
     runtime_dir: Path | None = None,
@@ -5376,7 +6003,10 @@ def cleanup_runtime_artifacts(
     """Plan or remove old, unreferenced runtime artifacts.
 
     The default is intentionally non-destructive. Files referenced by the
-    active session or any retained history snapshot are never selected.
+    active session or any retained history snapshot are never selected, nor
+    any other file in a preview run that holds one, and neither are finished
+    outputs (.edb/.zip, published/, the exports root).
+    An unreadable history raises SessionHistoryUnreadable before anything is selected.
     """
     if min_age_seconds < 0:
         raise ValueError("minAgeSeconds must be non-negative")
@@ -5385,9 +6015,17 @@ def cleanup_runtime_artifacts(
 
     base = (runtime_dir or RUNTIME_DIR).resolve()
     current_session = active_session if active_session is not None else load_latest_session()
-    current_history = history if history is not None else load_session_history()
+    current_history = history if history is not None else load_session_history(strict=True)
     protected_paths = _session_artifact_protection_paths(current_session)
     protected_paths |= _history_artifact_protection_paths(current_history)
+    # A file added to an open lesson keeps its own preview run, and 실행 취소 can bring back a crop the
+    # lesson no longer lists: keep a run whole while a lesson uses any file in it (the launch cleanup's rule).
+    previews = (base / DEFAULT_OUTPUT_ROOT_NAME / "previews").resolve()
+    protected_paths |= {
+        previews / path.relative_to(previews).parts[0]
+        for path in protected_paths
+        if path != previews and path.is_relative_to(previews)
+    }
     observed_at = time.time() if now is None else float(now)
 
     files: list[tuple[Path, int, float, bool]] = []
@@ -5401,11 +6039,12 @@ def cleanup_runtime_artifacts(
                 continue
             try:
                 resolved = path.resolve()
-                resolved.relative_to(resolved_root)
+                relative = resolved.relative_to(resolved_root)
                 stat = path.stat()
             except (OSError, ValueError):
                 continue
-            files.append((path, int(stat.st_size), float(stat.st_mtime), _path_is_protected(resolved, protected_paths)))
+            protected = _is_finished_artifact(root_name, relative) or _path_is_protected(resolved, protected_paths)
+            files.append((path, int(stat.st_size), float(stat.st_mtime), protected))
 
     total_bytes = sum(size for _, size, _, _ in files)
     protected_bytes = sum(size for _, size, _, protected in files if protected)
@@ -5470,6 +6109,82 @@ def cleanup_runtime_artifacts(
     }
 
 
+STALE_WORK_FOLDER_MIN_AGE_SECONDS = 86_400.0
+_STALE_STAGING_PATTERNS = (
+    "*/.publish-staging/*", "*/.export-staging/*",
+    "previews/*/.publish-staging/*", "previews/*/.export-staging/*",
+)
+
+
+def _raise_walk_error(error: OSError) -> None:
+    raise error
+
+
+def _scan_work_folder(folder: Path) -> tuple[int, float, bool]:
+    """Size, newest mtime, and whether a finished file (see _is_finished_artifact) sits inside.
+
+    An unreadable subfolder raises instead of being skipped, so a hidden .edb is never missed.
+    """
+    size, newest = 0, folder.stat().st_mtime
+    for root, _dirs, files in os.walk(folder, onerror=_raise_walk_error):
+        try:
+            newest = max(newest, os.stat(root).st_mtime)
+        except OSError:
+            pass
+        for name in files:
+            if _is_finished_artifact(DEFAULT_OUTPUT_ROOT_NAME, Path(root, name).relative_to(folder)):
+                return size, newest, True
+            try:
+                entry = os.lstat(os.path.join(root, name))
+            except OSError:
+                continue
+            newest = max(newest, entry.st_mtime)
+            size += entry.st_size
+    return size, newest, False
+
+
+def plan_stale_work_folders(
+    *,
+    output_root: Path,
+    active_session: dict[str, Any] | None,
+    history: list[dict[str, Any]],
+    min_age_seconds: float = STALE_WORK_FOLDER_MIN_AGE_SECONDS,
+    now: float | None = None,
+) -> list[tuple[Path, int]]:
+    """Pure garbage only: unreferenced preview runs and leftover staging generations.
+
+    A preview folder is kept whole when any active/history path lies inside it
+    or above it. Staging generations are renamed away before any session commit,
+    so only a reference inside one keeps it. A folder holding a finished file is
+    never planned: an adopted preview run is the lesson's output_dir, so publish
+    writes the teacher's EDB to previews/<run>/published/. Everything else under
+    outputs/ is left to the opt-in retention cleanup.
+    """
+    protected = _session_artifact_protection_paths(active_session) | _history_artifact_protection_paths(history)
+    holds_protected = set(protected)
+    for path in protected:
+        holds_protected.update(path.parents)
+    observed_at = time.time() if now is None else float(now)
+    candidates = [(path, True) for path in (output_root / "previews").glob("*")]
+    candidates += [(path, False) for pattern in _STALE_STAGING_PATTERNS for path in output_root.glob(pattern)]
+    planned: list[tuple[Path, int]] = []
+    for folder, is_preview in candidates:
+        try:
+            if folder.is_symlink() or not folder.is_dir():
+                continue
+            resolved = folder.resolve()
+            if resolved in holds_protected or (is_preview and _path_is_protected(resolved, protected)):
+                continue
+            if any(resolved.is_relative_to(selected) for selected, _ in planned):
+                continue
+            size, newest, holds_finished = _scan_work_folder(resolved)
+        except OSError:
+            continue
+        if not holds_finished and observed_at - newest >= min_age_seconds:
+            planned.append((resolved, size))
+    return planned
+
+
 def _file_uri_to_path(value: Any) -> Path | None:
     return decode_file_reference(str(value)) if value else None
 
@@ -5508,7 +6223,13 @@ def _open_system_target(target: Path) -> None:
     if sys.platform.startswith("win"):
         os.startfile(str(target))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(target)])
+        # `open` returns at once but exits 1 ("No application knows how to open ...") when nothing claims the file.
+        try:
+            result = subprocess.run(["/usr/bin/open", str(target)], capture_output=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            return  # ponytail: a launch slower than 10 s (e.g. a first-launch prompt) counts as opened
+        if result.returncode != 0:
+            raise OSError(result.stderr.decode("utf-8", "replace").strip() or f"open exited {result.returncode}")
     else:
         subprocess.Popen(["xdg-open", str(target)])
 
@@ -5557,6 +6278,14 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
         if not board_render_path.exists():
             board_render_path = crop_path
         bbox = problem.get("bbox") or {}
+        metadata = problem.get("metadata") if isinstance(problem.get("metadata"), dict) else {}
+        shared_passage_range = _lazy_call(
+            "build_problem_board_edb", "_validated_shared_passage_range",
+            problem.get("passageRole") or problem.get("passage_role")
+            or metadata.get("passageRole") or metadata.get("passage_role"),
+            problem.get("passageRange") or problem.get("passage_range")
+            or metadata.get("passageRange") or metadata.get("passage_range"),
+        )
         entries.append(
             ProblemEntry(
                 problem_id=str(problem.get("id") or ""),
@@ -5618,6 +6347,8 @@ def _problems_to_entries(problems: list[dict[str, Any]], *, template: LayoutTemp
                 ],
                 preserve_media_mode=_media_mode(problem),
                 source_segments=_clone_jsonish(problem.get("sourceSegments") or problem.get("source_segments") or []),
+                passage_role="passage_fragment" if shared_passage_range else None,
+                passage_range=shared_passage_range,
             )
         )
     return entries
@@ -5682,6 +6413,8 @@ def rewrite_session_for_http(session: dict[str, Any]) -> dict[str, Any]:
         problem["sourceImagePath"] = path_to_api_url(problem.get("sourceImagePath"))
         problem["boardRenderPath"] = path_to_api_url(problem.get("boardRenderPath"))
         problem["originalImagePath"] = path_to_api_url(problem.get("originalImagePath"))
+        if "reviewConfirmedImagePath" in problem:
+            problem["reviewConfirmedImagePath"] = path_to_api_url(problem.get("reviewConfirmedImagePath"))
 
     for page in rewritten.get("pages", []):
         raw_problem_ids = page.get("problemIds")
@@ -5952,6 +6685,7 @@ def _crop_dir_for_session(session: dict[str, Any]) -> Path:
     if recovered_output:
         # Request handlers persist their cloned session only after the mutation
         # completes and wins the session CAS, so failed edits never adopt this.
+        session["history_key"] = _session_history_key(session)  # still one 최근 수업 entry after the move
         session["output_dir"] = str(selected_output_dir)
         session["outputDir"] = str(selected_output_dir)
     return target
@@ -6402,6 +7136,11 @@ PUBLISH_PRESERVED_PROBLEM_METADATA_KEYS = (
     ("passageSourcePageIds", "passage_source_page_ids"),
     ("passageContinuesAcrossPages", "passage_continues_across_pages"),
     ("passagePreQuestionContinuationBlockIds", "passage_pre_question_continuation_block_ids"),
+    # 공통 지문만 추출 stamp: its passage groups skip the missing-question check.
+    ("contentTarget", "content_target"),
+    # The 확인 record stays valid only while the rebuilt image and bbox match.
+    ("reviewConfirmedImagePath",),
+    ("reviewConfirmedBBox",),
 )
 
 
@@ -6778,6 +7517,12 @@ def _session_review_summary(session: dict[str, Any]) -> dict[str, Any]:
         if hwp_text_problem_count_matches:
             hwp_text_problem_count_status = "match"
             hwp_text_problem_count_message = "HWP 텍스트 문항 수와 검출 문항 수가 일치합니다."
+            # The builder stored its count mismatch at import time. The
+            # teacher's edits now make the counts agree, so it is stale.
+            warning_messages = [
+                message for message in warning_messages
+                if not message.startswith("HWP 내부 텍스트 기준 문항 수는")
+            ]
         else:
             hwp_text_problem_count_status = "mismatch"
             if hwp_text_problem_delta > 0:
@@ -7446,6 +8191,24 @@ def _materialize_crop_base_image(
     return base_crop_path.resolve().as_uri()
 
 
+def _flag_crop_overlaps_for_review(session: dict[str, Any], problem_id: str) -> None:
+    # A new crop voids the 확인 record (C43). If it still overlaps a neighbour,
+    # flag the pair as the import does, so 검수 offers 확인 instead of only blocking 제작.
+    # ponytail: 직접 자르기 (_mutate_bulk_crop) regions are not re-flagged; call this with
+    # the replacement ids if a drawn region that overlaps its neighbour gets reported.
+    problems = [problem for problem in session.get("problems") or [] if isinstance(problem, dict)]
+    for find_groups, mark_flags in (
+        ("_session_source_problem_overlap_groups", "_mark_source_problem_overlap_review_flags"),
+        ("_session_passage_group_source_reuse_groups", "_mark_passage_group_source_reuse_review_flags"),
+    ):
+        groups = [
+            group
+            for group in _lazy_call("build_problem_board_edb", find_groups, problems)
+            if problem_id in (group.get("problemIds") or [])
+        ]
+        _lazy_call("build_problem_board_edb", mark_flags, problems, groups)
+
+
 def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dict[str, Any]:
     _index, problem = _find_problem(session, problem_id)
     _check_manual_media_anchors(problem)
@@ -7610,6 +8373,7 @@ def _mutate_crop(session: dict[str, Any], problem_id: str, raw_crop: Any) -> dic
     problem["manual_crop"] = crop
     if raw_crop_path_for_board is not None and raw_crop_path_for_board.exists():
         _refresh_mutated_crop_layout(problem, raw_crop_path_for_board)
+    _flag_crop_overlaps_for_review(session, problem_id)
     _refresh_session_problem_counts(session)
     return session
 
@@ -7948,6 +8712,7 @@ def _mutate_stitch_crop(
         page["problem_ids"] = list(ids)
 
     _refresh_mutated_crop_layout(problem, stitched_path)
+    _flag_crop_overlaps_for_review(session, problem_id)
     _refresh_session_problem_counts(session)
     return session
 
@@ -8487,12 +9252,24 @@ def _mutate_confirm(session: dict[str, Any], problem_ids: Any) -> dict[str, Any]
     for problem in problems:
         if not isinstance(problem, dict) or str(problem.get("id") or "") not in ids:
             continue
+        # The side panel's 변경 저장 also sends problems that were already
+        # normal; saving them is not a 확인 of their crop.
+        awaiting_review = _problem_review_status(problem) != "normal"
         problem["riskFlags"] = []
         problem["risk_flags"] = []
         problem["reviewStatus"] = "normal"
         problem["review_status"] = "normal"
         problem["parseFailed"] = False
         problem["parse_failed"] = False
+        if not awaiting_review:
+            continue
+        # Remember which crop the teacher confirmed. The publish overlap and
+        # page-decoration checks accept only this exact image and bbox; any
+        # later re-crop or AI 재인식 makes the record stale (고화질 keeps it,
+        # see _mutate_enhance_image).
+        problem["reviewConfirmedImagePath"] = problem.get("imagePath") or problem.get("image_path") or ""
+        confirmed_bbox = problem.get("bbox") or problem.get("sourceBbox") or problem.get("source_bbox")
+        problem["reviewConfirmedBBox"] = dict(confirmed_bbox) if isinstance(confirmed_bbox, dict) else None
 
     normalized_by_id = {
         str(problem.get("id")): problem
@@ -9027,7 +9804,26 @@ def _active_image_enhance_size(provider: str, requested_size: str) -> tuple[str,
     return ACTIVE_IMAGE_ENHANCE_SIZE, high_resolution_skipped
 
 
-def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+_IMAGE_API_UNAVAILABLE_MESSAGES = {
+    "key": "Gemini API 키를 사용할 수 없어 AI 대신 글자 보존 방식으로 처리했어요. 설정 → AI 사용·연결에서 키를 확인해 주세요.",
+    "quota": "Gemini 사용량 한도에 걸려 AI 대신 글자 보존 방식으로 처리했어요. 잠시 뒤 다시 하거나 Gemini 사용량을 확인해 주세요.",
+    "network": "인터넷 연결 문제로 AI에 연결하지 못해 글자 보존 방식으로 처리했어요. 연결을 확인한 뒤 다시 시도해 주세요.",
+}
+
+
+def _image_api_unavailable_message(exc: BaseException) -> str | None:
+    """Korean notice when Gemini cannot serve any image now (key, quota or network)."""
+    if not isinstance(exc, _lazy_attr("image_reconstruction_backend", "ImageApiUnavailable")):
+        return None
+    return _IMAGE_API_UNAVAILABLE_MESSAGES.get(exc.reason, _IMAGE_API_UNAVAILABLE_MESSAGES["network"])
+
+
+def _mutate_enhance_image(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    should_cancel=None,
+) -> dict[str, Any]:
     requested_mode = _normalize_image_enhance_mode(
         payload.get("mode") or payload.get("enhanceMode") or payload.get("enhance_mode") or "auto"
     )
@@ -9056,7 +9852,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         subject = _problem_image_subject(session, problem)
         enhance_plan[problem_id] = (subject, _resolved_image_enhance_mode(requested_mode, subject))
     if any(mode == "ai" for _subject, mode in enhance_plan.values()) and not api_key:
-        raise ValueError(f"{provider_label} API 키가 필요합니다. 칠판 설정에서 {env_key}를 저장한 뒤 다시 시도해 주세요.")
+        raise ValueError(f"{provider_label} API 키가 필요합니다. 설정 → AI 사용·연결에서 키를 저장한 뒤 다시 시도해 주세요.")
 
     model = normalize_image_model(provider, str(payload.get("model") or payload.get("imageModel") or default_image_model(provider)))
     custom_prompt = str(payload.get("prompt") or payload.get("imagePrompt") or "").strip()
@@ -9078,8 +9874,12 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         transparent_background=transparent_background,
         sharpen=sharpen,
     )
+    # After a key/quota/network failure every later call would fail the same
+    # way (and could hang for the full timeout), so the rest use the local fallback.
+    ai_unavailable: str | None = None
 
     for problem_id in problem_ids:
+        _stop_if_cancelled(should_cancel)
         _index, problem = _find_problem(session, problem_id)
         subject, resolved_mode = enhance_plan[problem_id]
         if resolved_mode == "preserve":
@@ -9140,6 +9940,16 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                     "model": "content-safe-lanczos",
                     "error": str(exc),
                 })
+        elif ai_unavailable is not None:
+            final_error = RuntimeError(ai_unavailable)
+            attempts.append({
+                "attempt": 1,
+                "mode": "ai_primary",
+                "status": "skipped",
+                "provider": provider,
+                "model": model,
+                "error": ai_unavailable,
+            })
         else:
             try:
                 result = reconstruct_problem_image(
@@ -9158,6 +9968,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 attempts.append(_image_attempt_summary(result, attempt=1, mode="ai_primary"))
             except Exception as exc:  # noqa: BLE001 - automatically fall back below
                 final_error = exc
+                ai_unavailable = _image_api_unavailable_message(exc)
                 attempts.append({
                     "attempt": 1,
                     "mode": "ai_primary",
@@ -9168,6 +9979,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                 })
 
         if resolved_mode == "ai" and result is not None and not _result_passes_content_gate(result):
+            _stop_if_cancelled(should_cancel)  # a cancel during attempt 1 skips the second Gemini call
             retry_path = _image_generation_output_path(
                 output_dir,
                 problem_id,
@@ -9195,6 +10007,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
                     auto_recovered = True
             except Exception as exc:  # noqa: BLE001 - deterministic fallback remains available
                 final_error = exc
+                ai_unavailable = _image_api_unavailable_message(exc)
                 attempts.append({
                     "attempt": 2,
                     "mode": "ai_content_retry",
@@ -9262,6 +10075,7 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             })
             continue
 
+        was_confirmed = _lazy_call("build_problem_board_edb", "_session_problem_review_confirmed", problem)
         if not problem.get("originalImagePath"):
             problem["originalImagePath"] = source_path.resolve().as_uri()
         uri = result.output_path.resolve().as_uri()
@@ -9309,6 +10123,9 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
             flags.append("ai_image_reconstructed_check_text")
         problem["riskFlags"] = list(dict.fromkeys(flags))
         problem["reviewStatus"] = "check_needed" if problem["riskFlags"] else "normal"
+        if was_confirmed and problem["reviewStatus"] == "normal":
+            # 고화질 redraws the crop the teacher confirmed (same bbox), so the 확인 still holds.
+            problem["reviewConfirmedImagePath"] = uri
         problem["aiImageReconstruction"] = {
             **result.to_metadata(),
             "attemptedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -9348,6 +10165,10 @@ def _mutate_enhance_image(session: dict[str, Any], payload: dict[str, Any]) -> d
         })
 
     session["ai_image_reconstruction_summary"] = summaries
+    if ai_unavailable:
+        session["ai_image_reconstruction_unavailable"] = ai_unavailable
+    else:
+        session.pop("ai_image_reconstruction_unavailable", None)
     _adopt_recovered_output_dir_after_success(
         session,
         selected_output_dir,
@@ -9534,7 +10355,13 @@ def _payload_crop_box_for_problem(payload: dict[str, Any], problem_id: str) -> A
     return payload.get("cropBox") or payload.get("crop_box")
 
 
-def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], problem_ids: list[str]) -> dict[str, Any]:
+def _mutate_retry_ai_partial(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+    problem_ids: list[str],
+    *,
+    should_cancel=None,
+) -> dict[str, Any]:
     stamp = _unique_artifact_stamp()
     selected_output_dir, recovered_output = _select_session_write_root(
         session,
@@ -9545,6 +10372,7 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
     summaries: list[dict[str, Any]] = []
 
     for job_index, problem_id in enumerate(problem_ids, start=1):
+        _stop_if_cancelled(should_cancel)
         try:
             _problem_index, problem = _find_problem(session, problem_id)
             page = _page_for_problem(session, problem)
@@ -9592,6 +10420,8 @@ def _mutate_retry_ai_partial(session: dict[str, Any], payload: dict[str, Any], p
                 ai_fallback_max_regions=int(ai_config.get("max_regions") or 30),
                 ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 30000),
                 ai_fallback_save_debug=bool(ai_config.get("save_debug")),
+                # Offline, a bad key or no quota must fail the retry, not return local results.
+                fail_on_ai_error=True,
             )
             retry_session = result.get("ui_session") or {}
             retry_problems = [p for p in retry_session.get("problems", []) if isinstance(p, dict)]
@@ -9683,9 +10513,14 @@ def _mutate_problem_number(session: dict[str, Any], problem_id: str, value: Any)
     if not isinstance(metadata, dict):
         metadata = {}
         problem["metadata"] = metadata
+    # A question restored from HWP text is still drawn from that text; its source
+    # is what keeps it out of the crop-overlap checks once 확인 clears the flag.
+    previous_source = (problem.get("problemNumberSource") or problem.get("problem_number_source")
+                       or metadata.get("problemNumberSource") or metadata.get("problem_number_source"))
+    source = "hwp_text_snippet" if str(previous_source or "").strip() == "hwp_text_snippet" else "manual"
     for container in (problem, metadata):
         container["problemNumber"] = container["problem_number"] = int(text) if text else None
-        container["problemNumberSource"] = container["problem_number_source"] = "manual"
+        container["problemNumberSource"] = container["problem_number_source"] = source
     return session
 
 
@@ -9762,17 +10597,22 @@ def _mutate_classify_many(
     return session
 
 
-def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _mutate_retry_ai(
+    session: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    should_cancel=None,
+) -> dict[str, Any]:
     if not _global_ai_enabled():
         raise ValueError("AI 기능이 꺼져 있습니다. 설정에서 AI를 켠 뒤 다시 시도해 주세요.")
     if not os.environ.get("GEMINI_API_KEY", "").strip():
-        raise ValueError("Gemini API 키가 필요합니다. 칠판 설정에서 키를 저장한 뒤 다시 시도해 주세요.")
+        raise ValueError("Gemini API 키가 필요합니다. 설정 → AI 사용·연결에서 키를 저장한 뒤 다시 시도해 주세요.")
 
     if _coerce_bool(payload.get("partial") or payload.get("partialRetry") or payload.get("partial_retry")):
         problem_ids = _retry_target_problem_ids(payload)
         if not problem_ids:
             raise ValueError("부분 재인식할 문항이 없습니다")
-        return _mutate_retry_ai_partial(session, payload, problem_ids)
+        return _mutate_retry_ai_partial(session, payload, problem_ids, should_cancel=should_cancel)
 
     page_ids = _retry_target_page_ids(session, payload)
     if not page_ids:
@@ -9807,6 +10647,7 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
 
     def _run_retry_job(job: dict[str, Any]) -> dict[str, Any]:
         page_id = str(job["pageId"])
+        _stop_if_cancelled(should_cancel)
         try:
             result = run_problem_export(
                 job["sourcePath"],
@@ -9834,6 +10675,8 @@ def _mutate_retry_ai(session: dict[str, Any], payload: dict[str, Any]) -> dict[s
                 ai_fallback_max_regions=int(ai_config.get("max_regions") or 30),
                 ai_fallback_timeout_ms=int(ai_config.get("timeout_ms") or 30000),
                 ai_fallback_save_debug=bool(ai_config.get("save_debug")),
+                # Offline, a bad key or no quota must fail the retry, not replace the page with local results.
+                fail_on_ai_error=True,
             )
         except Exception as exc:  # noqa: BLE001 - show the actionable pipeline message to the UI
             return {"pageId": page_id, "status": "failed", "error": str(exc)}
@@ -9994,6 +10837,8 @@ def _denormalize_session_paths(snapshot: dict[str, Any]) -> dict[str, Any]:
             continue
         for key in ("imagePath", "sourceImagePath", "boardRenderPath", "originalImagePath"):
             problem[key] = fix(problem.get(key))
+        if "reviewConfirmedImagePath" in problem:
+            problem["reviewConfirmedImagePath"] = fix(problem.get("reviewConfirmedImagePath"))
     for page in cloned.get("pages", []) or []:
         if not isinstance(page, dict):
             continue
@@ -10024,15 +10869,24 @@ class AppHTTPServer(ThreadingHTTPServer):
         self._shutdown_reason_lock = threading.Lock()
         self._shutdown_reason: str | None = None
         self._started_at = time.time()
+        # Read once: after a hand-installed update, a later read sees the bundle that replaced this one.
+        self._app_version = str(load_app_update_config().get("version") or "")
         # Artifact-producing handlers write files before committing session
         # metadata. Serialize the entire handler so a stale CAS loser cannot
         # overwrite the winner's files before its commit is rejected.
         self._artifact_job_lock = threading.Lock()
         self._active_artifact_jobs = 0
+        # Jobs that write files (exclusive or not). Quitting now would lose them.
+        self._active_writer_jobs = 0
+        # UI job ids sent to POST /api/jobs/cancel. Each AI job watches only its
+        # own id, so cancelling one job never stops another or a later one.
+        self._cancelled_job_ids: set[str] = set()
         # Encode process start order into the epoch so a browser can reject a
         # delayed response from a server incarnation it never observed.  The
         # UUID keeps concurrently-started processes unique.
         self._session_epoch = f"{time.time_ns():020d}-{uuid.uuid4().hex}"
+        # Stamp before reading, so a sync that lands in between is still taken over.
+        self._latest_stamp = _latest_session_stamp()
         latest_session = load_latest_session()
         history = load_session_history()
         if latest_session is not None:
@@ -10041,6 +10895,71 @@ class AppHTTPServer(ThreadingHTTPServer):
         self._session_revision = 1 if latest_session is not None else 0
         self.allowed_files: set[str] = collect_session_file_paths(latest_session) if latest_session else set()
         self.allowed_files |= collect_session_history_file_paths(history)
+        self._history_paths_seen: set[str] = {_history_seen_key(entry) for entry in history}
+
+    def _allow_new_history_paths(self, history: list[dict[str, Any]]) -> None:
+        """Call with _state_lock held, after the committed snapshot's own paths were allowed.
+
+        history[0] is that snapshot; older entries change only on another PC (new updatedAt),
+        so each one is walked once instead of re-resolving every history path on every board edit.
+        """
+        # ponytail: keys are never pruned, so the open lesson adds one per second it is edited (a few bytes);
+        # prune to the history's keys if a server ever runs for months
+        seen = getattr(self, "_history_paths_seen", None)
+        if seen is None:
+            seen = self._history_paths_seen = set()
+        for entry in history[1:]:
+            key = _history_seen_key(entry)
+            if key and key in seen:
+                continue
+            seen.add(key)
+            self.allowed_files |= collect_session_history_file_paths([entry])
+        if history and isinstance(history[0], dict):
+            seen.add(_history_seen_key(history[0]))
+
+    def allow_unwalked_history_paths(self, history: list[dict[str, Any]]) -> None:
+        """GET /api/session/history: walk only lessons this server has not walked yet (start, commits
+        and 새 수업 keep _history_paths_seen in step with allowed_files)."""
+        with self._state_lock:
+            seen = self._history_paths_seen
+            fresh = [entry for entry in history if not entry.get("id") or _history_seen_key(entry) not in seen]
+        paths = collect_session_history_file_paths(fresh)  # stat-heavy: outside the lock
+        with self._state_lock:
+            self.allowed_files |= paths
+            seen.update(_history_seen_key(entry) for entry in fresh)
+
+    def _adopt_synced_session_locked(self) -> None:
+        """Call with _state_lock held. Take over latest_session.json when a save from another PC
+        replaced it through sync, so a server left running never serves or overwrites an older lesson.
+        Tabs built on the old copy then get session_conflict."""
+        stamp = _latest_session_stamp()
+        if stamp == getattr(self, "_latest_stamp", None):
+            return
+        if stamp is None:
+            # Deleted: the other PC's 새 수업 or 초기화 (this server's own reset already closed the lesson).
+            # Keeping the old copy would let the next tab load write it back over that PC's newer 최근 수업 entry.
+            self._latest_stamp = None
+            if self.latest_session is not None:
+                self.latest_session = None
+                self._session_revision += 1
+                getattr(self, "_history_paths_seen", set()).clear()
+            return
+        # ponytail: a changed file that cannot be read at commit time is still overwritten
+        synced = load_latest_session()
+        if synced is None:
+            return  # half-synced or unreadable: look again on the next request
+        self._latest_stamp = stamp
+        if synced == self.latest_session:
+            return  # this server's own save
+        _refresh_session_problem_counts(synced)  # as __init__ does; register_current_session compares refreshed copies
+        if synced == self.latest_session:
+            return  # the same lesson written again (e.g. by an older copy of the app)
+        self.latest_session = synced
+        self._session_revision += 1
+        self.allowed_files.update(collect_session_file_paths(synced))
+        # The synced 최근 수업 may hold new files for lessons already walked (a rewrite within the
+        # same second keeps its _history_seen_key): walk them again once.
+        getattr(self, "_history_paths_seen", set()).clear()
 
     def note_shutdown_reason(self, reason: str) -> str:
         normalized = str(reason or "unknown").strip() or "unknown"
@@ -10065,6 +10984,8 @@ class AppHTTPServer(ThreadingHTTPServer):
             "pid": os.getpid(),
             "sessionEpoch": self.session_epoch(),
             "uptimeSeconds": max(0, int(time.time() - self._started_at)),
+            "version": self._app_version,
+            "home": _DATA_FOLDER_TAG,
         }
 
     def session_snapshot(self) -> dict[str, Any] | None:
@@ -10082,13 +11003,14 @@ class AppHTTPServer(ThreadingHTTPServer):
                 for problem in session.get("problems", []):
                     board = decode_file_reference(problem.get("boardRenderPath"))
                     source = decode_file_reference(problem.get("imagePath"))
-                    if board is not None and source is not None and board.resolve() != source.resolve():
-                        self._board_file_index.setdefault(str(board.resolve()), (_clone_jsonish(problem), theme))
+                    if board is not None and source is not None and _resolved_path(str(board)) != _resolved_path(str(source)):
+                        self._board_file_index.setdefault(str(_resolved_path(str(board))), (_clone_jsonish(problem), theme))
                 self._board_file_index_revision = self._session_revision
             return self._board_file_index.get(path)
 
     def session_snapshot_with_revision(self) -> tuple[dict[str, Any] | None, int]:
         with self._state_lock:
+            self._adopt_synced_session_locked()
             snapshot = _clone_jsonish(self.latest_session) if self.latest_session is not None else None
             return snapshot, self._session_revision
 
@@ -10114,7 +11036,7 @@ class AppHTTPServer(ThreadingHTTPServer):
             self.latest_session = snapshot
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(snapshot))
-            self.allowed_files.update(collect_session_history_file_paths(history))
+            self._allow_new_history_paths(history)
             if history_error is not None:
                 print(
                     f"[app-server] latest session committed but history update failed: {history_error}",
@@ -10138,15 +11060,18 @@ class AppHTTPServer(ThreadingHTTPServer):
         expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
         updated_snapshot = _clone_jsonish(updated_session)
         with self._state_lock:
+            self._adopt_synced_session_locked()
             if expected_revision is not None and self._session_revision != expected_revision:
                 return None
             if self.latest_session != expected_snapshot:
                 return None
             history, history_error = persist_latest_session_with_history(updated_snapshot)
             self.latest_session = updated_snapshot
+            if getattr(self, "_latest_stamp", None) is None:  # first save after latest_session.json was missing
+                self._latest_stamp = _latest_session_stamp()
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(updated_snapshot))
-            self.allowed_files.update(collect_session_history_file_paths(history))
+            self._allow_new_history_paths(history)
             if history_error is not None:
                 print(
                     f"[app-server] latest session committed but history update failed: {history_error}",
@@ -10167,6 +11092,7 @@ class AppHTTPServer(ThreadingHTTPServer):
         expected_snapshot = _clone_jsonish(expected_session) if isinstance(expected_session, dict) else None
         updated_snapshot = _clone_jsonish(updated_session)
         with self._state_lock:
+            self._adopt_synced_session_locked()
             if expected_revision is not None and self._session_revision != expected_revision:
                 return None
             if self.latest_session != expected_snapshot:
@@ -10174,12 +11100,12 @@ class AppHTTPServer(ThreadingHTTPServer):
             final_dir.parent.mkdir(parents=True, exist_ok=True)
             if final_dir.exists():
                 raise FileExistsError(f"publish generation already exists: {final_dir}")
-            os.replace(staging_dir, final_dir)
+            _replace_file_with_retry(staging_dir, final_dir, _DIR_REPLACE_DELAYS)
             try:
                 history, history_error = persist_latest_session_with_history(updated_snapshot)
             except BaseException:
                 try:
-                    os.replace(final_dir, staging_dir)
+                    _replace_file_with_retry(final_dir, staging_dir, _DIR_REPLACE_DELAYS)
                 except OSError as rollback_exc:
                     print(
                         f"[app-server] publish adoption rollback failed: {rollback_exc}",
@@ -10187,9 +11113,11 @@ class AppHTTPServer(ThreadingHTTPServer):
                     )
                 raise
             self.latest_session = updated_snapshot
+            if getattr(self, "_latest_stamp", None) is None:  # first save after latest_session.json was missing
+                self._latest_stamp = _latest_session_stamp()
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(updated_snapshot))
-            self.allowed_files.update(collect_session_history_file_paths(history))
+            self._allow_new_history_paths(history)
             if history_error is not None:
                 print(
                     f"[app-server] latest session committed but history update failed: {history_error}",
@@ -10197,21 +11125,43 @@ class AppHTTPServer(ThreadingHTTPServer):
                 )
             return self._session_revision
 
-    def begin_artifact_job(self) -> None:
-        self._artifact_job_lock.acquire()
+    def begin_artifact_job(self, *, exclusive: bool = True) -> None:
+        # Non-exclusive jobs may run next to others only because they write
+        # fresh stamped files and commit through the revision CAS.
+        if exclusive:
+            self._artifact_job_lock.acquire()
         try:
             with self._state_lock:
                 self._active_artifact_jobs += 1
+                self._active_writer_jobs += 1
         except BaseException:
-            self._artifact_job_lock.release()
+            if exclusive:
+                self._artifact_job_lock.release()
             raise
 
-    def end_artifact_job(self) -> None:
+    def end_artifact_job(self, *, exclusive: bool = True) -> None:
         try:
             with self._state_lock:
                 self._active_artifact_jobs = max(0, self._active_artifact_jobs - 1)
+                self._active_writer_jobs = max(0, self._active_writer_jobs - 1)
         finally:
-            self._artifact_job_lock.release()
+            if exclusive:
+                self._artifact_job_lock.release()
+
+    def active_writer_jobs(self) -> int:
+        with self._state_lock:
+            return self._active_writer_jobs
+
+    def cancel_checker(self, job_id: Any = None):
+        """Return a callable that turns true once the UI cancels this job id."""
+        key = str(job_id or "").strip()
+        return lambda: bool(key) and key in self._cancelled_job_ids
+
+    def request_job_cancel(self, job_id: Any = None) -> None:
+        key = str(job_id or "").strip()
+        if key:
+            # ponytail: one short id per cancel click, never pruned; drop it at job end if that ever matters.
+            self._cancelled_job_ids.add(key)
 
     def begin_artifact_read(self) -> None:
         # Reads may run concurrently with each other and with immutable
@@ -10227,15 +11177,21 @@ class AppHTTPServer(ThreadingHTTPServer):
     def register_current_session(self, session: dict[str, Any]) -> bool:
         """Persist history only if ``session`` is still the current snapshot."""
         snapshot = _clone_jsonish(session)
+        paths = collect_session_file_paths(snapshot)  # stat-heavy: outside the lock
         with self._state_lock:
+            self._adopt_synced_session_locked()  # a sync since the caller's snapshot wins: never write the old copy back
             if self.latest_session != snapshot:
                 return False
-            self.allowed_files.update(collect_session_file_paths(snapshot))
+            self.allowed_files.update(paths)
             with _session_storage_lock:
                 if not LATEST_SESSION_JSON.exists():
                     save_latest_session(snapshot)
-                history = _session_history_with_session(load_session_history(), snapshot)
                 try:
+                    history = _history_for_write()
+                    entry_id = _session_history_entry(snapshot)["id"]
+                    if history and history[0].get("id") == entry_id and history[0].get("session") == snapshot:
+                        return True  # already the first 최근 수업 entry: no rewrite, keep its time
+                    history = _session_history_with_session(history, snapshot)
                     save_session_history(history)
                 except OSError as exc:
                     print(
@@ -10251,20 +11207,47 @@ class AppHTTPServer(ThreadingHTTPServer):
         min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
         max_bytes: int | None = None,
     ) -> dict[str, Any]:
-        # Hold the state lock through selection/deletion. Otherwise a concurrent
-        # remember_session could make an already-selected file active.
+        # Deletion holds the state lock through selection, otherwise a concurrent
+        # remember_session could make an already-selected file active. A dry run
+        # only needs a snapshot, so it walks the folders without blocking requests.
         with self._state_lock:
             if not dry_run and self._active_artifact_jobs:
                 raise ArtifactCleanupBusy(
                     f"artifact cleanup paused while {self._active_artifact_jobs} request(s) are using files"
                 )
-            return cleanup_runtime_artifacts(
-                active_session=_clone_jsonish(self.latest_session) if self.latest_session is not None else {},
-                history=load_session_history(),
-                dry_run=dry_run,
-                min_age_seconds=min_age_seconds,
-                max_bytes=max_bytes,
-            )
+            active = _clone_jsonish(self.latest_session) if self.latest_session is not None else {}
+            options = {"dry_run": dry_run, "min_age_seconds": min_age_seconds, "max_bytes": max_bytes}
+            if not dry_run:
+                return cleanup_runtime_artifacts(
+                    active_session=active, history=load_session_history(strict=True), **options
+                )
+        return cleanup_runtime_artifacts(active_session=active, history=load_session_history(strict=True), **options)
+
+    def cleanup_stale_work_folders(
+        self, *, min_age_seconds: float = STALE_WORK_FOLDER_MIN_AGE_SECONDS,
+    ) -> dict[str, Any]:
+        """Remove unreferenced preview runs and leftover staging folders (see plan_stale_work_folders)."""
+        with self._state_lock:
+            if self._active_artifact_jobs:
+                raise ArtifactCleanupBusy("stale folder cleanup skipped while requests are using files")
+            revision = self._session_revision
+            active = _clone_jsonish(self.latest_session) if self.latest_session is not None else {}
+            history = load_session_history(strict=True)
+        planned = plan_stale_work_folders(
+            output_root=default_output_root(), active_session=active, history=history,
+            min_age_seconds=min_age_seconds,
+        )
+        deleted_count = deleted_bytes = 0
+        for folder, size in planned:
+            # One folder per lock hold; a new commit or job ends the pass (next launch resumes).
+            with self._state_lock:
+                if self._active_artifact_jobs or self._session_revision != revision:
+                    break
+                shutil.rmtree(folder, ignore_errors=True)
+            if not folder.exists():
+                deleted_count += 1
+                deleted_bytes += size
+        return {"plannedFolderCount": len(planned), "deletedFolderCount": deleted_count, "deletedBytes": deleted_bytes}
 
     def clear_session(
         self,
@@ -10273,12 +11256,14 @@ class AppHTTPServer(ThreadingHTTPServer):
         cleanup_artifacts: bool = False,
         dry_run: bool = True,
         min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+        keep_history: bool = False,
     ) -> dict[str, Any] | None:
         cleanup_result, _revision = self.clear_session_with_revision(
             expected_revision=expected_revision,
             cleanup_artifacts=cleanup_artifacts,
             dry_run=dry_run,
             min_age_seconds=min_age_seconds,
+            keep_history=keep_history,
         )
         return cleanup_result
 
@@ -10289,8 +11274,11 @@ class AppHTTPServer(ThreadingHTTPServer):
         cleanup_artifacts: bool = False,
         dry_run: bool = True,
         min_age_seconds: float = DEFAULT_ARTIFACT_RETENTION_DAYS * 86_400,
+        keep_history: bool = False,
     ) -> tuple[dict[str, Any] | None, int]:
         with self._state_lock:
+            # A sync that landed after the handler's revision check is a conflict, not lost work.
+            self._adopt_synced_session_locked()
             if expected_revision is not None and self._session_revision != expected_revision:
                 raise SessionRevisionConflict(
                     f"session revision changed from {expected_revision} to {self._session_revision}"
@@ -10299,12 +11287,22 @@ class AppHTTPServer(ThreadingHTTPServer):
                 raise ArtifactCleanupBusy(
                     f"session reset paused while {self._active_artifact_jobs} request(s) are using files"
                 )
-            _atomically_clear_persisted_session_state()
+            if keep_history and self.latest_session is not None:
+                # A save may have skipped a locked history (persist_latest_session_with_history):
+                # record the open lesson before its latest file goes, or fail and keep it open.
+                with _session_storage_lock:
+                    save_session_history(_session_history_with_session(_history_for_write(), self.latest_session))
+            _atomically_clear_persisted_session_state(keep_history=keep_history)
             self.latest_session = None
             self._session_revision += 1
             cleared_revision = self._session_revision
             self.allowed_files.clear()
-            if cleanup_artifacts:
+            getattr(self, "_history_paths_seen", set()).clear()
+            if keep_history:
+                # Kept lessons stay openable (thumbnails, EDB files) from the recent list.
+                self.allowed_files.update(collect_session_history_file_paths(load_session_history()))
+            # Cleanup treats files outside history=[] as orphans, so it never runs with kept history.
+            if cleanup_artifacts and not keep_history:
                 try:
                     cleanup_result = cleanup_runtime_artifacts(
                         active_session={},
@@ -10330,6 +11328,43 @@ class AppHTTPServer(ThreadingHTTPServer):
         return None, cleared_revision
 
 
+def _shutdown_busy_payload(server: Any, *, force: bool) -> dict[str, Any] | None:
+    """Refuse to quit or update while a job is still writing files, unless the teacher insisted.
+
+    Image and file reads are not counted, so an open thumbnail never blocks quitting.
+    """
+    counter = getattr(server, "active_writer_jobs", None)
+    running = counter() if callable(counter) and not force else 0
+    if not running:
+        return None
+    return {
+        "ok": False,
+        "code": "shutdown_busy",
+        "error": "아직 진행 중인 작업이 있어요. 지금 끄면 그 작업은 저장되지 않아요.",
+        "detail": f"{running} file-writing job(s) still running",
+        "retryable": True,
+        "recoverySteps": ["진행 중인 작업이 끝난 뒤 다시 시도해 주세요."],
+    }
+
+
+def _uncaught_errors_as_json(method):
+    """Answer an uncaught handler error with classified JSON instead of dropping the socket."""
+    def wrapper(self) -> None:
+        try:
+            method(self)
+        except Exception as exc:
+            if isinstance(exc, ConnectionError) and getattr(self, "_response_started", False):
+                self.close_connection = True  # the browser left mid-reply (refresh, tab close, cancel): nothing to answer or log
+                return
+            _log_operation_exception(f"{getattr(self, 'command', '')} {urlparse(self.path).path}", exc)
+            if getattr(self, "_response_started", False) or isinstance(exc, ConnectionError):
+                self.close_connection = True  # a half-written response cannot be repaired
+                return
+            payload = _export_error_payload(exc)
+            self._send_json(payload, status=_export_error_status(exc, payload))
+    return wrapper
+
+
 class AppRequestHandler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(UI_DIR), **kwargs)
@@ -10339,12 +11374,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         return self.server  # type: ignore[return-value]
 
     def parse_request(self) -> bool:
+        self._response_started = False  # handler objects are reused across keep-alive requests
         if not super().parse_request():
             return False
         if not _request_host_is_loopback(self.headers):
             self.send_error(HTTPStatus.MISDIRECTED_REQUEST, "loopback Host header required")
             return False
-        if self.command in {"POST", "PUT", "PATCH", "DELETE", "OPTIONS"}:
+        # GET /api/... reads files and rewrites 최근 수업 too, so another site may not call it either.
+        if self.command in {"POST", "PUT", "PATCH", "DELETE", "OPTIONS"} or urlparse(self.path).path.startswith("/api/"):
             if not _browser_write_request_is_trusted(self.headers):
                 self.send_error(HTTPStatus.FORBIDDEN, "cross-site state-changing request rejected")
                 return False
@@ -10451,7 +11488,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         # Compatibility for lightweight embedding hosts. The generation path
         # is unique, so exposing it cannot overwrite an older successful EDB.
         final_dir.parent.mkdir(parents=True, exist_ok=True)
-        os.replace(staging_dir, final_dir)
+        _replace_file_with_retry(staging_dir, final_dir, _DIR_REPLACE_DELAYS)
         try:
             committed = self._remember_session_if_current(
                 expected_session,
@@ -10459,11 +11496,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 expected_revision=expected_revision,
             )
         except BaseException:
-            os.replace(final_dir, staging_dir)
+            _replace_file_with_retry(final_dir, staging_dir, _DIR_REPLACE_DELAYS)
             raise
         if not committed[0]:
             try:
-                os.replace(final_dir, staging_dir)
+                _replace_file_with_retry(final_dir, staging_dir, _DIR_REPLACE_DELAYS)
             except OSError:
                 _discard_staged_publish(final_dir)
         return committed
@@ -10473,10 +11510,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         payload: dict[str, Any] = {
             "ok": False,
             "code": "session_conflict",
-            "error": "다른 작업이 먼저 세션을 변경했습니다. 최신 상태를 불러온 뒤 다시 시도해 주세요.",
+            "error": "다른 창이나 작업에서 먼저 저장해서 방금 한 작업을 적용하지 않았어요.",
+            "detail": f"session changed before this request was applied (current revision {current_revision})",
             "session": rewrite_session_for_http(current) if isinstance(current, dict) else None,
             "recoverySteps": [
-                "화면의 최신 세션 상태를 확인해 주세요.",
+                "화면이 최신 상태인지 확인해 주세요.",
                 "방금 수행한 작업을 최신 상태에서 다시 시도해 주세요.",
             ],
         }
@@ -10487,18 +11525,57 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             status=HTTPStatus.CONFLICT,
         )
 
-    def _run_artifact_job(self, handler) -> None:
+    def _run_artifact_job(self, handler, *, exclusive: bool = True) -> None:
         server = getattr(self, "server", None)
         starter = getattr(server, "begin_artifact_job", None)
         finisher = getattr(server, "end_artifact_job", None)
         if not callable(starter) or not callable(finisher):
             handler()
             return
-        starter()
+        starter(exclusive=exclusive)
         try:
             handler()
         finally:
-            finisher()
+            finisher(exclusive=exclusive)
+
+    def _cancel_checker(self, job_id: Any = None):
+        checker = getattr(getattr(self, "server", None), "cancel_checker", None)
+        return checker(job_id) if callable(checker) else (lambda: False)
+
+    def _send_job_cancelled(self) -> None:
+        self._send_json(
+            {
+                "ok": False,
+                "code": "job_cancelled",
+                "error": "작업을 취소했습니다.",
+                "detail": "cancelled by POST /api/jobs/cancel before the result was saved",
+            },
+            status=HTTPStatus.CONFLICT,
+        )
+
+    def _send_cross_origin_rejected(self) -> None:
+        self._send_json(
+            {
+                "ok": False,
+                "code": "cross_origin_rejected",
+                "error": "이 작업은 앱 화면에서만 할 수 있어요.",
+                "detail": "cross-origin request rejected",
+            },
+            status=HTTPStatus.FORBIDDEN,
+        )
+
+    def _handle_job_cancel(self) -> None:
+        if not _request_is_same_origin(self.headers):
+            self._send_cross_origin_rejected()
+            return
+        try:
+            job_id = self._read_json_body().get("jobId")
+        except json.JSONDecodeError:
+            job_id = None
+        canceller = getattr(self.app_server, "request_job_cancel", None)
+        if callable(canceller):
+            canceller(job_id)
+        self._send_json({"ok": True})
 
     def _run_artifact_read(self, handler) -> None:
         server = getattr(self, "server", None)
@@ -10526,14 +11603,26 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return bool(checker(path))
         return path in self.app_server.allowed_files
 
+    def log_request(self, code="-", size="-") -> None:
+        # Status polling, page files and thumbnails are most requests; a
+        # successful read tells nothing a bug report needs.
+        if self.command in {"GET", "HEAD"} and isinstance(code, int) and code < 400:
+            return
+        super().log_request(code, size)
+
     def log_message(self, format: str, *args) -> None:
         client = self.client_address[0] if self.client_address else "-"
         print(f"[app-server] {client} - {format % args}")
+        _rotate_app_log_if_large()
 
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-store, max-age=0")
         self.send_header("Pragma", "no-cache")
         super().end_headers()
+
+    def send_response(self, *args, **kwargs) -> None:
+        self._response_started = True
+        super().send_response(*args, **kwargs)
 
     def _rewrite_legacy_ui_asset_path(self, path: str) -> bool:
         alias = LEGACY_UI_ASSET_ALIASES.get(path)
@@ -10552,6 +11641,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self.path = parsed.path
         return super().do_HEAD()
 
+    @_uncaught_errors_as_json
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/parser/jobs":
@@ -10561,6 +11651,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             health_builder = getattr(self.app_server, "health_payload", None)
             payload = health_builder() if callable(health_builder) else {"ok": True, "app": APP_NAME}
             self._send_json(payload)
+            return
+        if parsed.path == "/api/export/progress":
+            # Not behind the artifact lock: it must answer while an export runs.
+            progress_id = parse_qs(parsed.query).get("id", [""])[0]
+            self._send_json({"ok": True, **_EXPORT_PROGRESS.get(progress_id, {})})
             return
         if parsed.path == "/generated_session.js":
             self._send_text(read_generated_session_js(), content_type="application/javascript; charset=utf-8")
@@ -10576,7 +11671,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             refresh = parse_qs(parsed.query).get("refresh", [""])[0].strip().lower()
             if refresh in {"1", "true", "yes"}:
                 clear_app_update_status_cache()
-            self._send_json(build_app_update_status())
+            status = build_app_update_status()
+            if _consume_update_failure_marker():
+                status["lastUpdateFailed"] = True
+            self._send_json(status)
+            return
+        if parsed.path == "/api/app/update/progress":
+            # Lock-free on purpose: polled while the install request holds the update lock.
+            self._send_json({"ok": True, **_update_download_progress})
             return
         if parsed.path == "/api/session/latest":
             self._handle_latest_session()
@@ -10599,6 +11701,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self.path = parsed.path
         return super().do_GET()
 
+    @_uncaught_errors_as_json
     def do_POST(self) -> None:
         try:
             self._dispatch_post()
@@ -10625,11 +11728,13 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/uploads":
             self._run_artifact_job(self._handle_upload)
             return
-        if parsed.path in {"/api/parser/upload", "/api/parser/next", "/api/parser/export-images", "/api/parser/recognize-labels"}:
+        if parsed.path in {"/api/parser/upload", "/api/parser/next", "/api/parser/export-images", "/api/parser/recognize-labels", "/api/parser/delete"}:
             if not _request_is_same_origin(self.headers):
                 self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
                 return
-            self._run_artifact_job(lambda: self._handle_parser_request(parsed.path.rsplit("/", 1)[-1], parsed))
+            # Still counted as a writer job, so quitting, updating and 새 수업 wait for it.
+            with _gallery_job_lock:
+                self._run_artifact_job(lambda: self._handle_parser_request(parsed.path.rsplit("/", 1)[-1], parsed), exclusive=False)
             return
         if parsed.path == "/api/export":
             self._run_artifact_job(self._handle_export)
@@ -10679,11 +11784,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/session/problem-image":
             self._run_artifact_read(self._handle_session_problem_image_post)
             return
+        # AI jobs run for minutes. They write only fresh stamped files and commit
+        # through the revision CAS, so board edits need not wait behind them;
+        # a result whose base changed meanwhile is rejected as session_conflict.
         if parsed.path == "/api/session/retry-ai":
-            self._run_artifact_job(self._handle_session_retry_ai)
+            self._run_artifact_job(self._handle_session_retry_ai, exclusive=False)
             return
         if parsed.path == "/api/session/enhance-image":
-            self._run_artifact_job(self._handle_session_enhance_image)
+            self._run_artifact_job(self._handle_session_enhance_image, exclusive=False)
+            return
+        if parsed.path == "/api/jobs/cancel":
+            self._handle_job_cancel()
             return
         if parsed.path == "/api/session/restore":
             self._run_artifact_job(self._handle_session_restore)
@@ -10693,6 +11804,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         self._send_json({"ok": False, "error": "unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
 
+    @_uncaught_errors_as_json
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
         if parsed.path == "/api/session/latest":
@@ -10722,6 +11834,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._allow_session_files(paths)
             return response
 
+        failed = "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요."
         try:
             if action == "list":
                 self._send_json({"ok": True, "jobs": [public_job(job) for job in store.list_jobs()]})
@@ -10744,6 +11857,16 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 elif action == "recognize-labels":
                     result = store.recognize_labels(payload.get("problemIds"), only_unattempted=payload.get("automatic") is True)
                     self._send_json({"ok": True, **result, "jobs": [public_job(job) for job in result["jobs"]]})
+                elif action == "delete":
+                    try:
+                        store.delete_job(str(payload.get("jobId", "")))
+                    except OSError as exc:
+                        self._send_json({
+                            "ok": False, "code": "gallery_delete_failed",
+                            "error": "자료를 지우지 못했어요. 잠시 후 다시 시도해 주세요.", "detail": f"{type(exc).__name__}: {exc}",
+                        }, status=HTTPStatus.CONFLICT)
+                        return
+                    self._send_json({"ok": True})
                 elif action == "export-images":
                     ids = payload.get("problemIds")
                     if not isinstance(ids, list) or not all(isinstance(value, str) for value in ids):
@@ -10756,11 +11879,28 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                         "mode": mode, "fileCount": count * (2 if mode == "both" else 1),
                         "fileName": target.name if target.suffix == ".zip" else store.image_download_name(ids[0]),
                     })
-        except (ValueError, OSError) as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+        except ValueError as exc:
+            # The gallery raises its own Korean ValueErrors; some carry a code and an English detail.
+            # English ones come from the parser or Python itself: a failure to log, not teacher copy.
+            # ponytail: Korean text marks the gallery's own errors, as in _export_error_payload.
+            korean = re.search(r"[가-힣]", str(exc))
+            if not korean:
+                _log_operation_exception("problem_gallery", exc)
+            self._send_json({
+                "ok": False, "code": getattr(exc, "code", None) or "gallery_request_invalid",
+                "error": str(exc) if korean else failed,
+                "detail": getattr(exc, "detail", "") or f"{type(exc).__name__}: {exc}",
+            }, status=HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             _log_operation_exception("problem_gallery", exc)
-            self._send_json({"ok": False, "error": "문제 추출에 실패했습니다. 완료된 결과는 보관됩니다. 다시 시도해 주세요."}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            # Disk full, locked files and memory get the shared Korean copy; the raw text stays in detail.
+            payload = _classified_processing_error(exc) if isinstance(exc, (OSError, MemoryError)) else None
+            if payload:  # The gallery page has no 문제 신고 and no 오류 상세 to copy.
+                payload["recoverySteps"] = [step for step in payload["recoverySteps"] if "신고" not in step]
+            self._send_json(payload or {
+                "ok": False, "code": "gallery_failed", "error": failed,
+                "detail": f"{type(exc).__name__}: {exc}",
+            }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _handle_session_publish_plan(self) -> None:
         session, current_revision = self._current_session_state()
@@ -10842,10 +11982,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(_publish_stage_failure_payload("build", exc), status=HTTPStatus.CONFLICT)
             return
         except (KeyError, ValueError) as exc:
+            classified = _classified_processing_error(exc) if isinstance(exc, ValueError) else None
             self._send_json(
-                _publish_failure_payload(
+                {**classified, "operation": "session_publish_plan"} if classified else _publish_failure_payload(
                     code="publish_plan_invalid",
-                    message="현재 작업의 EDB 분할 수를 계산하지 못했습니다",
+                    message="EDB 분할을 계산하지 못했습니다",
                     exc=exc,
                     retryable=False,
                     recovery_steps=[
@@ -10974,7 +12115,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             self._send_json(
                 _publish_failure_payload(
                     code="publish_session_invalid",
-                    message="현재 작업에 EDB 제작 필수 정보가 없습니다",
+                    message="이 작업에는 EDB 제작에 필요한 정보가 없습니다",
                     exc=exc,
                     retryable=False,
                     recovery_steps=[
@@ -11105,6 +12246,8 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         # Keep the stable working root for the next publish; all generated
         # artifact references themselves point at this immutable generation.
+        # Every publish carries the identity over: this session is rebuilt from scratch.
+        new_session["history_key"] = _session_history_key(session)
         new_session["output_dir"] = str(output_dir)
         new_session["outputDir"] = str(output_dir)
         # carry over user-facing labels so the rename doesn't get lost
@@ -11142,6 +12285,23 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 page_copy["problemIds"] = [pid for pid in page.get("problemIds", []) if pid in problem_ids_remaining]
                 preserved_pages.append(page_copy)
             new_session["pages"] = preserved_pages
+            # This rebuild has no PreparedPages: its generated zero is not
+            # the original document page count. Keep proven provenance even
+            # when one original page produced several page tiles.
+            prior_page_count = session.get("source_page_count")
+            if (isinstance(prior_page_count, int) and not isinstance(prior_page_count, bool)
+                    and prior_page_count > 0):
+                new_session["source_page_count"] = prior_page_count
+            elif (isinstance(prior_page_count, str) and prior_page_count.strip().isdigit()
+                    and int(prior_page_count.strip()) > 0):
+                new_session["source_page_count"] = int(prior_page_count.strip())
+            else:
+                source_page_ids = {
+                    str(page.get("pageTileParentPageId") or page.get("page_tile_parent_page_id")
+                        or page.get("id") or "").strip()
+                    for page in preserved_pages
+                } - {""}
+                new_session["source_page_count"] = len(source_page_ids)
         # propagate per-problem bbox/riskFlags from the prior session — they
         # are derived from segmentation, which publish does not re-run.
         prior_problems_by_id = {
@@ -11185,6 +12345,29 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 if scale_ratio is not None:
                     problem["placementScaleRatio"] = scale_ratio
         _annotate_session_with_edb_part_metadata(new_session, edb_parts)
+        # build_ui_session runs without PageModels during publish. Rebuild
+        # aggregates only after the retained units have their passage metadata;
+        # copying the old groups would retain groups removed by this publish.
+        publish_problems = [problem for problem in new_session.get("problems", []) if isinstance(problem, dict)]
+        passage_groups = _lazy_call("build_problem_board_edb", "_session_passage_groups", publish_problems)
+        if str(new_session.get("contentTarget") or new_session.get("content_target") or "all") == "shared-passages":
+            passage_groups = [{**group, "missingChildProblemNumbers": [], "missingChildProblemCount": 0}
+                              for group in passage_groups]
+        passage_review_items = _lazy_call("build_problem_board_edb", "_session_passage_review_items",
+                                          publish_problems, passage_groups)
+        for snake, camel, value in (
+            ("passage_groups", "passageGroups", passage_groups),
+            ("passage_group_count", "passageGroupCount", len(passage_groups)),
+            ("passage_problem_count", "passageProblemCount", sum(int(group.get("problemCount") or 0) for group in passage_groups)),
+            ("cross_page_passage_group_count", "crossPagePassageGroupCount",
+             sum(bool(group.get("continuesAcrossPages")) for group in passage_groups)),
+            ("passage_review_items", "passageReviewItems", passage_review_items),
+            ("passage_review_item_count", "passageReviewItemCount", len(passage_review_items)),
+            ("cross_page_passage_review_item_count", "crossPagePassageReviewItemCount",
+             sum(bool(item.get("continuesAcrossPages")) for item in passage_review_items)),
+        ):
+            new_session[snake] = value
+            new_session[camel] = value
         _refresh_session_problem_counts(new_session)
 
         source_paths_for_handoff = [
@@ -11253,8 +12436,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         new_session["classinHandoffPath"] = str(classin_handoff_path)
         new_session["classin_handoff_markdown_path"] = str(classin_handoff_markdown_path)
         new_session["classinHandoffMarkdownPath"] = str(classin_handoff_markdown_path)
-        new_session["edb_parts"] = edb_parts
-        new_session["edbParts"] = edb_parts
+        new_session["edb_parts"] = new_session["edbParts"] = _without_placements(edb_parts)
         new_session["edb_part_count"] = len(edb_parts)
         new_session["edbPartCount"] = len(edb_parts)
         new_session["edb_split"] = len(edb_parts) > 1
@@ -11409,11 +12591,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             layout_diagnostics=layout_diagnostics,
             edb_parts=staged_edb_parts,
         )
-        publish_summary = _remap_artifact_paths(
+        publish_summary = _without_placements(_remap_artifact_paths(
             staged_publish_summary,
             staging_dir,
             final_dir,
-        )
+        ))
         publish_history = _session_publish_history(session, publish_summary)
         new_session["publish_summary"] = publish_summary
         new_session["publishSummary"] = publish_summary
@@ -11458,17 +12640,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session, current_revision = self._current_session_state()
-        if session is None:
-            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
-            return
-        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
+        # A tab still showing a lesson that 새 수업 closed (another tab, or another PC through
+        # sync) has an old revision: it gets the Korean session_conflict, not the bare 404.
         if not self._validate_expected_session_revision(payload, current_revision):
             return
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        base_session = _clone_jsonish(session)
 
         action = str(payload.get("action") or "").strip().lower()
         try:
@@ -11693,6 +12877,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "bundled": True,
         })
 
+    def _send_problem_image_failure(self, exc: Exception) -> None:
+        # Exception text never goes in the latin-1 status line; Korean OS errors would crash it.
+        _log_operation_exception("problem_image", exc)
+        if getattr(self, "_response_started", False):
+            self.close_connection = True
+            return
+        self._send_json({
+            "ok": False,
+            "code": "problem_image_unavailable",
+            "error": "문항 이미지를 만들지 못했습니다.",
+            "detail": f"{type(exc).__name__}: {exc}",
+            "retryable": True,
+            "recoverySteps": ["잠시 후 다시 시도해 주세요."],
+        }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+
     def _send_session_problem_image_response(self, session: dict[str, Any], problem_id: str, variant: str) -> None:
         if not problem_id:
             self.send_error(HTTPStatus.BAD_REQUEST, "problemId is required")
@@ -11712,7 +12911,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     board_theme=str(session.get("board_theme") or session.get("boardTheme") or DEFAULT_BOARD_THEME),
                 )
             except Exception as exc:  # noqa: BLE001 - surface a direct download failure.
-                self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"failed to render problem image: {exc}")
+                self._send_problem_image_failure(exc)
                 return
             if rendered_payload is not None:
                 self.send_response(HTTPStatus.OK)
@@ -11740,7 +12939,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 return
             payload = _encode_image_as_png_bytes(source_path)
         except OSError as exc:
-            self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, f"failed to read problem image: {exc}")
+            self._send_problem_image_failure(exc)
             return
 
         self.send_response(HTTPStatus.OK)
@@ -11785,6 +12984,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
+            should_cancel = self._cancel_checker(payload.get("jobId"))
             if not self._validate_expected_session_revision(payload, current_revision):
                 return
             preview_only = _coerce_bool(
@@ -11796,7 +12996,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 default=False,
             )
             working_session = json.loads(json.dumps(session)) if preview_only else session
-            new_session = _mutate_retry_ai(working_session, payload)
+            new_session = _mutate_retry_ai(working_session, payload, should_cancel=should_cancel)
+            _stop_if_cancelled(should_cancel)
+        except JobCancelled:
+            self._send_job_cancelled()
+            return
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -11811,6 +13015,28 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         except FileNotFoundError as exc:
             self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.CONFLICT)
+            return
+
+        rows = new_session.get("ai_retry_summary") or []
+        if rows and not any(row.get("status") == "applied" for row in rows):
+            # Nothing from AI came back: keep the lesson as it was (this clone is never saved).
+            # ponytail: one message for every unapplied row (also a missing page image or an empty
+            # result), and a mixed retry still applies the pages that worked; split by status if needed.
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "ai_retry_not_applied",
+                    "operation": "session_retry_ai",
+                    "retryable": True,
+                    "error": "AI 결과를 받지 못해 문항을 그대로 두었어요.",
+                    "detail": "; ".join(
+                        f"{row.get('pageId') or row.get('problemId')}: {row.get('error') or row.get('status')}"
+                        for row in rows
+                    )[:2000],
+                    "recoverySteps": ["인터넷 연결과 설정 → AI 사용·연결의 Gemini API 키·사용량을 확인한 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.BAD_GATEWAY,
+            )
             return
 
         response_revision = current_revision
@@ -11878,9 +13104,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
+            should_cancel = self._cancel_checker(payload.get("jobId"))
             if not self._validate_expected_session_revision(payload, current_revision):
                 return
-            new_session = _mutate_enhance_image(session, payload)
+            new_session = _mutate_enhance_image(session, payload, should_cancel=should_cancel)
+            _stop_if_cancelled(should_cancel)
+        except JobCancelled:
+            self._send_job_cancelled()
+            return
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
@@ -11909,6 +13140,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             "ok": True,
             "session": rewrite_session_for_http(new_session),
             "enhance": new_session.get("ai_image_reconstruction_summary") or [],
+            "aiUnavailable": new_session.get("ai_image_reconstruction_unavailable") or None,
         }
         if committed_revision is not None:
             response["sessionRevision"] = committed_revision
@@ -11955,7 +13187,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_session_history(self) -> None:
         history = load_session_history()
-        self._allow_session_files(collect_session_history_file_paths(history))
+        allow_unwalked = getattr(self.app_server, "allow_unwalked_history_paths", None)
+        if callable(allow_unwalked):
+            allow_unwalked(history)
+        else:  # test doubles without the seen set (test_app_server_retry FakeServer)
+            self._allow_session_files(collect_session_history_file_paths(history))
         self._send_json({
             "ok": True,
             "history": _public_session_history(history),
@@ -12027,7 +13263,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             else:
                 result = cleanup_runtime_artifacts(
                     active_session=self._current_session_snapshot(),
-                    history=load_session_history(),
+                    history=load_session_history(strict=True),
                     dry_run=dry_run,
                     min_age_seconds=min_age_seconds,
                     max_bytes=max_bytes,
@@ -12039,15 +13275,47 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     "code": "artifact_cleanup_busy",
                     "operation": "artifact_cleanup",
                     "retryable": True,
-                    "error": str(exc),
-                    "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                    "error": "다른 작업이 진행 중이라 지금은 정리할 수 없어요.",
+                    "detail": str(exc),
+                    # AI jobs and just-cancelled ones count too (same step as 새 수업's busy reply).
+                    "recoverySteps": ["진행 중이거나 방금 취소한 작업(AI 인식·고화질 포함)이 끝난 뒤 다시 시도해 주세요."],
+                },
+                status=HTTPStatus.CONFLICT,
+            )
+            return
+        except SessionHistoryUnreadable as exc:
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "session_history_unreadable",
+                    "operation": "artifact_cleanup",
+                    "retryable": True,
+                    "error": "최근 수업 목록을 읽지 못해 지금은 정리할 수 없어요.",
+                    "detail": str(exc),
+                    "recoverySteps": ["앱을 다시 실행한 뒤 다시 시도해 주세요."],
                 },
                 status=HTTPStatus.CONFLICT,
             )
             return
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.BAD_REQUEST)
+            self._send_json(
+                {
+                    "ok": False,
+                    "code": "artifact_cleanup_invalid_request",
+                    "error": "정리 요청을 처리하지 못했어요.",
+                    "detail": str(exc),
+                },
+                status=HTTPStatus.BAD_REQUEST,
+            )
             return
+        if not result.get("ok", True):
+            # Some files were locked (OneDrive, antivirus, an open viewer); the rest were deleted.
+            result = {
+                **result,
+                "code": "artifact_cleanup_partial",
+                "error": "다른 프로그램이 쓰고 있는 파일은 지우지 못했어요. 나머지는 정리했어요.",
+                "detail": "\n".join(f"{item.get('path')}: {item.get('error')}" for item in result.get("errors") or []),
+            }
         self._send_json(result)
 
     def _handle_session_clear(self, parsed=None) -> None:
@@ -12066,11 +13334,18 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         if not self._validate_expected_session_revision(revision_payload, current_revision):
             return
         expected_revision = self._payload_session_revision(revision_payload)
-        cleanup_requested = _coerce_bool(
+        # 새 수업: clear the open lesson but keep 최근 작업 (and never prune its files).
+        keep_history = _coerce_bool(
+            params.get("keepHistory", params.get("keep_history", [False]))[0],
+            default=False,
+        )
+        cleanup_requested = not keep_history and _coerce_bool(
             params.get("cleanupArtifacts", params.get("cleanup_artifacts", [False]))[0],
             default=False,
         )
         dry_run = _coerce_bool(params.get("dryRun", params.get("dry_run", [True]))[0], default=True)
+        # Only pass the flag when set, so servers without keep_history keep working.
+        history_kwargs: dict[str, Any] = {"keep_history": True} if keep_history else {}
         try:
             raw_min_age_days = params.get("minAgeDays", params.get("min_age_days", [DEFAULT_ARTIFACT_RETENTION_DAYS]))[0]
             min_age_seconds = float(raw_min_age_days) * 86_400
@@ -12083,9 +13358,10 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     cleanup_artifacts=cleanup_requested,
                     dry_run=dry_run,
                     min_age_seconds=min_age_seconds,
+                    **history_kwargs,
                 )
             elif callable(clearer):
-                clear_kwargs: dict[str, Any] = {}
+                clear_kwargs: dict[str, Any] = dict(history_kwargs)
                 if isinstance(self.app_server, AppHTTPServer):
                     clear_kwargs["expected_revision"] = expected_revision
                 if cleanup_requested:
@@ -12099,9 +13375,12 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     clearer(**clear_kwargs)
                     cleanup_result = None
             else:
-                _atomically_clear_persisted_session_state()
+                _atomically_clear_persisted_session_state(keep_history=keep_history)
                 self.app_server.latest_session = None
-                self.app_server.allowed_files = set()
+                self.app_server.allowed_files = (
+                    collect_session_history_file_paths(load_session_history()) if keep_history else set()
+                )
+                getattr(self.app_server, "_history_paths_seen", set()).clear()
                 cleanup_result = (
                     cleanup_runtime_artifacts(
                         active_session={},
@@ -12123,11 +13402,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 "operation": "session_reset",
                 "retryable": True,
                 "artifactCleanupRequested": cleanup_requested,
-                "error": str(exc),
+                "error": "진행 중인 작업이 있어 지금은 새 수업을 시작할 수 없어요."
+                if keep_history
+                else "진행 중인 작업이 있어 지금은 초기화할 수 없어요.",
+                "detail": str(exc),
                 "session": rewrite_session_for_http(current_session)
                 if isinstance(current_session, dict)
                 else None,
-                "recoverySteps": ["진행 중인 파일 다운로드, 변환 또는 내보내기가 끝난 뒤 다시 시도해 주세요."],
+                # A cancelled AI job holds its files until its running Gemini call returns.
+                "recoverySteps": ["진행 중이거나 방금 취소한 작업(AI 인식·고화질 포함)이 끝난 뒤 다시 시도해 주세요."],
             }
             if busy_revision is not None:
                 busy_payload["sessionRevision"] = busy_revision
@@ -12137,16 +13420,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             )
             return
         except (OSError, TypeError, ValueError) as exc:
+            # 문제 신고 drops `detail`; the app.log tail it attaches is where support sees the cause.
+            _log_operation_exception("session_reset", exc)
             self._send_json(
                 {
                     "ok": False,
                     "code": "reset_failed",
                     "operation": "session_reset",
                     "retryable": True,
-                    "error": f"failed to clear: {exc}",
+                    "error": "새 수업을 준비하지 못했어요." if keep_history else "초기화하지 못했어요.",
+                    "detail": f"{type(exc).__name__}: {exc}",
                     "recoverySteps": [
-                        "진행 중인 작업이 끝난 뒤 초기화를 다시 시도해 주세요.",
-                        "계속 실패하면 최근 작업을 유지한 채 오류 정보를 신고해 주세요.",
+                        "진행 중인 작업이 끝난 뒤 새 수업을 다시 시작해 주세요."
+                        if keep_history
+                        else "진행 중인 작업이 끝난 뒤 초기화를 다시 시도해 주세요.",
+                        "계속 실패하면 문제 신고로 오류 정보를 보내 주세요.",
                     ],
                 },
                 status=HTTPStatus.INTERNAL_SERVER_ERROR,
@@ -12154,7 +13442,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             return
         response: dict[str, Any] = {
             "ok": True,
-            "history": [],
+            "history": _public_session_history(load_session_history()) if keep_history else [],
             "session": None,
             "artifactCleanupRequested": cleanup_requested,
             "artifactCleanupDryRun": dry_run if cleanup_requested else None,
@@ -12221,30 +13509,40 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         try:
             _open_system_target(target)
         except OSError as exc:
-            self._send_json({"ok": False, "error": f"failed to open: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._send_json({
+                "ok": False, "code": "open_file_failed", "error": "ClassIn에서 바로 열지 못했어요.",
+                "detail": f"failed to open: {exc}",
+            }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "path": str(target)})
 
     def _handle_open_url(self) -> None:
+        def fail(code: str, error: str, detail: str, status: HTTPStatus) -> None:
+            self._send_json({"ok": False, "code": code, "error": error, "detail": detail}, status=status)
+
         if not _request_is_same_origin(self.headers):
-            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            fail("cross_origin_rejected", "다른 사이트에서 보낸 요청이라 열지 않았어요.",
+                 "cross-origin request rejected", HTTPStatus.FORBIDDEN)
             return
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
-            self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
+            fail("invalid_json", "요청을 읽지 못했어요. 다시 시도해 주세요.", f"invalid JSON: {exc}", HTTPStatus.BAD_REQUEST)
             return
         url = _normalize_update_url(payload.get("url"))
         if not url:
-            self._send_json({"ok": False, "error": "trusted HTTPS URL is required"}, status=HTTPStatus.BAD_REQUEST)
+            fail("open_url_invalid", "열 수 없는 주소예요.", "trusted HTTPS URL is required", HTTPStatus.BAD_REQUEST)
             return
-        if url not in _allowed_update_urls():
-            self._send_json({"ok": False, "error": "URL is not in the configured update metadata"}, status=HTTPStatus.FORBIDDEN)
+        # The fixed help page is checked first so it never waits on an update feed fetch.
+        if url != GEMINI_KEY_HELP_URL and url not in _allowed_update_urls():
+            fail("open_url_forbidden", "열 수 없는 주소예요.",
+                 "URL is not in the configured update metadata", HTTPStatus.FORBIDDEN)
             return
         try:
             opened = webbrowser.open(url)
         except Exception as exc:
-            self._send_json({"ok": False, "error": f"failed to open URL: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            fail("open_url_failed", "인터넷 창을 열지 못했어요.", f"failed to open URL: {exc}",
+                 HTTPStatus.INTERNAL_SERVER_ERROR)
             return
         self._send_json({"ok": True, "url": url, "opened": bool(opened)})
 
@@ -12277,12 +13575,21 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                 status=HTTPStatus.CONFLICT,
             )
             return
+        # The installer stops this app, so check before it is launched.
+        busy = _shutdown_busy_payload(getattr(self, "server", None), force=_coerce_bool(payload.get("force")))
+        if busy is not None:
+            self._send_json(busy, status=HTTPStatus.CONFLICT)
+            return
         try:
             result = begin_app_update(payload.get("pin"), expected_update=payload["expectedUpdate"])
         except AppUpdateError as exc:
+            # A failed download leaves no helper log; app.log (in 문제 신고) keeps the chained cause.
+            _log_operation_exception("app_update_install", exc)
             response = {"ok": False, "error": str(exc), "code": exc.code}
             if exc.recovery_steps:
                 response["recoverySteps"] = exc.recovery_steps
+            if exc.detail:
+                response["detail"] = exc.detail
             self._send_json(response, status=exc.status)
             return
         self._send_json(result, status=HTTPStatus.ACCEPTED)
@@ -12306,7 +13613,15 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_shutdown(self) -> None:
         if not _request_is_same_origin(self.headers):
-            self._send_json({"ok": False, "error": "cross-origin request rejected"}, status=HTTPStatus.FORBIDDEN)
+            self._send_cross_origin_rejected()
+            return
+        try:
+            force = _coerce_bool(self._read_json_body().get("force"))
+        except json.JSONDecodeError:
+            force = False
+        busy = _shutdown_busy_payload(getattr(self, "server", None), force=force)
+        if busy is not None:
+            self._send_json(busy, status=HTTPStatus.CONFLICT)
             return
         self._send_json({"ok": True})
         request_shutdown = getattr(self.app_server, "request_shutdown", None)
@@ -12316,7 +13631,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
 
     def _handle_user_settings_get(self) -> None:
         self._send_json(
-            {"ok": True, "settings": summarize_user_settings(RUNTIME_DIR)}
+            {"ok": True, "settings": _with_data_folder_status(summarize_user_settings(_settings_dir()))}
         )
 
     def _handle_user_settings_post(self) -> None:
@@ -12331,14 +13646,22 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         raw_ai_enabled = payload.get("aiEnabled") if "aiEnabled" in payload else payload.get("ai_enabled")
         try:
             summary = update_api_keys(
-                RUNTIME_DIR,
+                _settings_dir(),
                 gemini_api_key=(raw_key if isinstance(raw_key, str) else "") if has_gemini_key else None,
                 ai_enabled=_coerce_bool(raw_ai_enabled) if has_ai_enabled else None,
             )
         except OSError as exc:
-            self._send_json({"ok": False, "error": f"failed to persist settings: {exc}"}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+            classified = _classified_processing_error(exc) or {}
+            self._send_json({
+                "ok": False,
+                "code": classified.get("code", "settings_save_failed"),
+                "error": "설정을 저장하지 못했습니다.",
+                "detail": f"{type(exc).__name__}: {exc}",
+                "retryable": True,
+                "recoverySteps": classified.get("recoverySteps") or ["앱을 다시 실행한 뒤 다시 저장해 주세요."],
+            }, status=HTTPStatus.INTERNAL_SERVER_ERROR)
             return
-        self._send_json({"ok": True, "settings": summary})
+        self._send_json({"ok": True, "settings": _with_data_folder_status(summary)})
 
     def _handle_bug_report(self) -> None:
         try:
@@ -12350,11 +13673,14 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             )
             return
         app_config = load_app_update_config()
+        extra_logs, extra_diagnostics = _bug_report_diagnostics()
         try:
             report = build_bug_report(
                 request_payload,
                 app_config=app_config,
                 log_file=APP_LOG_FILE,
+                extra_logs=extra_logs,
+                extra_diagnostics=extra_diagnostics,
             )
         except BugReportValidationError as exc:
             self._send_json(
@@ -12470,6 +13796,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         query = parse_qs(parsed.query)
         requested = query.get("path", [None])[0]
         path = decode_file_reference(requested)
+        if path is not None and str(path).startswith("\\\\") and not self._file_is_allowed(str(path)):
+            self.send_error(HTTPStatus.FORBIDDEN, "file not allowed")  # before exists(): no SMB sign-in
+            return
         if path is None or not path.exists():
             self.send_error(HTTPStatus.NOT_FOUND, "file not found")
             return
@@ -12613,9 +13942,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             content_digest = digest.hexdigest()
             target_name = _managed_upload_target_name(file_name, content_digest, upload_dir=UPLOAD_DIR)
             target = UPLOAD_DIR / target_name
-            for candidate in sorted(UPLOAD_DIR.glob(f"{content_digest}_*{Path(target_name).suffix}")):
-                if _file_matches_digest(candidate, content_digest, content_length):
-                    return candidate, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
+            # Same bytes picked under another name keep that name: the lesson, EDB and errors are named from this path.
+            if _file_matches_digest(target, content_digest, content_length):
+                return target, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
             try:
                 _replace_file_with_retry(staged_path, target)
             except OSError as exc:
@@ -12815,8 +14144,11 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         export_final_dir: Path | None = None
         export_working_dir: Path | None = None
         export_cleanup_dir: Path | None = None
+        should_cancel = None
         try:
             payload = self._read_json_body()
+            if payload.get("jobId"):
+                should_cancel = self._cancel_checker(payload.get("jobId"))
             preview_only = _coerce_bool(
                 payload.get("preview")
                 if "preview" in payload
@@ -12898,7 +14230,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     if (payload.get("edbName") or payload.get("edb_name")) is not None
                     else None,
                     fallback_stem="mvp_board",
-                    max_bytes=export_edb_name_budget,
+                    max_units=export_edb_name_budget,
                 ),
                 "sync_ui": False,
             }
@@ -12916,7 +14248,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     **common_kwargs,
                 )
             else:
-                result = run_problem_export(
+                result = _run_with_export_progress(
+                    str(payload.get("progressId") or "")[:64],
+                    run_problem_export,
                     source_paths[0] if len(source_paths) == 1 else source_paths,
                     record_mode=str(payload.get("recordMode") or payload.get("record_mode") or "image-only"),
                     text_confidence_threshold=float(payload.get("textConfidenceThreshold") or payload.get("text_confidence_threshold") or 0.78),
@@ -12931,6 +14265,7 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
                     ),
                     content_target=content_target,
                     input_notes=input_notes,
+                    should_cancel=should_cancel,
                     **common_kwargs,
                 )
             if isinstance(result, dict):
@@ -12943,11 +14278,17 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
         except Exception as exc:
             if export_cleanup_dir is not None:
                 _discard_staged_publish(export_cleanup_dir)
+            if should_cancel is not None and should_cancel():
+                self._send_job_cancelled()
+                return
             error_payload = _export_error_payload(exc)
             self._send_json(error_payload, status=_export_error_status(exc, error_payload))
             return
 
         session = result["ui_session"]
+        if not reuse_session_sources and source_paths:
+            # The builder names the session after its output folder (hash-prefixed upload name).
+            session["session_name"] = _lesson_name_from_sources(source_paths)
         session["ai_enabled"] = ai_enabled
         session["aiEnabled"] = ai_enabled
         session.setdefault("input_intent", input_intent)
@@ -13127,31 +14468,60 @@ def _run_startup_artifact_cleanup(server: AppHTTPServer) -> dict[str, Any] | Non
     return result
 
 
+def _run_startup_maintenance(server: AppHTTPServer) -> None:
+    """Background, best effort: drop pure garbage folders, then audit retention cleanup."""
+    if str(os.environ.get("EDB_AUTO_ARTIFACT_CLEANUP") or "").strip() != "0":
+        try:
+            result = server.cleanup_stale_work_folders()
+            print(
+                "[app-server] stale work folder cleanup: "
+                f"planned={result.get('plannedFolderCount', 0)} deleted={result.get('deletedFolderCount', 0)} "
+                f"freed={result.get('deletedBytes', 0)}",
+                file=sys.stderr,
+            )
+        except Exception as exc:  # unreadable history, busy, locked files: retry next launch
+            print(f"[app-server] stale work folder cleanup skipped: {exc}", file=sys.stderr)
+    _run_startup_artifact_cleanup(server)
+
+
 def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool = False) -> None:
     ensure_runtime_dirs()
-    hydrate_user_settings_env()
     write_placeholder_generated_session()
-    url = f"http://{host}:{port}/"
-    if _local_server_is_healthy(host, port):
-        print(f"{APP_NAME} already running at {url}")
-        if open_browser:
-            webbrowser.open(url)
-        return
     handler = partial(AppRequestHandler)
-    try:
-        server = AppHTTPServer((host, port), handler)
-    except OSError as exc:
-        address_in_use = exc.errno in {errno.EADDRINUSE, 48, 98, 10048}
-        if address_in_use and _local_server_is_healthy(host, port):
+    # 8765 stays first (bookmarks, browser storage); the next ports cover another program
+    # (e.g. AnkiConnect) holding it. Each port is health-checked first so a second launch
+    # finds a copy that already moved.
+    candidate_ports = range(port, port + 10)
+    for candidate in candidate_ports:
+        url = f"http://{host}:{candidate}/"
+        if _local_server_is_healthy(host, candidate):
             print(f"{APP_NAME} already running at {url}")
             if open_browser:
-                webbrowser.open(url)
+                _open_running_app(host, candidate)
             return
-        raise
-    _run_startup_artifact_cleanup(server)
+        try:
+            server = AppHTTPServer((host, candidate), handler)
+            break
+        except OSError as exc:
+            # 10013: Windows reserved/excluded port range.
+            address_in_use = exc.errno in {errno.EADDRINUSE, 48, 98, 10048} or getattr(exc, "winerror", None) == 10013
+            # A double-click can land while the first copy is bound but still loading; the long
+            # timeout waits for its answer, while another program answers (or refuses) at once.
+            if address_in_use and _local_server_is_healthy(host, candidate, timeout=15.0):
+                print(f"{APP_NAME} already running at {url}")
+                if open_browser:
+                    _open_running_app(host, candidate)
+                return
+            if not address_in_use or candidate == candidate_ports[-1]:
+                raise
+    # Only the copy that serves moves and loads the settings: a reused copy may be an
+    # older version that still reads them from Documents.
+    hydrate_user_settings_env()
+    threading.Thread(target=_prune_stale_update_downloads, name="update-prune", daemon=True).start()
     print(f"{APP_NAME} running at {url}")
     if open_browser:
         webbrowser.open(url)
+    threading.Thread(target=_run_startup_maintenance, args=(server,), name="startup-maintenance", daemon=True).start()
     previous_signal_handlers: dict[int, Any] = {}
 
     def handle_termination_signal(signum, _frame) -> None:
@@ -13185,6 +14555,68 @@ def run_server(*, host: str = "127.0.0.1", port: int = 8765, open_browser: bool 
             signal.signal(signum, previous)
 
 
+def _startup_error_message(exc: BaseException) -> str:
+    # winerror 10013 is a blocked port, not a folder permission problem.
+    if isinstance(exc, PermissionError) and getattr(exc, "winerror", None) != 10013:
+        if sys.platform == "darwin":
+            return (
+                "작업 폴더에 접근할 수 없어 ClassIn EDB를 열지 못했습니다. "
+                "시스템 설정 > 개인정보 보호 및 보안 > 파일 및 폴더에서 ClassInEDBMVP를 허용한 뒤 다시 열어 주세요."
+            )
+        return (
+            "작업 폴더에 파일을 저장할 수 없어 ClassIn EDB를 열지 못했습니다. "
+            "Windows 보안의 랜섬웨어 방지에서 ClassInEDBMVP를 허용한 뒤 다시 열어 주세요."
+        )
+    return "ClassIn EDB를 열지 못했습니다. 컴퓨터를 다시 시작한 뒤 다시 열어 주세요."
+
+
+def _startup_log_path() -> Path:
+    # Outside Documents, so the log survives a blocked work folder.
+    log_dir = Path.home() / "Library" / "Logs" if sys.platform == "darwin" else Path(tempfile.gettempdir())
+    return log_dir / "ClassInEDBMVP-startup.log"
+
+
+def _show_macos_alert(message: str) -> None:
+    # Text goes in through argv so quotes in the copy cannot break the AppleScript.
+    try:
+        subprocess.run(
+            [
+                "/usr/bin/osascript", "-e", "on run argv", "-e",
+                "display alert (item 1 of argv) message (item 2 of argv) as critical",
+                "-e", "end run", "ClassIn EDB", message,
+            ],
+            check=False,
+            timeout=600,
+        )
+    except Exception:  # a notice must never turn into the 'could not open' dialog or stop the page opening
+        pass
+
+
+def _report_startup_failure(exc: BaseException) -> None:
+    """Log the traceback and show a Korean dialog instead of PyInstaller's English one."""
+    detail = traceback.format_exc()
+    log_path = _startup_log_path()
+    try:
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n[{datetime.now().isoformat(timespec='seconds')}]\n{detail}")
+    except OSError:
+        pass
+    try:
+        print(detail, file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    message = _startup_error_message(exc)
+    try:
+        if sys.platform == "darwin":
+            _show_macos_alert(message)
+        elif sys.platform.startswith("win"):
+            import ctypes
+
+            ctypes.windll.user32.MessageBoxW(None, message, "ClassIn EDB", 0x10)
+    except Exception:
+        pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the local MVP app server for the ClassIn EDB builder.")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host")
@@ -13193,12 +14625,37 @@ def main() -> int:
     parser.add_argument("--no-open-browser", dest="open_browser", action="store_false", help="Do not open the default browser")
     parser.add_argument("--log-file", default="", help="Write stdout/stderr to this file")
     args = parser.parse_args()
-    ensure_runtime_dirs()
-    if args.log_file or is_frozen_app():
-        configure_app_logging(args.log_file or None)
-    enable_fatal_error_logging()
-    open_browser = is_frozen_app() if args.open_browser is None else bool(args.open_browser)
-    run_server(host=args.host, port=args.port, open_browser=open_browser)
+    try:
+        # macOS never starts a second copy of a running .app: Finder/Dock only send a reopen
+        # event, which this windowed process cannot handle. So a plain open (no flags) is a
+        # short launcher that reopens the page or starts the server in the background, and a
+        # closed tab comes back from the app icon. CLI and smoke runs pass flags and serve here.
+        if is_frozen_app() and sys.platform == "darwin" and len(sys.argv) == 1:
+            if _local_server_is_healthy(args.host, args.port):
+                _open_running_app(args.host, args.port)
+            else:
+                subprocess.Popen(
+                    [sys.executable, "--open-browser"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                    close_fds=True,
+                )
+            return 0
+        # Before the first HTTPS call: the update check, PIN update, Gemini and 문제 신고 all verify certificates.
+        _use_macos_system_roots()
+        ensure_runtime_dirs()
+        if args.log_file or is_frozen_app():
+            configure_app_logging(args.log_file or None)
+        enable_fatal_error_logging()
+        open_browser = is_frozen_app() if args.open_browser is None else bool(args.open_browser)
+        run_server(host=args.host, port=args.port, open_browser=open_browser)
+    except Exception as exc:
+        if not is_frozen_app():
+            raise  # dev and terminal runs keep the real traceback
+        _report_startup_failure(exc)
+        return 1
     return 0
 
 

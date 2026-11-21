@@ -55,6 +55,7 @@ def test_confirmed_target_with_normalized_arch_installs_exact_artifact():
     artifact = Path("Setup.exe")
     with (patch.object(app, "build_app_update_status", return_value=status),
           patch.object(app, "load_app_update_config", return_value={"updatePinHash": verifier}),
+          patch.object(app, "_check_update_target"),
           patch.object(app, "_download_update_artifact", return_value=artifact) as download,
           patch.object(app, "_launch_update_helper", return_value={"restartScheduled": True}) as launch):
         result = app.prepare_app_update("4826", expected_update=expected)

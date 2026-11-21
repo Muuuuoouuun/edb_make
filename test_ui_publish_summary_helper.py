@@ -290,6 +290,25 @@ class TestUiPublishSummaryHelper(unittest.TestCase):
             """
         )
 
+    def test_server_preflight_issue_types_never_surface_as_raw_codes(self) -> None:
+        run_node(
+            """
+            const assert = require('node:assert/strict');
+            const { normalizePublishSummary } = require('./ui_prototype/publish_summary.js');
+            const types = ['horizontal_crop_edge_risk', 'passage_quality_review',
+              'step2_page_chrome_artifact_rate', 'step3_page_chrome_artifact', 'brand_new_server_check'];
+            const summary = normalizePublishSummary({
+              edbFileName: 'lesson.edb',
+              classinPreflight: { status: 'needs_attention', passed: false, issueCount: types.length,
+                issues: types.map(type => ({ type })) },
+            });
+            const labels = summary.classinPreflightIssueLabels.join(' / ');
+            for (const type of types) assert.ok(!labels.includes(type), labels);
+            assert.ok(labels.includes('글자 잘림 확인 1'), labels);
+            assert.ok(labels.includes('기타 확인 필요 1'), labels);
+            """
+        )
+
     def test_normalize_publish_preflight_block_labels_problem_id_issues(self) -> None:
         run_node(
             """

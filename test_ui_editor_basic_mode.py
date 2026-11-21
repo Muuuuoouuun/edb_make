@@ -39,7 +39,7 @@ class TestEditorBasicMode(unittest.TestCase):
         assert.equal(findClass(tree, 'placement-column-warning'), undefined);
         const labels = walk(tree).filter(node => node.type === 'button').map(text);
         assert.ok(!labels.some(label => ['2열', '3열'].includes(label)));
-        assert.ok(labels.includes('1.2 맞춤'));
+        assert.ok(labels.includes('쪽 맞춤'));
         assert.ok(labels.includes('빈틈 없이'));
         """)
         self.assertNotIn('TweakRadio label="한 줄 자료 수"', SOURCE)

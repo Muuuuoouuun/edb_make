@@ -222,7 +222,7 @@ class TestUiQueueActions(unittest.TestCase):
         finish = source.split("const finishManualSplitFlow = useCallback(() => {", 1)[1].split("}, []);", 1)[0]
         self.assertIn("setView('board');", finish)
         strip = source.split("// A queued 직접 자르기 request is one-shot", 1)[1].split("const finishManualSplitFlow", 1)[0]
-        self.assertIn("const { manualSplitPageId, manualSplitPageIds, ...rest } = prev;", strip)
+        self.assertIn("const { manualSplitPageId, manualSplitPageIds, editProblemId, ...rest } = prev;", strip)
 
     def test_review_crop_editors_expand_the_workspace_and_restore_the_side_panel(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -421,7 +421,7 @@ class TestUiQueueActions(unittest.TestCase):
 
     def test_reset_blocks_running_jobs_and_only_clears_job_ui_after_server_success(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
-        reset_source = source.split("const resetSession = useCallback(async () => {", 1)[1]
+        reset_source = source.split("const resetSession = useCallback(async ({ keepHistory = false } = {}) => {", 1)[1]
         reset_source = reset_source.split("const shutdownApp", 1)[0]
 
         self.assertIn("jobControllersRef.current.forEach(controller => controller.abort());", reset_source)
@@ -431,7 +431,7 @@ class TestUiQueueActions(unittest.TestCase):
         self.assertIn("backgroundJobs.some(job => job.status === 'running')", reset_source)
         self.assertIn("진행 중인 작업을 취소하거나 완료한 뒤 초기화해 주세요", reset_source)
         self.assertIn("이미 만든 EDB·PNG 출력 파일은 보관됩니다", reset_source)
-        self.assertLess(reset_source.index("await clearSession()"), reset_source.index("setBackgroundJobs([]);"))
+        self.assertLess(reset_source.index("await clearSession({ keepHistory })"), reset_source.index("setBackgroundJobs([]);"))
         self.assertIn("resetBlocked={hasRunningBackgroundJobs}", source)
         self.assertIn("진행 중인 작업을 취소하거나 완료한 뒤 초기화할 수 있습니다", source)
         self.assertIn("downloadInFlightRef.current || downloadBusy", reset_source)
@@ -478,10 +478,9 @@ class TestUiQueueActions(unittest.TestCase):
         html = board_document()
 
         self.assertIn("영역 조정", source)
-        self.assertIn("영역 다시 잡기", source)
         self.assertIn("applyExpandedCrop", source)
         self.assertIn("pendingReviewSelectionProblemIdRef", source)
-        self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ⌘+휠 확대/축소 · Enter 적용 · Esc 취소", source)
+        self.assertIn("시험지 위의 테두리를 바로 조정하고 오른쪽 패널에서 적용하세요. ${PRIMARY_MODIFIER_LABEL}+휠 확대/축소 · Enter 적용 · Esc 취소", source)
         self.assertIn("onBoxEditKeyDown", source)
         self.assertIn("aria-keyshortcuts=\"Enter\"", source)
         self.assertIn("aria-keyshortcuts=\"Escape\"", source)

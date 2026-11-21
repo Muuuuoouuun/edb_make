@@ -409,7 +409,8 @@ class BugReportingTests(unittest.TestCase):
         self.assertEqual(payload["operation"], "session_publish")
         self.assertTrue(payload["retryable"])
         self.assertGreaterEqual(len(payload["recoverySteps"]), 2)
-        self.assertIn("access denied", payload["error"])
+        self.assertEqual("EDB 파일 저장에 실패했습니다.", payload["error"])
+        self.assertEqual("OSError: access denied", payload["detail"])
 
 
 if __name__ == "__main__":

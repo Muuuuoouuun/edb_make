@@ -230,6 +230,9 @@ class TestPackagingFrontendManifest(unittest.TestCase):
                     "CFBundleName": "ClassInEDBMVP",
                     "CFBundleShortVersionString": version,
                     "CFBundleVersion": version,
+                    "LSMinimumSystemVersion": json.loads(
+                        (PROJECT_ROOT / "release" / "opencv-image-profile.json").read_text(encoding="utf-8")
+                    )["minimumMacOS"],
                 },
                 sort_keys=True,
             )
@@ -1118,7 +1121,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         source = (PROJECT_ROOT / "installer" / "windows" / "ClassInEDBMVP.iss").read_text(encoding="utf-8")
         self.assertIn("Compression=lzma2/ultra64", source)
         self.assertIn("SolidCompression=yes", source)
-        self.assertIn("CloseApplications=yes", source)
+        self.assertIn("CloseApplications=force", source)
         self.assertIn("RestartApplications=no", source)
         self.assertIn("[InstallDelete]", source)
         self.assertIn(r'Type: filesandordirs; Name: "{app}\_internal"', source)
@@ -1148,7 +1151,7 @@ class TestPackagingFrontendManifest(unittest.TestCase):
         for source_name in ("package_macos_app.sh", "package_mvp.ps1"):
             source = (PROJECT_ROOT / source_name).read_text(encoding="utf-8")
             self.assertIn("report_package_size.py", source)
-        self.assertIn("-imagekey zlib-level=9", (PROJECT_ROOT / "package_macos_app.sh").read_text())
+        self.assertIn("-imagekey zlib-level=9", (PROJECT_ROOT / "package_macos_app.sh").read_text(encoding="utf-8"))
 
     def test_windows_source_package_fallback_copies_only_runtime_scripts(self) -> None:
         source = (PROJECT_ROOT / "package_mvp.ps1").read_text(encoding="utf-8")

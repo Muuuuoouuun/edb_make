@@ -178,12 +178,12 @@ def test_airun_windows_conversion_does_not_inject_batch_shim_env() -> None:
 
         def fake_run(command, **kwargs):
             assert "airun-hwp" in Path(command[0]).name
-            assert "env" not in kwargs
+            assert kwargs.get("env") is None
             return subprocess.CompletedProcess(command, 1, "", "conversion failed")
 
         with (
             patch.object(preprocess.sys, "platform", "win32"),
-            patch.object(preprocess.subprocess, "run", side_effect=fake_run),
+            patch.object(preprocess, "_run_tool", side_effect=fake_run),
         ):
             converted, errors = preprocess._run_hwp_pdf_converter_commands(
                 source,

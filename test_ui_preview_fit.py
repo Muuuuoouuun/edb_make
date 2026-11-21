@@ -10,7 +10,7 @@ const sandbox = placementSandbox();
 const fixture = savedFixture(sandbox, [34.3, 0.8]);
 const savedSignature = JSON.stringify(fixture);
 Object.assign(sandbox, {
-  items: fixture.items, layoutItems: fixture.items, activeId: 'p1', useMemo: fn => fn(),
+  items: fixture.items, layoutItems: fixture.items, activeId: 'p1', useMemo: fn => fn(), splitTargetId: null,
   manualPreviewZoom: 1, previewFitActive: false,
   basePageH: sandbox.boardPreviewBasePageHeight(362, 26, 70),
   pageH: 266 / 1.2, boardOrderSignature: 'p1|p2', contentW: 800,
@@ -39,7 +39,7 @@ const sandbox = placementSandbox();
 const activeChanges = [], frames = new Map();
 let clock = 0, nextFrame = 1;
 Object.assign(sandbox, {
-  items: [{ id: 'p1' }, { id: 'p2' }], activeId: 'p2', previewFitActive: false,
+  items: [{ id: 'p1' }, { id: 'p2' }], activeId: 'p2', previewFitActive: false, splitTargetId: null,
   layout: { positions: [{ top: 0 }, { top: 24.228814 * 250 }] },
   pageH: 250, boardOrderSignature: 'p1|p2', columnCount: 1,
   scrollRef: { current: { scrollTop: 0, scrollHeight: 8000, clientHeight: 400 } },

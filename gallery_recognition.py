@@ -91,9 +91,14 @@ def read_image_label(image: Image.Image, backend) -> dict | None:
 
 
 def local_label_backend():
-    backend = build_ocr_backend("local", refresh_capabilities=True)
+    # No forced re-probe: the probe re-finds a new standard install by itself,
+    # and each forced probe starts tesseract again for every 8-card request.
+    backend = build_ocr_backend("local")
     if backend.name == "none":
-        raise ValueError("사진 속 번호 인식에는 로컬 OCR이 필요합니다. Tesseract와 한국어·영어 언어 데이터 또는 PaddleOCR을 설치해 주세요.")
+        error = ValueError("사진·스캔 자료의 번호를 읽으려면 Tesseract와 한국어 언어 데이터를 설치한 뒤 '번호·지문 다시 인식'을 눌러 주세요.")
+        error.code = "ocr_unavailable"
+        error.detail = "no local OCR engine: tesseract not on PATH or in standard install folders; PaddleOCR is not bundled"
+        raise error
     if backend.name == "tesseract":
         # A crop is a single text block, unlike a full multi-column exam page.
         backend.config = "--psm 6"

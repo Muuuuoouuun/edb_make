@@ -17,7 +17,13 @@ except ImportError:  # direct script execution
     from build_release_evidence import collect_release_evidence_errors
     from build_release_metadata import collect_release_metadata_errors
 
-REQUIRED_JOBS = {"Release quality gate", "Windows Setup", "macOS DMG", "Update Feed"}
+REQUIRED_JOBS = {"Release quality gate", "Windows Setup", "macOS DMG (arm64)", "macOS DMG (x64)", "Update Feed"}
+# (feed platform, arch, run artifact, evidence platform, built file, release asset name)
+INSTALLERS = (
+    ("macos", "arm64", "macos-installer-arm64", "macos", "ClassInEDBMVP-macOS.dmg", "ClassInEDBMVP-macOS-arm64.dmg"),
+    ("macos-x64", "x64", "macos-installer-x64", "macos", "ClassInEDBMVP-macOS.dmg", "ClassInEDBMVP-macOS-x64.dmg"),
+    ("windows", "x64", "windows-installer", "windows", "ClassInEDBMVP-Setup.exe", "ClassInEDBMVP-Setup.exe"),
+)
 
 
 def require(condition: bool, message: str) -> None:
@@ -53,6 +59,31 @@ def validate_draft(release: dict, commit: str, version: str) -> None:
     require(release.get("target_commitish") == commit, "Draft target does not match the built commit")
 
 
+def version_key(tag: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", tag or "")
+    return tuple(map(int, match.groups())) if match else None
+
+
+def validate_version_increase(releases: list[dict], version: str) -> None:
+    # Installed apps read a lower Latest as "up to date" and stop updating.
+    published = [key for release in releases if not release.get("draft") and not release.get("prerelease")
+                 if (key := version_key(release.get("tag_name", "")))]
+    if published:
+        newest = max(published)
+        require(version_key(version) > newest, f"Version {version} must be higher than the published release v{'.'.join(map(str, newest))}")
+
+
+def check_update_smoke(directory: Path, platform: str, arch: str, version: str, commit: str, installer_sha256: str) -> None:
+    """Require proof that this exact installer passed the real PIN install-and-relaunch update."""
+    path = directory / "update-smoke.json"
+    require(path.is_file(), f"Missing native update proof in {directory.name}: run Build Installers with verify_native_update=true")
+    proof = json.loads(path.read_text(encoding="utf-8"))
+    expected = {"platform": platform, "arch": arch, "targetVersion": version, "targetSha256": installer_sha256,
+                "targetSourceCommit": commit, "wrongPinRejected": True}
+    for key, value in expected.items():
+        require(proof.get(key) == value, f"Native update proof mismatch: {directory.name}/{key}")
+
+
 def verify_artifacts(root: Path, commit: str, version: str, repository: str) -> tuple[list[Path], dict]:
     feed_dir = root / "update-feed"
     feed = json.loads((feed_dir / "update.json").read_text())
@@ -64,11 +95,11 @@ def verify_artifacts(root: Path, commit: str, version: str, repository: str) -> 
     require(manifest.get("updateFeedUrl") == f"{base}/latest/download/update.json", "Unexpected feed URL")
     require(feed.get("manifestUrl") == f"{base}/download/v{version}/manifest.json", "Unexpected manifest URL")
     require(feed.get("manifestSha256") == sha256(feed_dir / "manifest.json"), "Manifest digest mismatch")
-    require(set(feed.get("platforms", {})) == {"macos", "windows"}, "Incomplete platform feed")
-    require(len(manifest.get("artifacts", [])) == 2, "Incomplete artifact manifest")
+    require(set(feed.get("platforms", {})) == {row[0] for row in INSTALLERS}, "Incomplete platform feed")
+    require(len(manifest.get("artifacts", [])) == len(INSTALLERS), "Incomplete artifact manifest")
     files, restored = [], []
-    for platform, arch, filename in [("macos", "arm64", "ClassInEDBMVP-macOS.dmg"), ("windows", "x64", "ClassInEDBMVP-Setup.exe")]:
-        directory = root / f"{platform}-installer"
+    for platform, arch, artifact_dir, evidence_platform, built_name, filename in INSTALLERS:
+        directory = root / artifact_dir
         metadata = directory / "release-metadata"
         # GitHub artifact transport omits hidden files. Recover only the fixed
         # generator sentinel, requiring its ORIGINAL manifest size and digest.
@@ -76,15 +107,18 @@ def verify_artifacts(root: Path, commit: str, version: str, repository: str) -> 
         if not sentinel.exists():
             original = json.loads((metadata / "metadata-manifest.json").read_text())
             entry = next(row for row in original["files"] if row["path"] == sentinel.name)
-            content = b"generated; safe to replace\r\n" if platform == "windows" else b"generated; safe to replace\n"
+            content = b"generated; safe to replace\r\n" if evidence_platform == "windows" else b"generated; safe to replace\n"
             require(len(content) == entry["sizeBytes"] and hashlib.sha256(content).hexdigest() == entry["sha256"], "Sentinel does not match original metadata")
             sentinel.write_bytes(content)
             restored.append({"platform": platform, "file": sentinel.name, "sha256": entry["sha256"]})
         errors = collect_release_metadata_errors(metadata, expected_version=version, expected_git_commit=commit)
-        errors += collect_release_evidence_errors(directory / f"{platform}-release-evidence.json", directory, expected_version=version, expected_git_commit=commit)
+        errors += collect_release_evidence_errors(directory / f"{evidence_platform}-release-evidence.json", directory, expected_version=version, expected_git_commit=commit)
         require(not errors, "\n".join(errors))
-        path = directory / filename
-        expected = {"version": version, "arch": arch, "fileName": filename, "sizeBytes": path.stat().st_size, "sha256": sha256(path), "downloadUrl": f"{base}/download/v{version}/{filename}"}
+        path = root / filename
+        (directory / built_name).rename(path)
+        digest = sha256(path)
+        check_update_smoke(directory, evidence_platform, arch, version, commit, digest)
+        expected = {"version": version, "arch": arch, "fileName": filename, "sizeBytes": path.stat().st_size, "sha256": digest, "downloadUrl": f"{base}/download/v{version}/{filename}"}
         entry = feed["platforms"][platform]
         rows = [row for row in manifest["artifacts"] if row.get("platform") == platform]
         require(len(rows) == 1, "Duplicate/missing manifest platform")
@@ -124,6 +158,7 @@ def main() -> None:
     require(len(matches) == 1, "An existing draft release is required")
     release = matches[0]
     validate_draft(release, commit, args.version)
+    validate_version_increase(releases, args.version)
     root = args.output_dir.resolve()
     require(not root.exists(), "Use a fresh artifact output directory")
     subprocess.run(["gh", "run", "download", args.run_id, "--repo", args.repository, "--dir", str(root)], check=True)
@@ -133,8 +168,8 @@ def main() -> None:
     (root / "artifact-verification.json").write_text(json.dumps(report, indent=2) + "\n")
     archive = root / "release-evidence.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
-        for platform in ["macos", "windows"]:
-            for path in sorted((root / f"{platform}-installer").rglob("*")):
+        for row in INSTALLERS:
+            for path in sorted((root / row[2]).rglob("*")):
                 if path.is_file() and path.suffix.lower() not in {".exe", ".dmg"}:
                     output.write(path, path.relative_to(root).as_posix())
         output.write(root / "artifact-verification.json", "artifact-verification.json")
