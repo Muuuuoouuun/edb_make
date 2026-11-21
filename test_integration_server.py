@@ -301,10 +301,16 @@ def test_guide_points_to_labels_the_app_shows():
     app = (ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
     for label in ("새 수업 시작", "다시 실행", "ClassIn에서 열기", "폴더 열기", "다시 제작", "저장 공간",
                   "오래된 작업 파일 정리", "크기·간격", "문항 사이 여백", "칠판 배경", "처리 방식 선택", "2단계 · 칠판용",
-                  "선택적 AI 재구성"):
+                  "선택적 AI 재구성",
+                  # The one method picker (Home, 설정 → 분할 방식); added files are processed at once (G8).
+                  "어떻게 넣을까요?", "문항 AI 인식", "페이지 전체 넣기", "공통 지문만 추출", "수동 자르기", "선택·이동",
+                  # A shared PC removes its key in the app, not by deleting a folder that may hold lessons (G14).
+                  "AI 사용·연결", "저장된 키 삭제"):
         assert label in guide and label in app, label
     # The update-prune thread clears week-old folders at every launch (dev/srv-update).
     assert "일주일이 지난 폴더는 앱을 켤 때 정리됩니다" in guide
     for gone in ("폴더는 다음 업데이트 때 정리", "`배치` 탭", "`자료` 탭", "`전체 레이아웃`", "`상세 설정`",
-                 "`2단계 · AI 변환`", "`AI 업스케일 재구성`"):
+                 "`2단계 · AI 변환`", "`AI 업스케일 재구성`",
+                 "분할하기", "`자동 분할`", "`페이지 그대로`", "`직접 자르기`", "`업로드 방식`", "자르기를 멈추고 칠판으로",
+                 "AI 설정 폴더를 꼭 삭제"):
         assert gone not in guide, gone

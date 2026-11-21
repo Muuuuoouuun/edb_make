@@ -285,6 +285,7 @@ def test_hwpx_gap_with_html_fallback_gets_teacher_copy():
         patch.object(app.preprocess, "_iter_hwp_text_converter_commands", return_value=[]),
         patch.object(app.preprocess, "_iter_chrome_pdf_commands", return_value=[["/usr/bin/chrome"]]),
         patch.object(app.preprocess, "_iter_rhwp_core_renderer_commands", return_value=[]),
+        patch.object(app.preprocess, "_iter_rhwp_python_renderer_commands", return_value=[]),
     ):
         hangul = app.describe_runtime_diagnostics()["hangul"]
     assert hangul["status"] == "partial"

@@ -25,7 +25,7 @@ function handleFilesSandbox(overrides = {}) {
     fileInputRef: { current: { value: 'picked' } }, setPendingFiles() {}, setRecognitionReview() {},
     selectPendingFile() {}, showToast: (message, tone) => state.toasts.push([message, tone]),
     session: null, runtimeDiagnostics: null, IS_MAC_PLATFORM: false,
-    sessionPublishSummary: s => s?.publish_summary || null, sessionEditState: { dirty: false },
+    sessionPublishSummary: s => s?.publish_summary || null, sessionEditState: { dirty: false }, reviewEditorActive: false,
     fileName: '3월 2주 수학', newLessonAskedRef: { current: null },
     window: { confirm: message => { state.prompts.push(message); return state.answer; } },
     resetSession: async options => {

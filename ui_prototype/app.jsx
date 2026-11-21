@@ -4503,7 +4503,7 @@ function ReviewStage({
 
   const cancelManualPageSplit = () => {
     const regionCount = (manualSplit?.regions || []).length;
-    if (regionCount && !window.confirm(`적용하지 않은 영역 ${regionCount}개가 사라집니다. 편집을 닫을까요?`)) return;
+    if (regionCount && !window.confirm(`적용하지 않은 영역 ${regionCount}개가 사라집니다. 편집을 닫을까요?\n취소를 누르면 계속 편집할 수 있어요.`)) return;
     const wasGuided = !!manualSplit?.guided;
     manualSplitDragRef.current = null;
     manualSplitCommitRef.current = false;
@@ -5056,10 +5056,10 @@ function ReviewStage({
   const cancelBoxEdit = () => {
     // Areas drawn in the 수동 자르기 tab wait in originalModeDrafts and close with the editor.
     const draftRegionCount = (originalModeDrafts.current.split?.regions || []).length;
-    if (draftRegionCount && !window.confirm(`적용하지 않은 영역 ${draftRegionCount}개가 사라집니다. 편집을 닫을까요?`)) return;
+    if (draftRegionCount && !window.confirm(`적용하지 않은 영역 ${draftRegionCount}개가 사라집니다. 편집을 닫을까요?\n취소를 누르면 계속 편집할 수 있어요.`)) return;
     // A single 영역 조정 closes on Esc ('Esc 취소'); several passage areas are worth a question.
     if (boxEdit?.multi && !boxEditSegmentsEqual(boxEdit.originalSegments, boxEdit.segments)
-      && !window.confirm('적용하지 않은 영역 변경이 사라집니다. 편집을 닫을까요?')) return;
+      && !window.confirm('적용하지 않은 영역 변경이 사라집니다. 편집을 닫을까요?\n취소를 누르면 계속 편집할 수 있어요.')) return;
     boxEditDragRef.current = null;
     boxEditCommitRef.current = false;
     setBoxEditDraftBox(null);
@@ -13168,7 +13168,9 @@ function OperationRecoveryBanner({
           {!localServerUnavailable && !isQueue && !isReset && !isDownload && !isRestore && <button className="btn" type="button" onClick={onRestore} disabled={!canRestore || anyBusy || conflictNeedsResolution}>
             {Icon.folder} {restoreBusy ? '여는 중…' : '최근 저장본 열기'}
           </button>}
-          {(!localServerUnavailable || serverConnected) && isQueue && recovery?.alternativeLabel && (
+          {/* The other method sends the same files, so a file refused before sending fails again. */}
+          {(!localServerUnavailable || serverConnected) && isQueue && recovery?.alternativeLabel
+            && !['upload_source_changed', 'upload_file_too_large', 'upload_batch_too_large'].includes(error.code) && (
             <button className="btn" type="button" onClick={onExport} disabled={anyBusy || conflictNeedsResolution}>{Icon.pagePng} {recovery.alternativeLabel}</button>
           )}
           {!localServerUnavailable && !isReset && !isQueue && !isRestore && (!isDownload || canExport) && <button className="btn" type="button" onClick={onExport} disabled={!canExport || anyBusy || conflictNeedsResolution}>
@@ -14119,6 +14121,24 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   ).map(item => applyItemStateToProblem(mergedProblemsById.get(item.id) || {}, item));
   const mergedPages = [...(base.pages || []), ...incomingPages];
   const concatUnique = (...lists) => Array.from(new Set(lists.flat().filter(Boolean)));
+  // Keep the added file's 지문 묶음 and 지문 확인 items (with its renamed problem ids) for 검수;
+  // 제작 recomputes both from the problems.
+  const remapIds = ids => (Array.isArray(ids) ? ids.map(id => problemIdMap.get(id) || id) : ids);
+  const withAddedPassages = (key, snakeKey) => {
+    const listOf = session => [session[key], session[snakeKey]].find(Array.isArray) || [];
+    const own = listOf(base);
+    const ownGroupIds = new Set(own.map(entry => entry?.groupId));
+    return own.concat(listOf(incoming)
+      .filter(entry => entry && !ownGroupIds.has(entry.groupId))
+      .map(entry => ({
+        ...entry,
+        problemIds: remapIds(entry.problemIds),
+        coreProblemIds: remapIds(entry.coreProblemIds),
+        fragmentProblemIds: remapIds(entry.fragmentProblemIds),
+      })));
+  };
+  const passageGroups = withAddedPassages('passageGroups', 'passage_groups');
+  const passageReviewItems = withAddedPassages('passageReviewItems', 'passage_review_items');
   // A lesson mixing 공통 지문만 추출 and 문항 AI 인식 files is reviewed as
   // questions; each passage-only problem carries its own stamp for 제작.
   const baseTarget = normalizeContentTarget(base.contentTarget || base.content_target);
@@ -14128,6 +14148,10 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
     ...base,
     contentTarget,
     content_target: contentTarget,
+    passageGroups,
+    passage_groups: passageGroups,
+    passageReviewItems,
+    passage_review_items: passageReviewItems,
     session_name: fileName || base.session_name || incoming.session_name || '새 수업',
     layoutGapMode,
     layout_gap_mode: layoutGapMode,
@@ -17566,6 +17590,8 @@ function simpleToastErrorMessage(error, fallbackMessage = '처리 실패'){
     app_internal_error: '앱 내부 오류 · 오류 상세를 확인해 주세요',
     single_problem_too_tall: '한 문항이 칠판 50페이지를 넘습니다',
     ai_retry_not_applied: '문항은 그대로예요 · 인터넷 연결과 Gemini API 키·사용량을 확인해 주세요',
+    // Every retry sends the same old revision, so name the way out (the top bar's ··· menu item).
+    session_conflict: '저장된 수업이 바뀌었어요 · 위쪽 ··· 메뉴에서 ‘최신 저장본 불러오기’를 눌러 주세요',
   };
   if (reasons[error?.code]) return `${fallbackMessage} · ${reasons[error.code]}`;
   if (isNetworkRequestError(error)) {
@@ -18837,16 +18863,17 @@ function App(){
     showToast(isRecognition ? 'AI 인식을 취소했어요' : '작업을 취소했어요');
   }, [backgroundJobs, settleBackgroundJob, showToast]);
 
-  // Refresh, close or back leaves a running import holding the app's file lock; stop it there too.
-  // Only imports: 고화질 saves its own result in the app, so a refresh must not throw that paid work away.
+  // Refresh, close or back leaves a running import or 공통 지문 재추출 holding the app's file lock; stop it there too.
+  // Every job but 고화질 hands its result only to this tab. 고화질 saves its own result in the app, so a refresh
+  // must not throw that paid work away.
   useEffect(() => {
-    const importIds = backgroundJobs
-      .filter(job => job.status === 'running' && String(job.scope || '').startsWith('queue-'))
+    const jobIds = backgroundJobs
+      .filter(job => job.status === 'running' && job.scope !== 'image-enhance')
       .map(job => job.id);
-    if (!importIds.length) return undefined;
-    const stopImports = () => importIds.forEach(id => postJobCancel(id));
-    window.addEventListener('pagehide', stopImports);
-    return () => window.removeEventListener('pagehide', stopImports);
+    if (!jobIds.length) return undefined;
+    const stopJobs = () => jobIds.forEach(id => postJobCancel(id));
+    window.addEventListener('pagehide', stopJobs);
+    return () => window.removeEventListener('pagehide', stopJobs);
   }, [backgroundJobs]);
 
   useEffect(() => {
@@ -19154,7 +19181,8 @@ function App(){
         });
         return;
       }
-      const boardChanged = e?.code === 'session_conflict';
+      // No saved lesson left (새 수업 or 초기화 elsewhere): re-running cannot help, so the generic toast names the way out.
+      const boardChanged = e?.code === 'session_conflict' && !(e.hasLatestSessionState && !e.latestSession);
       // A refused pre-job save leaves the edits unsaved: keep them rather than take the saved lesson.
       const unsavedBoardKept = boardChanged && !boardSaved && boardUnsaved;
       const savedLesson = boardChanged && !unsavedBoardKept && savedLessonNewerThanScreen(e);
@@ -19723,7 +19751,8 @@ function App(){
         });
         return;
       }
-      const boardChanged = e?.code === 'session_conflict';
+      // No saved lesson left: as in AI 재인식, the generic toast names the way out.
+      const boardChanged = e?.code === 'session_conflict' && !(e.hasLatestSessionState && !e.latestSession);
       // A refused pre-job save leaves the edits unsaved: keep them rather than take the saved lesson.
       const unsavedBoardKept = boardChanged && !boardSaved && boardUnsaved;
       const savedLesson = boardChanged && !unsavedBoardKept && savedLessonNewerThanScreen(e);
@@ -19825,7 +19854,7 @@ function App(){
   const shutdownApp = useCallback(async () => {
     const message = workInProgress
       ? '진행 중인 작업이 있어요. 지금 종료하면 작업이 중단됩니다. 그래도 종료할까요?'
-      : sessionEditState.dirty
+      : sessionEditState.dirty || reviewEditorActive
         ? '저장하지 않은 수업 변경이 있어요. 종료하면 사라집니다. 그래도 종료할까요?'
         : '앱을 종료할까요? 브라우저 창은 직접 닫아 주세요.';
     if (!window.confirm(message)) return;
@@ -19845,7 +19874,7 @@ function App(){
     } catch (e) {
       showSimpleErrorToast(e, '앱 종료 실패');
     }
-  }, [workInProgress, sessionEditState.dirty, showSimpleErrorToast, showToast]);
+  }, [workInProgress, sessionEditState.dirty, reviewEditorActive, showSimpleErrorToast, showToast]);
 
   const refreshSession = useCallback(async () => {
     if (refreshInFlightRef.current || restoreInFlightRef.current || loading || hasRunningBackgroundJobs || mutatingRef.current) {
@@ -19992,12 +20021,14 @@ function App(){
     if (!files.length) return 0;
     // Material dropped on a lesson whose EDB is built is usually the next lesson: ask once per build.
     const builtAt = session && sessionPublishSummary(session)?.publishedAt;
-    if (builtAt && newLessonAskedRef.current !== builtAt && !sessionEditState.dirty && !pendingFilesRef.current.length) {
+    // Not while the teacher is still working here (unsaved edits, an open 원본 편집, a queue), as in resetSession's question.
+    if (builtAt && newLessonAskedRef.current !== builtAt && !sessionEditState.dirty && !reviewEditorActive && !pendingFilesRef.current.length) {
       newLessonAskedRef.current = builtAt;
       if (window.confirm(`새 수업으로 시작할까요?\n\n‘${fileName}’ 수업은 EDB까지 만들었어요. 새 수업을 시작해도 이 수업은 최근 수업에 그대로 남아요.\n취소를 누르면 이 수업 뒤에 이어서 넣어요.`)) {
         // The closure may still hold this lesson until React re-renders; the ref keeps the call from asking twice.
+        // The whole drop goes again so the 'left out' notice outlasts the 새 수업 toast.
         void resetSession({ keepHistory: true }).then(ok => {
-          if (ok) handleFilesRef.current(files);
+          if (ok) handleFilesRef.current(incoming);
           else newLessonAskedRef.current = null;
         });
         return 0;
@@ -20439,8 +20470,10 @@ function App(){
 
   useEffect(() => {
     if (!recognitionReview || recognitionReview.applyFailed || confirmingRecognition || mutating || loading || hasPendingSessionConflict) return;
+    // A 수동 자르기 import opens its pages in the editor: wait until the open 원본 편집 is applied or closed.
+    if (recognitionReview.manualSplit && reviewEditorActive) return;
     void applyRecognitionResult();
-  }, [recognitionReview, confirmingRecognition, mutating, loading, hasPendingSessionConflict, applyRecognitionResult]);
+  }, [recognitionReview, confirmingRecognition, mutating, loading, hasPendingSessionConflict, reviewEditorActive, applyRecognitionResult]);
 
   useEffect(() => {
     if (!initialSessionLoaded || loading || mutating || hasRunningBackgroundJobs || publishBusy || refreshing
@@ -21802,6 +21835,8 @@ function App(){
           onToggleDarkMode={v => { setTweak('dark', v); writeStoredPreference(DARK_MODE_KEY, v); }}
           onConfirm={onConfirm}
           onEditOriginal={id=>{
+            // An open 수동 자르기 or 영역 조정 keeps its drawn areas; the toolbar tabs switch between them.
+            if (reviewEditorActive) { showToast('영역 편집을 적용하거나 취소한 뒤 다시 눌러 주세요'); return; }
             setSelectedProblemIds(new Set([id]));setActiveId(id);setMobilePane('stage');
             setReviewFocus({filter:'all',problemIds:[id],editProblemId:id,source:'inspector-original-edit'});
             editorReturnsToBoardRef.current = view === 'board';

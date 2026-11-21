@@ -139,7 +139,8 @@ class TestConverterTimeout(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             tmp = Path(raw)
             marker = tmp / "child-survived"
-            child = "import sys, time; time.sleep(5); open(sys.argv[1], 'w').close()"
+            # taskkill alone takes 1-2 s on Windows: the child sleeps long enough to tell a kill from a wait.
+            child = "import sys, time; time.sleep(8); open(sys.argv[1], 'w').close()"
             launcher = tmp / "launcher.py"
             # Like soffice.exe: start soffice.bin with our stdout/stderr and wait for it.
             launcher.write_text(
@@ -157,8 +158,8 @@ class TestConverterTimeout(unittest.TestCase):
             elapsed = time.monotonic() - started
             self.assertIsNone(converted)
             self.assertIn("timed out", " ".join(errors))
-            self.assertLess(elapsed, 4, "the timeout must not wait for the converter's child")
-            time.sleep(max(0.0, 6.5 - (time.monotonic() - started)))
+            self.assertLess(elapsed, 6, "the timeout must not wait for the converter's child")
+            time.sleep(max(0.0, 9.5 - (time.monotonic() - started)))
             self.assertFalse(marker.exists(), "the converter's child outlived the timeout")
 
     def test_run_tool_returns_exit_code_and_output(self) -> None:
@@ -204,6 +205,7 @@ class TestLibreOfficeHwpSupport(unittest.TestCase):
             mock.patch.object(preprocess, "_iter_hwp_text_converter_commands", return_value=[]),
             mock.patch.object(preprocess, "_iter_chrome_pdf_commands", return_value=[]),
             mock.patch.object(preprocess, "_iter_rhwp_core_renderer_commands", return_value=[]),
+            mock.patch.object(preprocess, "_iter_rhwp_python_renderer_commands", return_value=[]),
         ):
             stock = app_server.describe_runtime_diagnostics()["hangul"]
             (profile / H2ORESTART).mkdir(parents=True)

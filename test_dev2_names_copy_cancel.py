@@ -116,7 +116,7 @@ def test_import_requests_carry_the_job_id_their_cancel_names() -> None:
     """)
 
 
-def test_closing_or_refreshing_the_page_cancels_running_imports_only() -> None:
+def test_closing_or_refreshing_the_page_cancels_running_jobs_but_not_image_enhance() -> None:
     run_node(NODE_SETUP + r"""
     const listeners = new Map(), cancels = [];
     const sandbox = {
@@ -133,15 +133,16 @@ def test_closing_or_refreshing_the_page_cancels_running_imports_only() -> None:
       { id: 'q', scope: 'queue-recognition', status: 'running' },
       { id: 'e', scope: 'image-enhance', status: 'running' },  // 고화질 keeps its paid result
       { id: 'd', scope: 'queue-registration', status: 'done' },
+      { id: 'p', scope: 'session-recognition', status: 'running' },  // 공통 지문 재추출 holds the file lock too
     ];
     vm.runInContext(effect, sandbox);
     listeners.get('pagehide')();
-    assert.deepEqual(cancels, ['q']);
+    assert.deepEqual(cancels, ['q', 'p']);
     sandbox.cleanup();
     assert.equal(listeners.size, 0, 'the listener goes away with the effect');
     sandbox.backgroundJobs = [{ id: 'e', scope: 'image-enhance', status: 'running' }];
     vm.runInContext(effect, sandbox);
-    assert.equal(listeners.size, 0, 'no running import, no listener');
+    assert.equal(listeners.size, 0, 'only 고화질 running, no listener');
     assert.equal(sandbox.cleanup, undefined);
     """)
 

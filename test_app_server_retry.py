@@ -5907,6 +5907,7 @@ class TestRuntimeDiagnostics(unittest.TestCase):
             patch.object(app_server.preprocess, "_iter_hwp_text_converter_commands", return_value=[["/venv/bin/hwp5txt"], ["/venv/bin/python", "-c", "import unhwp; unhwp.extract_text('x')"]]),
             patch.object(app_server.preprocess, "_iter_chrome_pdf_commands", return_value=[["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]]),
             patch.object(app_server.preprocess, "_iter_rhwp_core_renderer_commands", return_value=[]),
+            patch.object(app_server.preprocess, "_iter_rhwp_python_renderer_commands", return_value=[]),
         ):
             diagnostics = app_server.describe_runtime_diagnostics()
 
@@ -5971,6 +5972,7 @@ class TestRuntimeDiagnostics(unittest.TestCase):
             patch.object(app_server.preprocess, "_iter_pyhwp_text_converter_commands", return_value=[]),
             patch.object(app_server.preprocess, "_iter_chrome_pdf_commands", return_value=[]),
             patch.object(app_server.preprocess, "_iter_rhwp_core_renderer_commands", return_value=[]),
+            patch.object(app_server.preprocess, "_iter_rhwp_python_renderer_commands", return_value=[]),
         ):
             diagnostics = app_server.describe_runtime_diagnostics()
 

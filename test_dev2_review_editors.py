@@ -250,7 +250,8 @@ def test_closing_the_manual_split_asks_before_drawn_areas_are_lost() -> None:
     sandbox.cancel();
     assert.equal(state, open, 'declining keeps the drawn areas and their undo history');
     assert.equal(flowDone, 0, 'declining keeps the guided queue');
-    assert.equal(prompts[0], '적용하지 않은 영역 2개가 사라집니다. 편집을 닫을까요?');
+    // The toolbar button is '취소' too, so the dialog says what its own 취소 does.
+    assert.equal(prompts[0], '적용하지 않은 영역 2개가 사라집니다. 편집을 닫을까요?\n취소를 누르면 계속 편집할 수 있어요.');
     answer = true;
     sandbox.cancel();
     assert.equal(state, null);
@@ -282,7 +283,7 @@ def test_closing_the_box_editor_asks_only_when_drawn_areas_would_be_lost() -> No
     state = sandbox.boxEdit = changed;
     sandbox.cancel();
     assert.equal(state, changed, 'declining keeps the stitched areas');
-    assert.equal(prompts[0], '적용하지 않은 영역 변경이 사라집니다. 편집을 닫을까요?');
+    assert.equal(prompts[0], '적용하지 않은 영역 변경이 사라집니다. 편집을 닫을까요?\n취소를 누르면 계속 편집할 수 있어요.');
     answer = true;
     sandbox.cancel();
     assert.equal(state, null);
@@ -303,7 +304,7 @@ def test_closing_the_box_editor_asks_only_when_drawn_areas_would_be_lost() -> No
     state = sandbox.boxEdit = single;
     sandbox.cancel();
     assert.equal(state, single, 'declining keeps the areas drawn in 수동 자르기');
-    assert.deepEqual(prompts, ['적용하지 않은 영역 2개가 사라집니다. 편집을 닫을까요?']);
+    assert.deepEqual(prompts, ['적용하지 않은 영역 2개가 사라집니다. 편집을 닫을까요?\n취소를 누르면 계속 편집할 수 있어요.']);
     answer = true;
     sandbox.cancel();
     assert.equal(state, null);

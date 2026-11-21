@@ -126,6 +126,7 @@ def test_existing_data_folder_that_refuses_new_files_falls_back_at_once(tmp_path
 @pytest.mark.parametrize("payload, warned", [
     ({"ok": True, "version": "0.0.1"}, True),
     ({"ok": True}, True),  # a server from before /api/health named its version
+    ({"ok": True, "version": "0.2.16"}, True),  # a newer copy runs; an older copy (e.g. from the DMG) was opened
     ({"ok": True, "version": "0.2.15"}, False),
 ])
 def test_macos_plain_open_says_when_another_version_is_still_running(payload, warned):
@@ -146,6 +147,8 @@ def test_macos_plain_open_says_when_another_version_is_still_running(payload, wa
     if warned:
         message = order.alert.call_args.args[0]
         assert "‘종료’" in message and "다시 열어 주세요" in message
+        # The running copy may be the newer one, and a Mac shows the app as ClassInEDBMVP.
+        assert "다른 버전" in message and "이전 버전" not in message and "ClassIn EDB" not in message
 
 
 def test_second_copy_on_a_moved_port_also_says_when_another_version_runs():

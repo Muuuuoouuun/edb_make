@@ -7566,7 +7566,8 @@ def _summarize_page_timing_ms(pages: list[PageModel]) -> dict[str, int]:
 
 def _normalize_problem_title(title: str | None, index: int, source_page_id: str, problem_number: int | None = None) -> str:
     raw = (title or "").strip()
-    if raw and "problem" not in raw.lower() and not GENERIC_PROBLEM_TITLE_RE.match(raw):
+    # OCR block text is content, not a name (Tesseract puts one word on each line).
+    if raw and "\n" not in raw and "problem" not in raw.lower() and not GENERIC_PROBLEM_TITLE_RE.match(raw):
         return raw
     if isinstance(problem_number, int) and problem_number > 0:
         return f"문항 {problem_number}"

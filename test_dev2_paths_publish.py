@@ -135,10 +135,13 @@ def test_file_endpoint_never_opens_an_unlisted_network_path(live_server, tmp_pat
         for spelling in (
             r"\\attacker.example\s\x.png", "file://attacker.example/s/x.png",
             "file:////attacker.example/s/x.png", r"\\attacker.example",
-            r"\\attacker.example\s\.app_runtime\outputs\x.png",  # never rebased onto the data folder either
+            r"\\attacker.example\s\.app_runtime\outputs\x.png",  # no copy under the data folder: stays a network path
         ):
             # A link clicked in KakaoTalk or mail opens with Sec-Fetch-Site: none, so only the path check stops it.
-            assert _get_status(live_server, "/api/file?path=" + quote(spelling), "none") == 403, spelling
+            status = _get_status(live_server, "/api/file?path=" + quote(spelling), "none")
+            # A server with no share: Python 3.12 reads it as a network path (403). 3.11, which CI and the release
+            # builds use, reads it as \attacker.example on the app's drive (404). touched == [] guards SMB on both.
+            assert status == 403 or (spelling == r"\\attacker.example" and status == 404), spelling
         assert _get_status(live_server, "/api/file?path=" + quote(str(listed.resolve())), "same-origin") == 200
     assert touched == []
 

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$AppName = "ClassInEDBMVP",
     [string]$AppId = "",
     [string]$AppDisplayName = "ClassIn EDB",

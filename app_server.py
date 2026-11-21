@@ -2646,7 +2646,7 @@ def _open_running_app(host: str, port: int) -> None:
         running = (_local_server_health(host, port, timeout=5.0) or {}).get("version")
         if str(running or "") != str(load_app_update_config().get("version") or ""):
             _show_macos_alert(
-                "이전 버전의 ClassIn EDB가 아직 실행 중입니다. "
+                "다른 버전의 ClassInEDBMVP가 이미 실행 중입니다. "
                 "열리는 화면의 ‘···’ 메뉴에서 ‘종료’를 누른 뒤 ‘응용 프로그램’ 폴더에서 ClassInEDBMVP를 다시 열어 주세요."
             )
     webbrowser.open(f"http://{host}:{port}/")
@@ -2828,6 +2828,9 @@ def describe_runtime_diagnostics() -> dict[str, Any]:
         # The installed app renders and reads HWP/HWPX with its bundled rhwp, in-process.
         hwp_renderers.append({"name": "rhwp-python", "path": "", "args": []})
         text_extractors.append({"name": "rhwp-python", "path": "", "args": []})
+    else:
+        # A source run renders with rhwp-python in a subprocess, as _render_hwp_pages_with_rhwp_python does.
+        hwp_renderers.extend(_command_info(command) for command in preprocess._iter_rhwp_python_renderer_commands())
 
     # Stock LibreOffice opens only Hangul 97 files; it counts once it has the H2Orestart extension.
     stock_libreoffice = [
@@ -2949,9 +2952,9 @@ def _processing_error_context(exc: BaseException) -> dict[str, Any]:
                 context.setdefault(key, str(value) if isinstance(value, Path) else value)
         current = getattr(current, "cause", None) or current.__cause__
     if context.get("sourceFile"):
-        # The teacher's own file name: no folder and no managed-upload digest prefix.
-        name = re.sub(r"^[0-9a-f]{40,64}_", "", Path(str(context["sourceFile"])).name)
-        context["sourceFile"] = context["fileName"] = name
+        # The teacher's own file name: no folder, no managed-upload digest prefix or name-hash tail.
+        path = Path(str(context["sourceFile"]))
+        context["sourceFile"] = context["fileName"] = _MANAGED_UPLOAD_NAME.sub(r"\1", path.stem) + path.suffix
     return context
 
 
@@ -2977,7 +2980,7 @@ def _classified_processing_error(exc: Exception) -> dict[str, Any] | None:
                 reason_text = reason_text.replace(re.split(r"[\\/]", filename)[-1], "")
     pdf_open_failure = any(
         type(item).__name__ in {"FileDataError", "EmptyFileError"}
-        or str(item).lower().startswith("failed to open pdf document ")
+        or str(item).lower().startswith(("failed to open pdf document ", "pdf document has no pages"))
         for item in causes
     )
     native_cv2_causes = [item for item in causes if type(item).__module__ == "cv2"]
@@ -3499,10 +3502,15 @@ def sanitize_edb_file_name(
     return f"{stem}.edb"
 
 
+# A managed upload is stored as <sha256>_<teacher's name>_<10-hex name hash><ext>; the tail
+# goes only when the prefix is there, so 'plain_0123456789.pdf' keeps its name.
+_MANAGED_UPLOAD_NAME = re.compile(r"^[0-9a-f]{40,64}_(.+?)(?:_[0-9a-f]{10})?$")
+
+
 def _lesson_name_from_sources(source_paths: list[Path]) -> str:
     """Readable lesson name: the first file's name without the managed upload digest
     prefix and its name-hash tail (the tail goes only when the prefix is there)."""
-    stem = re.sub(r"^[0-9a-f]{40,64}_(.+?)(?:_[0-9a-f]{10})?$", r"\1", source_paths[0].stem).strip() or "새 수업"
+    stem = _MANAGED_UPLOAD_NAME.sub(r"\1", source_paths[0].stem).strip() or "새 수업"
     return stem if len(source_paths) == 1 else f"{stem} 외 {len(source_paths) - 1}개"
 
 
@@ -4282,16 +4290,17 @@ def decode_file_reference(value: str | None) -> Path | None:
         path = Path(text)
         if not path.is_absolute():
             path = _resolve_unless_network(BASE_DIR / path)
-    # Data folder moved (OneDrive folder backup, new PC or user name): a stored path into an old
-    # .app_runtime that is gone reads the same file under the current one. Network paths are never
-    # probed, and paths already under the current runtime fail the prefix test without a syscall.
+    # Data folder moved (OneDrive folder backup, new PC or user name, or off a network share): a stored
+    # path into an old .app_runtime reads the same file under the current one. A \\host path is never
+    # stat'ed (R12): it moves only when its copy under the current runtime exists. Paths already under
+    # the current runtime fail the prefix test without a syscall.
     path_text = str(path)
-    if not path_text.startswith("\\\\") and not os.path.normcase(path_text).startswith(
-        os.path.normcase(str(RUNTIME_DIR)) + os.sep
-    ):
+    if not os.path.normcase(path_text).startswith(os.path.normcase(str(RUNTIME_DIR)) + os.sep):
         parts = PureWindowsPath(path_text).parts  # both separators: a Mac also reads a Windows path
-        if RUNTIME_DIR.name in parts and not os.path.exists(path_text):
-            path = RUNTIME_DIR.joinpath(*parts[len(parts) - parts[::-1].index(RUNTIME_DIR.name):])
+        if RUNTIME_DIR.name in parts:
+            moved = RUNTIME_DIR.joinpath(*parts[len(parts) - parts[::-1].index(RUNTIME_DIR.name):])
+            if os.path.exists(moved) if path_text.startswith("\\\\") else not os.path.exists(path_text):
+                path = moved
     return path
 
 
@@ -5509,8 +5518,10 @@ def _session_history_key(session: dict[str, Any], *, folder_only: bool = False) 
     for key in ("output_dir", "outputDir", "pages_json_path", "pagesJsonPath"):
         value = str(session.get(key) or "").strip()
         if value:
-            # Decoded: after the data folder moves, the old and new spellings give one key.
-            return str(decode_file_reference(value) or value)
+            # The id (and R40's history_key) hash the stored spelling, so every PC that syncs this folder
+            # lists the lesson under one id (conflict copies, R87). The dedupe key is decoded: a moved
+            # data folder's old and new spellings still match.
+            return str(decode_file_reference(value) or value) if folder_only else value
     if folder_only:
         return ""  # the name|time fallback below can be shared by two different lessons
     name = str(session.get("session_name") or session.get("sessionName") or "session")
@@ -11056,6 +11067,8 @@ class AppHTTPServer(ThreadingHTTPServer):
                 return None
             history, history_error = persist_latest_session_with_history(updated_snapshot)
             self.latest_session = updated_snapshot
+            if getattr(self, "_latest_stamp", None) is None:  # first save after latest_session.json was missing
+                self._latest_stamp = _latest_session_stamp()
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(updated_snapshot))
             self._allow_new_history_paths(history)
@@ -11100,6 +11113,8 @@ class AppHTTPServer(ThreadingHTTPServer):
                     )
                 raise
             self.latest_session = updated_snapshot
+            if getattr(self, "_latest_stamp", None) is None:  # first save after latest_session.json was missing
+                self._latest_stamp = _latest_session_stamp()
             self._session_revision += 1
             self.allowed_files.update(collect_session_file_paths(updated_snapshot))
             self._allow_new_history_paths(history)
@@ -11162,10 +11177,12 @@ class AppHTTPServer(ThreadingHTTPServer):
     def register_current_session(self, session: dict[str, Any]) -> bool:
         """Persist history only if ``session`` is still the current snapshot."""
         snapshot = _clone_jsonish(session)
+        paths = collect_session_file_paths(snapshot)  # stat-heavy: outside the lock
         with self._state_lock:
+            self._adopt_synced_session_locked()  # a sync since the caller's snapshot wins: never write the old copy back
             if self.latest_session != snapshot:
                 return False
-            self.allowed_files.update(collect_session_file_paths(snapshot))
+            self.allowed_files.update(paths)
             with _session_storage_lock:
                 if not LATEST_SESSION_JSON.exists():
                     save_latest_session(snapshot)
@@ -11260,6 +11277,8 @@ class AppHTTPServer(ThreadingHTTPServer):
         keep_history: bool = False,
     ) -> tuple[dict[str, Any] | None, int]:
         with self._state_lock:
+            # A sync that landed after the handler's revision check is a conflict, not lost work.
+            self._adopt_synced_session_locked()
             if expected_revision is not None and self._session_revision != expected_revision:
                 raise SessionRevisionConflict(
                     f"session revision changed from {expected_revision} to {self._session_revision}"
@@ -11334,6 +11353,9 @@ def _uncaught_errors_as_json(method):
         try:
             method(self)
         except Exception as exc:
+            if isinstance(exc, ConnectionError) and getattr(self, "_response_started", False):
+                self.close_connection = True  # the browser left mid-reply (refresh, tab close, cancel): nothing to answer or log
+                return
             _log_operation_exception(f"{getattr(self, 'command', '')} {urlparse(self.path).path}", exc)
             if getattr(self, "_response_started", False) or isinstance(exc, ConnectionError):
                 self.close_connection = True  # a half-written response cannot be repaired
@@ -12618,17 +12640,19 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
     # Returns the updated session (rewritten for HTTP).
     def _handle_session_mutate(self) -> None:
         session, current_revision = self._current_session_state()
-        if session is None:
-            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
-            return
-        base_session = _clone_jsonish(session)
         try:
             payload = self._read_json_body()
         except json.JSONDecodeError as exc:
             self._send_json({"ok": False, "error": f"invalid JSON: {exc}"}, status=HTTPStatus.BAD_REQUEST)
             return
+        # A tab still showing a lesson that 새 수업 closed (another tab, or another PC through
+        # sync) has an old revision: it gets the Korean session_conflict, not the bare 404.
         if not self._validate_expected_session_revision(payload, current_revision):
             return
+        if session is None:
+            self._send_json({"ok": False, "error": "no session available"}, status=HTTPStatus.NOT_FOUND)
+            return
+        base_session = _clone_jsonish(session)
 
         action = str(payload.get("action") or "").strip().lower()
         try:
@@ -13918,9 +13942,9 @@ class AppRequestHandler(SimpleHTTPRequestHandler):
             content_digest = digest.hexdigest()
             target_name = _managed_upload_target_name(file_name, content_digest, upload_dir=UPLOAD_DIR)
             target = UPLOAD_DIR / target_name
-            for candidate in sorted(UPLOAD_DIR.glob(f"{content_digest}_*{Path(target_name).suffix}")):
-                if _file_matches_digest(candidate, content_digest, content_length):
-                    return candidate, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
+            # Same bytes picked under another name keep that name: the lesson, EDB and errors are named from this path.
+            if _file_matches_digest(target, content_digest, content_length):
+                return target, {"fileName": file_name, "sizeBytes": content_length, "sha256": content_digest}
             try:
                 _replace_file_with_retry(staged_path, target)
             except OSError as exc:
