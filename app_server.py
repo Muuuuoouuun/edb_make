@@ -4988,8 +4988,20 @@ def _session_publish_blocking_preflight(
         == "page-as-is"
         or str(template_metadata.get("placement_mode") or "").strip().lower() == "continuous-page-as-is"
     )
-    if not page_as_is:
-        issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues(checked_problems))
+    # 페이지 전체 넣기 and 수동 자르기 mark every page they import, and cuts keep their page,
+    # so a lesson mixing 넣는 방식 is checked per question. Problem stamps can't tell:
+    # cuts carry none and the UI sends them as multi-problem. Pages saved before the
+    # mark existed follow the lesson-wide value.
+    page_file_by_id = {
+        str(page.get("id") or ""): bool(page.get("pageAsIsFastPath") or page.get("page_as_is_fast_path"))
+        for page in pages
+        if "pageAsIsFastPath" in page or "page_as_is_fast_path" in page
+    }
+    issues.extend(dict(issue) for issue in _classin_page_chrome_artifact_issues([
+        problem
+        for problem in checked_problems
+        if not page_file_by_id.get(str(problem.get("sourcePageId") or problem.get("source_page_id") or ""), page_as_is)
+    ]))
     issues.extend(_session_problem_id_issues(problems))
     issues.extend(dict(issue) for issue in _classin_passage_group_source_reuse_issues(checked_problems))
     issues.extend(dict(issue) for issue in _classin_source_bbox_overlap_issues(checked_problems))

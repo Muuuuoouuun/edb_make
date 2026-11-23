@@ -14144,8 +14144,15 @@ function mergeSessions(baseSession, incomingSession, fileName, boardColumns = BO
   const baseTarget = normalizeContentTarget(base.contentTarget || base.content_target);
   const contentTarget = baseTarget === normalizeContentTarget(incoming.contentTarget || incoming.content_target)
     ? baseTarget : DEFAULT_CONTENT_TARGET;
+  // Likewise for 페이지 전체 넣기 and 문항 AI 인식 files: 제작 checks each question
+  // by its own file's pages, and each problem keeps its own inputIntent for the board.
+  const baseIntent = normalizeInputIntent(base.inputIntent || base.input_intent);
+  const inputIntent = baseIntent === normalizeInputIntent(incoming.inputIntent || incoming.input_intent)
+    ? baseIntent : DEFAULT_INPUT_INTENT;
   const merged = {
     ...base,
+    inputIntent,
+    input_intent: inputIntent,
     contentTarget,
     content_target: contentTarget,
     passageGroups,
