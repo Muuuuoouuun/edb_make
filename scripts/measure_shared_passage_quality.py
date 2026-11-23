@@ -13,7 +13,16 @@ import math
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _local_path(value: str | None) -> Path:
+    """A file: URI or a plain path. urlparse reads 'C:\\x' as scheme 'c' and drops the drive."""
+    text = str(value or '')
+    if text.lower().startswith('file:'):
+        return Path(url2pathname(unquote(urlparse(text).path)))
+    return Path(text)
 from inspect_edb import parse_edb, extract_images
 from PIL import Image, ImageDraw, ImageChops, ImageStat
 import fitz
@@ -361,14 +370,14 @@ def measure_final_pixels(gt, problems, pages, source, final_paths, output_dir, s
             final_path=final_paths.get(pid)
             if final_path:
                 unexpected=Image.open(final_path).convert('RGBA')
-                raw_path=Path(unquote(urlparse(problem.get('imagePath','')).path))
+                raw_path=_local_path(problem.get('imagePath'))
                 if raw_path.is_file():unexpected=unexpected.resize(Image.open(raw_path).size,Image.Resampling.NEAREST)
                 else:incomplete.append(pid+':unmatched-unit-source-grid-missing')
                 unmatched,_=final_foreground(np.asarray(unexpected))
                 precision.append({'id':pid,'numerator':0,'denominator':int(unmatched.sum()),'failed_ids':[pid+':unexpected-unit-ink']})
             else: incomplete.append(pid+':missing-final')
             continue
-        raw_path=Path(unquote(urlparse(problem.get('imagePath','')).path)); final_path=final_paths.get(pid)
+        raw_path=_local_path(problem.get('imagePath')); final_path=final_paths.get(pid)
         if not raw_path.is_file() or not final_path:
             incomplete.append(pid+':missing-raw-or-final');continue
         raw=np.asarray(Image.open(raw_path).convert('RGB')); raw_gray=cv2.cvtColor(raw,cv2.COLOR_RGB2GRAY)
@@ -610,7 +619,7 @@ def measure_shared(ground_truth_path, source_id, session_path, pages_path, outpu
                 rid = edb.name+':record-'+str(record.index); record_count += 1
                 if record.index < len(ordered_ids):
                     problem = next((p for p in problems if p['id']==ordered_ids[record.index]),None)
-                    asset = Path(unquote(urlparse(problem.get('boardRenderPath','')).path)) if problem else Path('/nonexistent')
+                    asset = _local_path(problem.get('boardRenderPath')) if problem else Path('/nonexistent')
                     final_path = output_dir/edb.stem/f'record_{record.index:04d}_img_0.png'
                     if problem and final_path.is_file(): final_paths[problem['id']]=final_path
                     if asset.is_file() and final_path.is_file():
