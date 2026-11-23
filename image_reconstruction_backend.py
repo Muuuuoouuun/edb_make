@@ -18,6 +18,11 @@ try:
 except ImportError:  # pragma: no cover
     np = None
 
+try:
+    import cv2  # type: ignore
+except ImportError:  # pragma: no cover
+    cv2 = None
+
 
 GEMINI_IMAGE_API_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -277,6 +282,18 @@ def build_content_safe_upscale(
     )
 
 
+class ImageApiUnavailable(RuntimeError):
+    """Gemini cannot serve any image right now: bad key, quota, or no network.
+
+    Unlike a per-image failure, every later call would fail the same way.
+    ``reason`` is "key", "quota" or "network".
+    """
+
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
+
+
 def _reconstruct_with_gemini(
     source_path: str | Path,
     output_path: str | Path,
@@ -342,9 +359,18 @@ def _reconstruct_with_gemini(
             response_payload = json.loads(resp.read().decode("utf-8"))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Gemini image reconstruction failed ({exc.code}): {detail}") from exc
+        message = f"Gemini image reconstruction failed ({exc.code}): {detail}"
+        if exc.code == 429:
+            raise ImageApiUnavailable(message, "quota") from exc
+        if exc.code in (401, 403) or (
+            exc.code == 400 and ("API_KEY_INVALID" in detail or "API key not valid" in detail)
+        ):
+            raise ImageApiUnavailable(message, "key") from exc
+        raise RuntimeError(message) from exc
     except error.URLError as exc:
-        raise RuntimeError(f"Gemini image reconstruction failed: {exc.reason}") from exc
+        raise ImageApiUnavailable(f"Gemini image reconstruction failed: {exc.reason}", "network") from exc
+    except TimeoutError as exc:  # resp.read() timing out is not wrapped in URLError
+        raise ImageApiUnavailable(f"Gemini image reconstruction failed: {exc}", "network") from exc
 
     image_b64, mime_type, response_text = _extract_gemini_image(response_payload)
     if not image_b64:
@@ -844,6 +870,7 @@ def clean_problem_image_transparency(
     *,
     transparent_background: bool = True,
     remove_corner_page_artifacts: bool = True,
+    paper_reference_image: Any | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Return an RGBA image with uniform page/board backgrounds converted to alpha.
 
@@ -851,6 +878,9 @@ def clean_problem_image_transparency(
     output even when prompted for transparency. Border sampling lets us remove
     whichever flat background the model produced while preserving chalk/text
     strokes and graph lines.
+
+    An aligned original ``paper_reference_image`` distinguishes real white
+    gaps from halos introduced by sharpening. Other sizes use the fallback.
     """
     try:
         from PIL import Image
@@ -877,6 +907,7 @@ def clean_problem_image_transparency(
                 background_color=background_color,
                 background_luminance=background_luminance,
                 background_kind=background_kind,
+                paper_reference_image=paper_reference_image,
             )
             alpha_backend = "numpy"
         else:
@@ -921,12 +952,25 @@ def clean_problem_image_transparency(
     return rgba, stats
 
 
+# Bit-identical to rgb.max(axis=2) and rgb.max(axis=2) - rgb.min(axis=2) on an
+# (H, W, 3) array (same dtype); numpy reduces a length-3 last axis ~5x slower.
+# Only pass 3 channels: axis=2 on RGBA would also have included alpha.
+def channel_max(rgb: Any) -> Any:
+    return np.maximum(np.maximum(rgb[..., 0], rgb[..., 1]), rgb[..., 2])
+
+
+def channel_spread(rgb: Any) -> Any:
+    red, green, blue = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    return np.maximum(np.maximum(red, green), blue) - np.minimum(np.minimum(red, green), blue)
+
+
 def _remove_background_with_numpy(
     image: Any,
     *,
     background_color: tuple[int, int, int],
     background_luminance: float,
     background_kind: str,
+    paper_reference_image: Any | None = None,
 ) -> tuple[Any, int, int]:
     if np is None:
         raise RuntimeError("numpy is required for _remove_background_with_numpy")
@@ -939,7 +983,7 @@ def _remove_background_with_numpy(
     background = np.asarray(background_color, dtype=np.float32)
 
     luminance = (0.299 * rgb[..., 0]) + (0.587 * rgb[..., 1]) + (0.114 * rgb[..., 2])
-    saturation = rgb.max(axis=2) - rgb.min(axis=2)
+    saturation = channel_spread(rgb)
     distance = np.sqrt(np.sum((rgb - background) ** 2, axis=2))
     visible = original_alpha > 0
 
@@ -985,7 +1029,11 @@ def _remove_background_with_numpy(
         faded = np.clip(((255.0 - luminance) / 37.0) * 255.0, 0.0, 255.0)
         alpha[fade_bright] = np.minimum(original_alpha[fade_bright], np.rint(faded[fade_bright]))
 
-        alpha = _fade_flat_midtone_fills(alpha, luminance, visible & ~remove & ~remove_bright)
+        alpha = _fade_flat_midtone_fills(
+            alpha, luminance, visible & ~remove & ~remove_bright,
+            paper_reference_image=paper_reference_image,
+            background_luminance=background_luminance,
+        )
 
     next_alpha = np.clip(alpha, 0.0, 255.0).astype(np.uint8)
     out = arr.copy()
@@ -1014,20 +1062,27 @@ def _box_mean(values: Any, window: int) -> Any:
     """Mean over a window x window neighbourhood (edge-padded), via an integral image."""
     pad = window // 2
     padded = np.pad(values.astype(np.float64), pad, mode="edge")
-    integral = np.cumsum(np.cumsum(padded, axis=0), axis=1)
-    integral = np.pad(integral, ((1, 0), (1, 0)))
+    # Cumulative sums written in place into a zero-bordered integral image.
+    integral = np.zeros((padded.shape[0] + 1, padded.shape[1] + 1), dtype=np.float64)
+    inner = integral[1:, 1:]
+    np.cumsum(padded, axis=0, out=inner)
+    np.cumsum(inner, axis=1, out=inner)
     height, width = values.shape
-    total = (
-        integral[window : window + height, window : window + width]
-        - integral[:height, window : window + width]
-        - integral[window : window + height, :width]
-        + integral[:height, :width]
-    )
-    return (total / float(window * window)).astype(np.float32)
+    # Keep the a - b - c + d order: regrouping changes float rounding.
+    total = integral[window : window + height, window : window + width] - integral[:height, window : window + width]
+    total -= integral[window : window + height, :width]
+    total += integral[:height, :width]
+    total /= float(window * window)
+    return total.astype(np.float32)
 
 
 def _label_mask_components(mask: Any) -> tuple[Any, int]:
     """8-connected component labels for a boolean mask (run-length union-find)."""
+    if cv2 is not None and mask.size:
+        # Wu/SAUF numbers components in raster order, exactly like the loop below.
+        count, labels = cv2.connectedComponentsWithAlgorithm(
+            np.ascontiguousarray(mask, dtype=np.uint8), 8, cv2.CV_32S, cv2.CCL_WU)
+        return labels, int(count) - 1
     height, width = mask.shape
     labels = np.zeros((height, width), dtype=np.int32)
     parent: list[int] = []
@@ -1055,7 +1110,7 @@ def _label_mask_components(mask: Any) -> tuple[Any, int]:
             run_id = len(parent)
             parent.append(run_id)
             for prev_start, prev_end, prev_id in previous_runs:
-                if prev_end >= start - 1 and prev_start <= end:  # 8-connected overlap
+                if prev_end >= start and prev_start <= end:  # half-open, 8-connected overlap
                     root_a = find(run_id)
                     root_b = find(prev_id)
                     if root_a != root_b:
@@ -1095,10 +1150,13 @@ def _component_encloses_ink(component: Any, luminance_patch: Any, fill_luminance
     return int(np.count_nonzero(ink & left & right & up & down))
 
 
-def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any:
+def _fade_flat_midtone_fills(
+    alpha: Any, luminance: Any, candidates: Any, *, paper_reference_image: Any | None = None,
+    background_luminance: float | None = None,
+) -> Any:
     """Fade shaded cells and tinted boxes instead of turning them solid white.
 
-    Any pixel darker than ~210 keeps full alpha on a light page, so a gray
+    Initial light-page cleanup keeps darker tones opaque, so a gray
     table header or a shaded card becomes a solid chalk block and the dark
     text printed on it turns the same white and disappears. Flat mid-gray
     areas are gathered (a uniform seed neighbourhood grown over the same
@@ -1141,6 +1199,28 @@ def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any
     if count == 0:
         return alpha
     keep = np.zeros(region.shape, dtype=bool)
+    faded = alpha.copy()
+    reference_cut = 0
+    if (paper_reference_image is not None
+            and paper_reference_image.size == (luminance.shape[1], luminance.shape[0])):
+        # Only near-white original paper separates material from paper gaps.
+        # On off-white scans and photos every pixel would count as material.
+        reference_paper = _estimate_border_background(paper_reference_image.convert("RGBA"))
+        if reference_paper is not None and min(reference_paper) >= 248:
+            reference_cut = min(248, min(reference_paper) - 6)
+
+    def apply_tone(mask: Any, *, top: int, bottom: int, left: int, right: int, fill_value: float) -> None:
+        # Preserve the established faint fill level, with one continuous
+        # contrast ramp from that fill to opaque dark ink. A plain inversion
+        # makes pale material backgrounds newly visible as extra chalk.
+        fill_alpha = float(255.0 * np.clip(
+            (FLAT_FILL_MAX_LUMINANCE - fill_value)
+            / (FLAT_FILL_MAX_LUMINANCE - FLAT_FILL_MIN_LUMINANCE), 0.0, 1.0,
+        ) ** FLAT_FILL_FADE_EXPONENT)
+        values = np.clip(255.0 - (255.0 - fill_alpha) * luminance[top:bottom, left:right]
+                         / max(fill_value, 1.0), 0.0, 255.0)
+        patch = faded[top:bottom, left:right]
+        patch[mask] = np.minimum(alpha[top:bottom, left:right][mask], values[mask])
     ys, xs = np.nonzero(region)
     order = np.argsort(labels[ys, xs], kind="stable")
     ys, xs = ys[order], xs[order]
@@ -1161,22 +1241,83 @@ def _fade_flat_midtone_fills(alpha: Any, luminance: Any, candidates: Any) -> Any
         left, right = int(comp_xs.min()), int(comp_xs.max()) + 1
         label = int(sorted_labels[start])
         component = labels[top:bottom, left:right] == label
-        if area >= FLAT_FILL_LARGE_AREA_PIXELS:
-            keep[top:bottom, left:right] |= component
+        component_luminance = luminance[comp_ys, comp_xs]
+        fill_value = float(np.median(component_luminance))
+        patch_luminance = luminance[top:bottom, left:right]
+        if area < FLAT_FILL_LARGE_AREA_PIXELS:
+            enclosed = _component_encloses_ink(component, patch_luminance, fill_value)
+            if enclosed < FLAT_FILL_MIN_ENCLOSED_INK_PIXELS:
+                continue
+        on_edge = ((comp_ys == 0) | (comp_xs == 0)
+                   | (comp_ys == luminance.shape[0] - 1) | (comp_xs == luminance.shape[1] - 1))
+        if background_luminance is not None and np.any(
+                on_edge & (np.abs(component_luminance - background_luminance) <= FLAT_FILL_GROW_LUMINANCE_SLACK)):
+            # The page's own gray paper (scan or photo) reaches the crop edge.
+            # Fade only its pixels; text printed on paper is not in a fill.
+            faded[comp_ys, comp_xs] = alpha[comp_ys, comp_xs] * np.clip(
+                (FLAT_FILL_MAX_LUMINANCE - component_luminance)
+                / (FLAT_FILL_MAX_LUMINANCE - FLAT_FILL_MIN_LUMINANCE), 0.0, 1.0,
+            ) ** FLAT_FILL_FADE_EXPONENT
+            keep[comp_ys, comp_xs] = True
             continue
-        fill_value = float(np.median(luminance[comp_ys, comp_xs]))
-        enclosed = _component_encloses_ink(component, luminance[top:bottom, left:right], fill_value)
-        if enclosed >= FLAT_FILL_MIN_ENCLOSED_INK_PIXELS:
-            keep[top:bottom, left:right] |= component
+        keep_patch = keep[top:bottom, left:right]
+        if reference_cut:
+            # Original paper separates a bubble's gray lettering from its
+            # surrounding shaded surface, even with a one-pixel white gap.
+            # A true counter and the enclosing dark glyph remain connected
+            # to the original non-paper surface. Use that source topology,
+            # never a white halo introduced by sharpening, to select pixels.
+            reference = np.asarray(paper_reference_image.crop((left, top, right, bottom)).convert("RGB"))
+            reference_labels, reference_count = _label_mask_components(reference.min(axis=2) < reference_cut)
+            attached = np.zeros(reference_count + 1, dtype=bool)
+            attached[reference_labels[component]] = True
+            attached[0] = False
+            material = attached[reference_labels]
+            keep_patch |= material
+            apply_tone(material, top=top, bottom=bottom, left=left, right=right, fill_value=fill_value)
+            del reference, reference_labels, attached
+            continue
+        # The bounded seed growth can miss a narrow strip of the same fill
+        # between a text baseline and a table rule. Complete only connected
+        # matching-tone background, without crossing dark ink or white gaps.
+        # Isolated gray letters inside white bubbles do not connect to it.
+        tone_labels, tone_count = _label_mask_components(
+            candidates[top:bottom, left:right]
+            & (np.abs(patch_luminance - fill_value) <= FLAT_FILL_GROW_LUMINANCE_SLACK)
+        )
+        linked_tones = np.zeros(tone_count + 1, dtype=bool)
+        linked_tones[tone_labels[component]] = True
+        linked_tones[0] = False
+        component |= linked_tones[tone_labels]
+        del tone_labels, linked_tones
+        # Treat the background, antialiased glyph edges and counters as one
+        # tonal surface. Fading only flat pixels leaves the darker edge ramp
+        # opaque, which fattens lettering and creates inverted rings.
+        left_fill = np.maximum.accumulate(component, axis=1)
+        right_fill = np.maximum.accumulate(component[:, ::-1], axis=1)[:, ::-1]
+        upper_fill = np.maximum.accumulate(component, axis=0)
+        lower_fill = np.maximum.accumulate(component[::-1, :], axis=0)[::-1, :]
+        interior = left_fill & right_fill & upper_fill & lower_fill
+        holes, hole_count = _label_mask_components(interior & ~component)
+        protected = np.zeros(hole_count + 1, dtype=bool)
+        if hole_count:
+            # Without an aligned original, a single bright halo pixel is
+            # ambiguous. Retain the conservative paper-area fallback.
+            paper = alpha[top:bottom, left:right] <= 0.0
+            paper_core = np.zeros(paper.shape, dtype=bool)
+            if min(paper.shape) >= 3:
+                core = paper[1:-1, 1:-1].copy()
+                for dy in range(3):
+                    for dx in range(3):
+                        core &= paper[dy:dy + core.shape[0], dx:dx + core.shape[1]]
+                paper_core[1:-1, 1:-1] = core
+            protected[holes[paper_core]] = True
+            protected[0] = False
+        material = (component | interior) & ~protected[holes]
+        keep_patch |= material
+        apply_tone(material, top=top, bottom=bottom, left=left, right=right, fill_value=fill_value)
     if not keep.any():
         return alpha
-    factor = np.clip(
-        (FLAT_FILL_MAX_LUMINANCE - luminance) / (FLAT_FILL_MAX_LUMINANCE - FLAT_FILL_MIN_LUMINANCE),
-        0.0,
-        1.0,
-    ) ** FLAT_FILL_FADE_EXPONENT
-    faded = alpha.copy()
-    faded[keep] = alpha[keep] * factor[keep]
     return faded
 
 

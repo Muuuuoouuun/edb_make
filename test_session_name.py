@@ -1,6 +1,7 @@
 """Lesson renaming is metadata-only and uses the session revision guard."""
 import copy
 import unittest
+from pathlib import Path
 
 import app_server
 
@@ -19,6 +20,13 @@ class TestSessionName(unittest.TestCase):
         self.assertEqual("수학 · 새 수업", result["session_name"])
         result["session_name"] = before["session_name"]
         self.assertEqual(before, result)
+
+    def test_new_upload_lesson_name_drops_the_managed_upload_digest(self):
+        upload = Path(f"/uploads/{'a1' * 32}_26-6월_수학영역_문제지.pdf")
+        self.assertEqual("26-6월_수학영역_문제지", app_server._lesson_name_from_sources([upload]))
+        self.assertEqual("26-6월_수학영역_문제지 외 1개",
+                         app_server._lesson_name_from_sources([upload, Path("/uploads/b.png")]))
+        self.assertEqual("plain", app_server._lesson_name_from_sources([Path("/x/plain.pdf")]))
 
     def test_invalid_names_leave_the_entire_session_unchanged(self):
         for value in [None, 42, [], "", "  ", "a" * 161, "잘못\x00된 이름", "첫 줄\n다음 줄"]:

@@ -66,6 +66,15 @@ class TestAppAutoUpdate(unittest.TestCase):
         self.assertFalse(app_server.verify_update_pin("abcd", verifier))
         self.assertNotIn("4826", verifier)
 
+    def test_pin_verifier_accepts_letters_and_digits_case_sensitively(self) -> None:
+        verifier = app_server.build_update_pin_verifier("abc2026", salt=b"0123456789abcdef")
+
+        self.assertTrue(app_server.verify_update_pin("abc2026", verifier))
+        self.assertFalse(app_server.verify_update_pin("ABC2026", verifier))
+        self.assertFalse(app_server.verify_update_pin("abc-2026", verifier))
+        with self.assertRaises(ValueError):
+            app_server.build_update_pin_verifier("한글2026")
+
     def test_pin_attempts_rate_limit_repeated_failures(self) -> None:
         verifier = app_server.build_update_pin_verifier("4826", salt=b"0123456789abcdef")
         for _ in range(app_server.UPDATE_PIN_FAILURE_LIMIT):
@@ -106,6 +115,43 @@ class TestAppAutoUpdate(unittest.TestCase):
         self.assertTrue(status["automaticUpdateReady"])
         self.assertNotIn("updatePinHash", status)
         self.assertNotIn(verifier, json.dumps(status))
+
+    def test_intel_and_apple_silicon_macs_pick_their_own_feed_entry(self) -> None:
+        config = {
+            "appId": "ClassInEDBMVP",
+            "appName": "ClassInEDBMVP",
+            "platform": "macos",
+            "version": "0.1.0",
+            "updateFeedUrl": "https://example.test/update.json",
+        }
+
+        def entry(arch: str) -> dict:
+            name = f"ClassInEDBMVP-macOS-{arch}.dmg"
+            return {
+                "version": "0.2.0",
+                "arch": arch,
+                "artifactType": "dmg",
+                "fileName": name,
+                "downloadUrl": f"https://example.test/{name}",
+                "sha256": "a" * 64,
+                "sizeBytes": 10,
+            }
+
+        feed = {
+            "appId": "ClassInEDBMVP",
+            "appName": "ClassInEDBMVP",
+            "platforms": {"macos": entry("arm64"), "macos-x64": entry("x64")},
+        }
+        for machine, arch in (("arm64", "arm64"), ("x86_64", "x64")):
+            with self.subTest(machine=machine):
+                app_server.clear_app_update_status_cache()
+                with patch.object(app_server, "load_app_update_config", return_value=config), \
+                        patch.object(app_server, "_fetch_update_feed", return_value=feed), \
+                        patch.object(app_server.platform, "machine", return_value=machine):
+                    status = app_server.build_app_update_status()
+
+                self.assertEqual("update_available", status["channelStatus"])
+                self.assertEqual(f"https://example.test/ClassInEDBMVP-macOS-{arch}.dmg", status["downloadUrl"])
 
     def test_download_verifies_size_and_sha256_before_promoting_file(self) -> None:
         body = b"verified installer bytes"
@@ -165,6 +211,7 @@ class TestAppAutoUpdate(unittest.TestCase):
         artifact = Path("/tmp/ClassInEDBMVP-macOS.zip")
         with patch.object(app_server, "build_app_update_status", return_value=status), \
                 patch.object(app_server, "load_app_update_config", return_value={"updatePinHash": verifier}), \
+                patch.object(app_server, "_check_update_target"), \
                 patch.object(app_server, "_download_update_artifact", return_value=artifact) as download, \
                 patch.object(
                     app_server,
@@ -202,8 +249,10 @@ class TestAppAutoUpdate(unittest.TestCase):
             settings = runtime / "user_settings.json"
             settings.write_text("keep")
             with patch.object(app_server, "RUNTIME_DIR", runtime), \
+                    patch.object(app_server, "_update_root", return_value=runtime / "updates"), \
                     patch.object(app_server, "build_app_update_status", return_value=status), \
                     patch.object(app_server, "load_app_update_config", return_value={"updatePinHash": verifier}), \
+                    patch.object(app_server, "_check_update_target"), \
                     patch.object(app_server, "_download_update_artifact", return_value=artifact), \
                     patch.object(app_server, "_launch_update_helper", side_effect=app_server.AppUpdateError("launch_failed", "launch failed")):
                 with self.assertRaises(app_server.AppUpdateError) as error:
@@ -222,7 +271,8 @@ class TestAppAutoUpdate(unittest.TestCase):
             outside.mkdir()
             file = outside / "keep.exe"
             file.write_bytes(b"keep")
-            with patch.object(app_server, "RUNTIME_DIR", runtime):
+            with patch.object(app_server, "RUNTIME_DIR", runtime), \
+                    patch.object(app_server, "_update_root", return_value=runtime / "updates"):
                 app_server._discard_update_download(file)
                 try:
                     link = runtime / "updates/pending-link"
@@ -235,11 +285,11 @@ class TestAppAutoUpdate(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("zsh"), "zsh is unavailable")
 class TestMacUpdateReplacement(unittest.TestCase):
-    def _run_helper(self, root: Path, *, bad_signature=False, fail_move=""):
+    def _run_helper(self, root: Path, *, bad_signature=False, fail_move="", installed="Test.app", extra_args=()):
         source = root / "source/Test.app"
         source.mkdir(parents=True)
         (source / "version").write_text("new")
-        target = root / "Applications/Test.app"
+        target = root / "Applications" / installed
         target.mkdir(parents=True)
         (target / "version").write_text("old")
         artifact = root / "pending-test/update.zip"
@@ -248,7 +298,7 @@ class TestMacUpdateReplacement(unittest.TestCase):
         commands = {
             "/usr/bin/ditto": '#!/bin/sh\nif [ "$1" = "-x" ]; then mkdir -p "$4"; cp -R "$EDB_TEST_SOURCE" "$4/"; else cp -R "$1" "$2"; fi\n',
             "/usr/bin/codesign": f"#!/bin/sh\nexit {41 if bad_signature else 0}\n",
-            "/usr/bin/open": '#!/bin/sh\nexit 0\n',
+            "/usr/bin/open": '#!/bin/sh\necho "$1" >> "$EDB_TEST_OPENED"\n',
             "/bin/mv": '#!/bin/sh\ncase "$1" in *"' + (fail_move or "never-match-this-path") + '"*) exit 55;; esac\nexec /bin/mv "$@"\n',
         }
         script = app_server.MACOS_UPDATE_HELPER
@@ -260,10 +310,16 @@ class TestMacUpdateReplacement(unittest.TestCase):
         helper = root / "helper.zsh"
         helper.write_text(script)
         result = subprocess.run(
-            [shutil.which("zsh"), str(helper), "99999999", str(artifact), "zip", str(target), str(root / "update.log")],
-            env={**os.environ, "EDB_TEST_SOURCE": str(source)}, capture_output=True, text=True, timeout=10,
+            [shutil.which("zsh"), str(helper), "99999999", str(artifact), "zip", str(target), str(root / "update.log"),
+             *extra_args],
+            env={**os.environ, "EDB_TEST_SOURCE": str(source), "EDB_TEST_OPENED": str(root / "opened")},
+            capture_output=True, text=True, timeout=10,
         )
         return result, target, artifact
+
+    def _assert_previous_app_reopened(self, root: Path, target: Path, artifact: Path):
+        self.assertEqual([str(target)], (root / "opened").read_text().splitlines())
+        self.assertTrue((artifact.parent / "update-failed").exists(), "next launch must learn the update failed")
 
     def test_signature_failure_keeps_old_app_and_does_not_replace_it(self):
         with TemporaryDirectory(prefix="edb update ") as temp:
@@ -272,6 +328,7 @@ class TestMacUpdateReplacement(unittest.TestCase):
             self.assertEqual("old", (target / "version").read_text())
             self.assertFalse(artifact.exists())
             self.assertEqual([], list(target.parent.glob(".*.backup.*")))
+            self._assert_previous_app_reopened(Path(temp), target, artifact)
 
     def test_backup_failure_never_installs_new_app(self):
         with TemporaryDirectory() as temp:
@@ -279,6 +336,7 @@ class TestMacUpdateReplacement(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertEqual("old", (target / "version").read_text())
             self.assertFalse(artifact.exists())
+            self._assert_previous_app_reopened(Path(temp), target, artifact)
 
     def test_replacement_failure_restores_previous_app(self):
         with TemporaryDirectory() as temp:
@@ -286,6 +344,7 @@ class TestMacUpdateReplacement(unittest.TestCase):
             self.assertNotEqual(0, result.returncode)
             self.assertEqual("old", (target / "version").read_text())
             self.assertFalse(artifact.exists())
+            self._assert_previous_app_reopened(Path(temp), target, artifact)
 
     def test_success_replaces_old_app_and_removes_installer_and_backup(self):
         with TemporaryDirectory(prefix="edb update ") as temp:
@@ -294,6 +353,18 @@ class TestMacUpdateReplacement(unittest.TestCase):
             self.assertEqual("new", (target / "version").read_text())
             self.assertFalse(artifact.exists())
             self.assertEqual(["Test.app"], [p.name for p in target.parent.iterdir()])
+            self.assertEqual([str(target)], (Path(temp) / "opened").read_text().splitlines())
+            self.assertFalse((artifact.parent / "update-failed").exists())
+
+    def test_renamed_install_is_replaced_in_place(self):
+        # Finder "Keep Both" or a rename: the archive still holds Test.app, passed as the 6th argument.
+        with TemporaryDirectory(prefix="edb update ") as temp:
+            result, target, artifact = self._run_helper(Path(temp), installed="Test 2.app", extra_args=("Test.app",))
+            self.assertEqual(0, result.returncode, (Path(temp) / "update.log").read_text())
+            self.assertEqual("new", (target / "version").read_text())
+            self.assertEqual([str(target)], (Path(temp) / "opened").read_text().splitlines())
+            self.assertFalse((artifact.parent / "update-failed").exists())
+            self.assertEqual(["Test 2.app"], [p.name for p in target.parent.iterdir()])
 
 
 @unittest.skipUnless(shutil.which("pwsh") or shutil.which("powershell"), "PowerShell is unavailable")
@@ -323,7 +394,7 @@ function Start-Process {{
 '''
         completed = subprocess.run(
             [shutil.which("pwsh") or shutil.which("powershell"), "-NoProfile", "-NonInteractive", "-Command", command],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
         )
         return completed, installer, executable, marker
 
@@ -342,13 +413,14 @@ function Start-Process {{
             sleeper.terminate()
             sleeper.wait(timeout=5)
 
-    def test_installer_failure_cleans_download_without_relaunching(self):
+    def test_installer_failure_cleans_download_and_reopens_previous_version(self):
         with TemporaryDirectory() as temp:
             result, installer, executable, marker = self._run_helper(Path(temp), exit_code=42)
             self.assertNotEqual(0, result.returncode)
             self.assertFalse(installer.exists())
-            self.assertEqual([str(installer)], marker.read_text().splitlines())
+            self.assertEqual([str(installer), str(executable)], marker.read_text().splitlines())
             self.assertEqual(b"existing app", executable.read_bytes())
+            self.assertTrue((Path(temp) / "update-failed").exists())
 
     def test_success_cleans_download_and_relaunches_app(self):
         with TemporaryDirectory(prefix="edb update ") as temp:

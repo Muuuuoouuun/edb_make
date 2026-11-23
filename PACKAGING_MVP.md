@@ -56,26 +56,27 @@ If Python 3.11+ is not installed, the launcher shows a Korean error message and 
 If the local server is already running, it only opens the browser instead of starting a duplicate server.
 
 ## In-App Flow
-1. Start the local app server
-2. Open the browser UI
-3. Click `Choose source`
-4. Pick an image or PDF
-5. Set `subject`, `OCR`, and output folder name
-6. Click `Run export`
-7. Review source/problem/board previews
-8. Open the generated `.edb` from the inspector or header
+Manual smoke test of a build. Teacher steps and current button names: [EDB_MAKE_USER_GUIDE.md](EDB_MAKE_USER_GUIDE.md).
+1. Start the app; the browser opens `http://127.0.0.1:8765/`.
+2. On the start screen pick a method under `어떻게 넣을까요?`, then press `파일 선택` and choose a PDF, image or HWP/HWPX file. It is processed and placed on the 칠판.
+3. Press `EDB 제작` in the top bar.
+4. Press `ClassIn에서 열기` and check that the `.edb` opens in ClassIn.
 
 ## PyInstaller Packaging
 Windows packages must be built on Windows. macOS `.app` bundles must be built on macOS.
 
 The **Build Installers** GitHub Actions workflow builds both platforms from the
-selected Git ref. `macos_arch=arm64` uses the macOS 15 Apple Silicon runner;
-`macos_arch=x64` uses the macOS 15 Intel runner. Each package contains native
-dependencies for that architecture. The artifact metadata records the actual
-architecture and commit, so choose the matching Mac download.
+selected Git ref. `macos_arch=both` (the default) builds Apple Silicon on the
+macOS 15 runner and Intel on the macOS 15 Intel runner; `arm64` or `x64` builds
+one. Each package contains native dependencies for that architecture, and the
+job fails if the runner's architecture differs from the requested one.
+
+`update_channel=true` (the default) bakes this repository's GitHub Releases
+update URLs into the apps. They are derived from the version, never typed. The
+update feed is generated only when both Macs and Windows are built.
 
 For an internal build of a development branch, set `production_release=false`
-and leave download URLs empty. This retains the test and package validation
+and `update_channel=false`. This retains the test and package validation
 gates and uploads the Windows installer and Mac DMG/ZIP as workflow artifacts.
 Public releases still require the existing corpus, licensing, signing and
 notarization gates. Internal build artifacts are not a published update feed.
@@ -125,7 +126,7 @@ If the certificate is already installed in the Windows certificate store, you ca
 ```
 
 The script locates `signtool.exe` from `PATH` or the Windows SDK. It signs `.exe`, `.dll`, and `.pyd` files in the packaged app folder before building the installer, then signs and verifies `dist\ClassInEDBMVP-Setup.exe`.
-The installer build prints the final setup file size and SHA-256 hash. The Inno Setup definition uses high-compression LZMA2 and closes the running app before replacing the complete PyInstaller `_internal` payload, so DLLs and Python extensions removed in a newer release cannot survive an in-place upgrade. User settings, API keys, uploads, and outputs remain untouched in the separate runtime folder under the Windows Documents known folder. Legacy work folders at the install root (`.app_runtime`, `uploads`, `outputs`, `exports`, and other session files) are preserved as well; only the immutable `_internal` payload and named obsolete UI/build files are deleted. Do not remove the entire install directory to update an old version. If `-SignTool` or `-InnoSetupCompiler` is supplied explicitly, a missing or non-file path fails the build instead of silently selecting a different installed tool.
+The installer build prints the final setup file size and SHA-256 hash. The Inno Setup definition uses high-compression LZMA2 and closes the running app before replacing the complete PyInstaller `_internal` payload, so DLLs and Python extensions removed in a newer release cannot survive an in-place upgrade. Uploads and outputs under the Windows Documents known folder, and user settings and API keys in `%LOCALAPPDATA%\ClassInEDBMVP`, remain untouched. Legacy work folders at the install root (`.app_runtime`, `uploads`, `outputs`, `exports`, and other session files) are preserved as well; only the immutable `_internal` payload and named obsolete UI/build files are deleted. Do not remove the entire install directory to update an old version. If `-SignTool` or `-InnoSetupCompiler` is supplied explicitly, a missing or non-file path fails the build instead of silently selecting a different installed tool.
 
 Installer display metadata can be overridden without changing the packaged executable name:
 ```powershell
@@ -272,10 +273,10 @@ upgrade for installations with an empty feed are documented in
 [GITHUB_RELEASE_CHECKLIST.md](GITHUB_RELEASE_CHECKLIST.md).
 
 The app supports both PIN-gated automatic replacement and a manual download fallback:
-1. The installed app keeps user settings and API keys under the user's app runtime folder.
-2. `칠판 설정` shows the current app version and an `업데이트 확인` button.
-3. If the configured update feed reports a newer version, an administrator can enter the numeric update PIN and press `업데이트 버전`.
-4. The app downloads the platform installer, verifies the exact `sizeBytes` and `sha256`, exits, replaces the existing installation, and relaunches. Existing API keys and session data stay in the runtime folder.
+1. The installed app keeps user settings and API keys outside Documents: `%LOCALAPPDATA%\ClassInEDBMVP` on Windows, `~/Library/Application Support/ClassInEDBMVP` on macOS. The first launch after updating from an older version moves them there from `ClassInEDBMVP/.app_runtime` in Documents.
+2. The top bar's `···` menu → `업데이트` shows the current app version and an `업데이트 확인` button.
+3. If the configured update feed reports a newer version, an administrator can enter the numeric update PIN and press `관리자 PIN 확인 후 업데이트`.
+4. The app downloads the platform installer, verifies the exact `sizeBytes` and `sha256`, exits, replaces the existing installation, and relaunches. Existing API keys and session data are kept.
 5. `다운로드 열기` remains available when a manual install is needed.
 
 Automatic replacement is available only in a packaged macOS or Windows app. macOS accepts the packaged `.dmg` or `.zip`; Windows accepts the Inno Setup `.exe`. The macOS helper verifies the downloaded app bundle's code signature before replacing the current bundle. The old macOS bundle is moved to a temporary backup and restored if the replacement move fails. Five incorrect PIN attempts pause PIN checks for 60 seconds.
@@ -296,7 +297,7 @@ EDB_PACKAGE_UPDATE_PIN=4826 ./package_macos_app.sh --clean --dmg --zip \
   --update-feed-url "https://example.com/classin-edb/update.json"
 ```
 
-Use your own 4–12 digit PIN; `4826` above is only a command example. For an unpackaged local runtime test, set `EDB_UPDATE_PIN_HASH` to the generated verifier. If no verifier is configured, the UI explains that PIN automatic updates are unavailable and keeps the manual download action.
+Use your own PIN of 4–12 ASCII letters or digits (case-sensitive); `4826` above is only a command example. For an unpackaged local runtime test, set `EDB_UPDATE_PIN_HASH` to the generated verifier. If no verifier is configured, the UI explains that PIN automatic updates are unavailable and keeps the manual download action.
 The installer GitHub Actions workflow reads the protected repository secret `EDB_UPDATE_PIN` and fails a production release when it is missing. Configure that secret before dispatching a production installer build; the workflow passes it only to the build-scoped metadata generator.
 
 Update feed and download URLs must use HTTPS. Plain HTTP is accepted only for loopback development URLs such as `http://127.0.0.1:9999/update.json`.
@@ -453,9 +454,9 @@ The base Python package also includes dependencies with copyleft or dual-license
 - `generated_session.js` is kept and overwritten only as an empty compatibility bridge; latest-session restore uses `.app_runtime\latest_session.json` and session history. Legacy CLI bridge output stays under the selected output folder and must not recreate project `ui_prototype\generated_session.js` or `prototype_data.js`.
 - The browser UI talks to the local server over HTTP and does not call Python directly.
 - Double-clicking the packaged app opens the browser automatically. If the app server is already running, it opens the browser instead of starting a duplicate server.
-- API keys are entered in the app's `칠판 설정` panel and stored locally under the app runtime folder.
-- Updates are semi-automatic: the app checks configured release metadata and opens the installer download page; it does not self-replace in the background.
-- Use the top-bar power button to stop the local app server after use.
+- API keys are entered under `설정` → `AI 사용·연결` → `Gemini API 키` and stored outside Documents, in `%LOCALAPPDATA%\ClassInEDBMVP` on Windows and `~/Library/Application Support/ClassInEDBMVP` on macOS.
+- Updates never install in the background: an administrator installs them from `···` → `업데이트` with the update PIN, or uses `다운로드 열기` for a manual install.
+- Use the top bar `···` → `종료` to stop the local app server after use.
 - The current `.edb` export is still the MVP image-based board export, not the final mixed text/image writer.
 
 ## Known Limits

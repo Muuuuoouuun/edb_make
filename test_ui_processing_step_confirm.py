@@ -41,6 +41,7 @@ function controller() {
     appendBoundedHistory: require('./ui_prototype/reorder.js').appendBoundedHistory,
     setItems: value => { sandbox.items = typeof value === 'function' ? value(sandbox.items) : value; },
     setSession: value => { sandbox.session = value; },
+    setFileName: value => { sandbox.fileName = value; },
     setPublished: value => { sandbox.published = value; },
     setTweak: (key, value) => {
       assert.equal(key, 'boardColumns', 'session adoption only restores the board column setting');
@@ -51,8 +52,9 @@ function controller() {
     setActiveId: value => { sandbox.activeId = value; },
     setHistoryStack: value => { sandbox.history = value(sandbox.history); },
     setMutating() {}, setLoading() {}, refreshSessionHistory() {}, setReviewFocus() {}, setActionToast() {},
+    hasRunningBackgroundJobs: false,
     showToast: message => state.toasts.push(message), showSimpleErrorToast: error => state.errors.push(error),
-    showActionToast() {}, stepLabel: value => value,
+    showActionToast() {}, stepLabel: value => value, pushLocalEdit() {}, PRIMARY_MODIFIER_LABEL: 'Ctrl',
     requestViewChange: value => state.views.push(value),
     sessionReviewSummary: s => ({ remaining: s.problems.filter(p => p.reviewStatus !== 'normal').length }),
     reviewFlowState: summary => ({ remaining: summary.remaining, complete: summary.remaining === 0 }),
@@ -89,14 +91,18 @@ function controller() {
   }
   function clickFooter(bulk) {
     const call = source.indexOf('onConfirm(item.id, { bulk, problemIds: bulk ? remainingApplyIds : [item.id], processingStep: item.step });');
-    const start = source.lastIndexOf('onClick={() => {', call) + 'onClick={() => {'.length;
+    const start = source.lastIndexOf('onClick={async () => {', call) + 'onClick={async () => {'.length;
     const end = source.indexOf('\n              }}', call);
     assert.ok(call >= 0 && end > start, 'processing confirmation click handler is missing');
     sandbox.footerBulk = bulk;
-    vm.runInContext('(() => { const item = globalThis.items.find(item => item.id === globalThis.activeId);'
-      + 'const items=globalThis.items;' + section('  const remainingReviewItems =', '  const showItemConfirmBar =')
+    // The handler awaits onConfirm and then advances to the next item to check.
+    sandbox.footerDone = vm.runInContext('(async () => { const item = globalThis.items.find(item => item.id === globalThis.activeId);'
+      + 'const items=globalThis.items; const activeIndex = items.indexOf(item);'
+      + 'const setActive = id => { globalThis.activeId = id; };'
+      + section('  const itemNeedsCheck =', '  const panelBusy =')
+      + section('  const remainingReviewItems =', '  const showItemConfirmBar =')
       + 'const bulk = globalThis.footerBulk; const onConfirm = (...args) => {'
-      + 'globalThis.pendingConfirm = globalThis.confirm(...args); };'
+      + 'globalThis.pendingConfirm = globalThis.confirm(...args); return globalThis.pendingConfirm; };'
       + source.slice(start, end) + '})()', sandbox);
     return sandbox.pendingConfirm;
   }

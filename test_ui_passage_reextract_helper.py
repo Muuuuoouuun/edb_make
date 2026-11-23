@@ -59,6 +59,9 @@ class TestUiPassageReextractHelper(unittest.TestCase):
               applyProblemCounts(session, problems) {
                 session.problem_count = problems.length;
               },
+              manualCropIsActive(crop) {
+                return Object.values(crop || {}).some(value => Math.abs(Number(value) || 0) > 0.0001);
+              },
             };
             vm.runInNewContext(source.slice(start, end), sandbox);
 

@@ -135,9 +135,10 @@ class BoardSplitPositionTest(unittest.TestCase):
             self.assertIn("cropSourceOffset", lower)
             # Pick the blank band between the two lines of the upper child on
             # its own (trimmed + padded) crop, exactly as the board would.
-            upper_crop = Image.open(app_server._resolve_session_path(upper["imagePath"]))
+            with Image.open(app_server._resolve_session_path(upper["imagePath"])) as upper_crop:
+                upper_crop_height = upper_crop.height
             crop_row = 321 - upper["cropSourceOffset"]["top"]
-            ratio = app_server._split_ratio_from_crop_ratio(split, upper["id"], crop_row / upper_crop.height)
+            ratio = app_server._split_ratio_from_crop_ratio(split, upper["id"], crop_row / upper_crop_height)
         bbox = upper["bbox"]
         self.assertAlmostEqual(321, bbox["top"] + ratio * bbox["height"], delta=0.6)
 

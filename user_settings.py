@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""User-editable settings persisted under .app_runtime/user_settings.json.
+"""User-editable settings persisted in user_settings.json.
 
 The local app needs a place to keep secrets (currently AI provider API keys)
-between runs without putting them in source control. Settings are written as
-JSON next to the runtime cache so they are covered by the existing
-``.app_runtime/`` gitignore entry.
+between runs without putting them in source control. Source runs write the
+JSON next to the runtime cache, covered by the existing ``.app_runtime/``
+gitignore entry. Packaged builds keep it in the per-user app folder that
+OneDrive/iCloud do not sync (see app_server._settings_dir).
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import os
 import stat
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,36 @@ def load_user_settings(runtime_dir: Path) -> dict[str, Any]:
         except (json.JSONDecodeError, OSError, UnicodeError):
             return {}
         return payload if isinstance(payload, dict) else {}
+
+
+def _read_settings_strict(path: Path) -> dict[str, Any]:
+    """Like load_user_settings, but a locked file raises instead of reading as empty.
+
+    A save built on an empty read would drop the stored API key.
+    """
+    for delay in (0.1, 0.3, 0.8, None):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8-sig"))
+            return payload if isinstance(payload, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeError):
+            return {}
+        except OSError as exc:
+            if delay is None or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                raise
+            time.sleep(delay)
+
+
+def move_settings(old_dir: Path, new_dir: Path) -> None:
+    """Move the settings file to new_dir once. A locked file raises OSError and stays put (retried next launch)."""
+    with _SETTINGS_LOCK:
+        if settings_path(new_dir).exists():
+            # ponytail: moved once; a copy an older version writes later (another PC on the same OneDrive) stays.
+            return
+        legacy = _read_settings_strict(settings_path(old_dir))
+        if legacy:
+            # Save, then unlink: works across volumes and reuses the atomic writer.
+            save_user_settings(new_dir, legacy)
+            settings_path(old_dir).unlink()
 
 
 def ai_enabled_from_settings(
@@ -80,7 +112,16 @@ def save_user_settings(runtime_dir: Path, settings: dict[str, Any]) -> Path:
             _restrict_permissions(temp_path)
             # A same-directory replace is atomic on NTFS as well as POSIX,
             # preventing a crash or concurrent reader from observing half JSON.
-            os.replace(temp_path, path)
+            # Retry short Windows scanner/sync locks (same as app_server._replace_file_with_retry).
+            delays = (0.05, 0.1, 0.2, 0.4, 0.8)
+            for attempt in range(len(delays) + 1):
+                try:
+                    os.replace(temp_path, path)
+                    break
+                except OSError as exc:
+                    if getattr(exc, "winerror", None) not in {5, 32, 33} or attempt == len(delays):
+                        raise
+                    time.sleep(delays[attempt])
             return path
         except Exception:
             try:
@@ -194,7 +235,7 @@ def update_api_keys(
     the stored key for that provider.
     """
     with _SETTINGS_LOCK:
-        settings = load_user_settings(runtime_dir)
+        settings = _read_settings_strict(settings_path(runtime_dir))
         env_overwrites = gemini_api_key is not None
         if gemini_api_key is not None:
             _store_key(settings, "gemini_api_key", gemini_api_key)

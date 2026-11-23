@@ -84,13 +84,16 @@ class TestStaticAssetCaching(unittest.TestCase):
             def read():
                 return b'{"ok": true, "app": "another-service"}'
 
-        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+        # The probe opens with its own no-proxy opener, not urlopen.
+        with patch.object(app_server, "build_opener") as opener:
+            opener.return_value.open.return_value = FakeResponse()
             self.assertFalse(app_server._local_server_is_healthy("127.0.0.1", 8765))
 
         FakeResponse.read = staticmethod(
             lambda: json.dumps({"ok": True, "app": app_server.APP_NAME}).encode("utf-8")
         )
-        with patch.object(app_server, "urlopen", return_value=FakeResponse()):
+        with patch.object(app_server, "build_opener") as opener:
+            opener.return_value.open.return_value = FakeResponse()
             self.assertTrue(app_server._local_server_is_healthy("127.0.0.1", 8765))
 
     @unittest.skipUnless(os.name == "nt", "exclusive bind semantics are Windows-specific")
@@ -212,7 +215,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                 "app_update_config.json downloadUrl aliases conflict: "
                 "downloadUrl='https://example.test/old/ClassInEDBMVP-macOS.zip', "
                 "download_url='https://example.test/new/ClassInEDBMVP-macOS.zip'",
-                status["error"],
+                status["detail"],
             )
 
     def test_sanitize_edb_file_name_normalizes_requested_name(self):
@@ -710,6 +713,7 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertFalse(status["updateAvailable"])
         self.assertEqual("unsupported_architecture", status["channelStatus"])
         self.assertEqual("update_architecture_mismatch", status["code"])
+        self.assertEqual(["관리자에게 Intel Mac용 설치 파일을 요청해 주세요."], status["recoverySteps"])
         self.assertEqual("", status["downloadUrl"])
         self.assertEqual("", status["latest"]["downloadUrl"])
 
@@ -804,7 +808,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                 "update feed downloadUrl aliases conflict: "
                 "downloadUrl='https://example.test/old/ClassInEDBMVP-macOS.zip', "
                 "download_url='https://example.test/new/ClassInEDBMVP-macOS.zip'",
-                status["error"],
+                status["detail"],
             )
             self.assertIsNone(status["latest"])
 
@@ -849,7 +853,7 @@ class TestStaticAssetCaching(unittest.TestCase):
                 "update feed fileName aliases conflict: "
                 "fileName='ClassInEDBMVP-macOS-old.dmg', "
                 "file_name='ClassInEDBMVP-macOS.dmg'",
-                status["error"],
+                status["detail"],
             )
             self.assertIsNone(status["latest"])
 
@@ -890,7 +894,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual(
                 "update feed appId mismatch: expected ClassInEDBMVP, found OtherApp",
-                status["error"],
+                status["detail"],
             )
             self.assertEqual("ClassInEDBMVP", status["appId"])
             self.assertIsNone(status["latest"])
@@ -933,7 +937,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual(
                 "update feed appName mismatch: expected ClassInEDBMVP, found Other App",
-                status["error"],
+                status["detail"],
             )
             self.assertEqual("ClassInEDBMVP", status["appName"])
             self.assertIsNone(status["latest"])
@@ -1011,7 +1015,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed does not include a usable download URL", status["error"])
+            self.assertEqual("update feed does not include a usable download URL", status["detail"])
             self.assertEqual("", status["downloadUrl"])
 
     def test_update_status_rejects_invalid_integrity_digest_from_feed(self):
@@ -1050,7 +1054,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed has invalid manifestSha256", status["error"])
+            self.assertEqual("update feed has invalid manifestSha256", status["detail"])
             self.assertNotIn("manifestSha256", status)
 
     def test_update_status_rejects_invalid_artifact_size_from_feed(self):
@@ -1088,7 +1092,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed has invalid sizeBytes", status["error"])
+            self.assertEqual("update feed has invalid sizeBytes", status["detail"])
             self.assertNotIn("sizeBytes", status["latest"])
 
     def test_update_status_rejects_platform_artifact_type_mismatch(self):
@@ -1127,7 +1131,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed artifactType for macos must be one of: dmg, zip", status["error"])
+            self.assertEqual("update feed artifactType for macos must be one of: dmg, zip", status["detail"])
 
     def test_update_status_rejects_platform_file_name_mismatch_without_artifact_type(self):
         with TemporaryDirectory() as raw_tmp:
@@ -1163,7 +1167,7 @@ class TestStaticAssetCaching(unittest.TestCase):
 
             self.assertFalse(status["updateAvailable"])
             self.assertEqual("invalid_feed", status["channelStatus"])
-            self.assertEqual("update feed fileName for macos must use one of: .dmg, .zip", status["error"])
+            self.assertEqual("update feed fileName for macos must use one of: .dmg, .zip", status["detail"])
 
     def test_update_status_rejects_file_name_download_url_mismatch(self):
         with TemporaryDirectory() as raw_tmp:
@@ -1204,7 +1208,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(
                 "update feed fileName 'ClassInEDBMVP-macOS.dmg' "
                 "does not match download URL file name 'ClassInEDBMVP-macOS-old.dmg'",
-                status["error"],
+                status["detail"],
             )
 
     def test_update_status_rejects_snake_case_file_name_download_url_mismatch(self):
@@ -1246,7 +1250,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual(
                 "update feed fileName 'ClassInEDBMVP-macOS.dmg' "
                 "does not match download URL file name 'ClassInEDBMVP-macOS-old.dmg'",
-                status["error"],
+                status["detail"],
             )
 
     def test_update_status_rejects_download_url_without_artifact_extension(self):
@@ -1291,7 +1295,7 @@ class TestStaticAssetCaching(unittest.TestCase):
             self.assertEqual("invalid_feed", status["channelStatus"])
             self.assertEqual(
                 "update feed download URL for macos must include artifact extension (.dmg, .zip)",
-                status["error"],
+                status["detail"],
             )
 
     def test_update_status_rejects_typed_download_url_without_artifact_extension(self):
@@ -1331,7 +1335,7 @@ class TestStaticAssetCaching(unittest.TestCase):
         self.assertEqual("invalid_feed", status["channelStatus"])
         self.assertEqual(
             "update feed download URL must include dmg artifact extension (.dmg)",
-            status["error"],
+            status["detail"],
         )
 
     def test_update_status_caches_feed_fetches_for_short_ttl(self):
@@ -1649,9 +1653,9 @@ class TestStaticAssetCaching(unittest.TestCase):
     def test_file_download_blocks_reset_and_destructive_cleanup_until_stream_finishes(self):
         with TemporaryDirectory() as raw_tmp:
             runtime_dir = Path(raw_tmp)
-            export_dir = runtime_dir / "exports"
-            export_dir.mkdir(parents=True)
-            artifact = export_dir / "lesson.edb"
+            upload_dir = runtime_dir / "uploads"
+            upload_dir.mkdir(parents=True)
+            artifact = upload_dir / "lesson.pdf"
             payload = b"download-in-progress"
             artifact.write_bytes(payload)
             os.utime(artifact, (1, 1))
@@ -3454,7 +3458,10 @@ class TestExportErrorPayload(unittest.TestCase):
 
         self.assertFalse(payload["ok"])
         self.assertEqual("hangul_conversion_failed", payload["errorKind"])
+        self.assertEqual("hwp_conversion_failed", payload["code"])
+        self.assertFalse(payload["retryable"])
         self.assertIn("한컴오피스", payload["error"])
+        self.assertNotIn("Diagnosis", payload["error"])
         self.assertGreaterEqual(len(payload["recoverySteps"]), 2)
         self.assertTrue(any("PDF" in step for step in payload["recoverySteps"]))
 
@@ -3464,7 +3471,7 @@ class TestExportErrorPayload(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual("invalid_input", payload["errorKind"])
         self.assertEqual("invalid_input", payload["code"])
-        self.assertIn("plain failure", payload["error"])
+        self.assertEqual("이 파일을 처리하지 못했습니다.", payload["error"])
         self.assertEqual("ValueError: plain failure", payload["detail"])
         self.assertTrue(payload["recoverySteps"])
 
@@ -3604,7 +3611,7 @@ class TestExportSourceResolution(unittest.TestCase):
             handler._handle_export()
 
         self.assertFalse(responses[0][0]["ok"])
-        self.assertIn("only allowed for preview", responses[0][0]["error"])
+        self.assertIn("only allowed for preview", responses[0][0]["detail"])
         self.assertEqual(current_session, handler.server.latest_session)
 
     def test_session_source_reextract_missing_sources_keeps_current_session(self):
@@ -4449,7 +4456,7 @@ class TestSessionPublishPreflightGuard(unittest.TestCase):
             self.assertEqual(52, captured["board_page_count"])
             self.assertEqual(26, captured["split_entry_count"])
             self.assertEqual(52, captured["split_board_page_count"])
-            self.assertEqual("Renamed_Lesson.edb", captured["split_edb_name"])
+            self.assertRegex(captured["split_edb_name"], r"^Renamed_Lesson_\d{4}_\d{6}\.edb$")
             self.assertEqual(["Renamed_Lesson_part01.edb", "Renamed_Lesson_part02.edb"], captured["validated_paths"])
             self.assertEqual([13, 13], captured["expected_min_records"])
             self.assertEqual("Renamed_Lesson_part01.edb", body["publishSummary"]["edbFileName"])
@@ -5893,11 +5900,14 @@ class TestRuntimeDiagnostics(unittest.TestCase):
     def test_runtime_diagnostics_reports_hangul_converter_readiness(self):
         with (
             patch.object(app_server.preprocess, "_iter_hwp_pdf_converter_commands", return_value=[["/usr/bin/soffice", "--headless"]]),
+            # A LibreOffice with the H2Orestart extension; stock LibreOffice opens only Hangul 97 files.
+            patch.object(app_server.preprocess, "_libreoffice_reads_hwp", return_value=True),
             patch.object(app_server.preprocess, "_iter_hwp_hwpx_converter_commands", return_value=[["/usr/local/bin/hwpilot"]]),
             patch.object(app_server.preprocess, "_iter_pyhwp_html_converter_commands", return_value=[["/venv/bin/hwp5html"]]),
             patch.object(app_server.preprocess, "_iter_hwp_text_converter_commands", return_value=[["/venv/bin/hwp5txt"], ["/venv/bin/python", "-c", "import unhwp; unhwp.extract_text('x')"]]),
             patch.object(app_server.preprocess, "_iter_chrome_pdf_commands", return_value=[["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]]),
             patch.object(app_server.preprocess, "_iter_rhwp_core_renderer_commands", return_value=[]),
+            patch.object(app_server.preprocess, "_iter_rhwp_python_renderer_commands", return_value=[]),
         ):
             diagnostics = app_server.describe_runtime_diagnostics()
 
@@ -5925,8 +5935,8 @@ class TestRuntimeDiagnostics(unittest.TestCase):
             },
             hangul["toolCounts"],
         )
-        self.assertIn("PDF 1", hangul["summary"])
-        self.assertIn("텍스트 2", hangul["summary"])
+        self.assertEqual("바로 열기 가능", hangul["summary"])
+        self.assertEqual([], hangul["warnings"])
 
     def test_runtime_diagnostics_treats_rhwp_core_renderer_as_hangul_ready(self):
         with (
@@ -5950,8 +5960,9 @@ class TestRuntimeDiagnostics(unittest.TestCase):
         self.assertTrue(hangul["hwpRendererReady"])
         self.assertEqual("ready", hangul["status"])
         self.assertEqual("rhwp-core", hangul["hwpRenderers"][0]["name"])
-        self.assertIn("렌더 1", hangul["summary"])
-        self.assertFalse(any("PDF converter was not found" in warning for warning in hangul["warnings"]))
+        self.assertEqual("바로 열기 가능", hangul["summary"])
+        self.assertEqual([], hangul["warnings"], "a working renderer must not tell teachers to save as PDF")
+        self.assertEqual([], hangul["recommendedActions"])
 
     def test_runtime_diagnostics_reports_actionable_hangul_warning_when_missing_pdf_converter(self):
         with (
@@ -5961,6 +5972,7 @@ class TestRuntimeDiagnostics(unittest.TestCase):
             patch.object(app_server.preprocess, "_iter_pyhwp_text_converter_commands", return_value=[]),
             patch.object(app_server.preprocess, "_iter_chrome_pdf_commands", return_value=[]),
             patch.object(app_server.preprocess, "_iter_rhwp_core_renderer_commands", return_value=[]),
+            patch.object(app_server.preprocess, "_iter_rhwp_python_renderer_commands", return_value=[]),
         ):
             diagnostics = app_server.describe_runtime_diagnostics()
 
@@ -5969,11 +5981,16 @@ class TestRuntimeDiagnostics(unittest.TestCase):
         self.assertFalse(hangul["hwpReady"])
         self.assertFalse(hangul["hwpxReady"])
         self.assertEqual("blocked", hangul["status"])
-        self.assertEqual("확인 필요", hangul["label"])
-        self.assertIn("주의", hangul["summary"])
-        self.assertTrue(any("rhwp" in warning for warning in hangul["warnings"]))
-        self.assertTrue(any("PDF" in step for step in hangul["recommendedActions"]))
-        self.assertTrue(any("Chrome" in warning or "LibreOffice" in warning for warning in hangul["warnings"]))
+        self.assertEqual("PDF로 저장 필요", hangul["label"])
+        self.assertEqual("PDF로 저장해서 사용", hangul["summary"])
+        self.assertEqual("한글 파일을 바로 열 수 없어요.", hangul["warnings"][0])
+        self.assertEqual("한글 프로그램에서 PDF로 저장한 뒤 그 PDF를 넣어 주세요.", hangul["recommendedActions"][0])
+        teacher_copy = " ".join(hangul["warnings"] + hangul["recommendedActions"])
+        self.assertNotRegex(teacher_copy, r"LibreOffice|rhwp|hwp5|airun|pyhwp|Chrome|EDB_|found")
+        notes = " ".join(hangul["technicalNotes"])
+        self.assertIn("rhwp", notes)
+        self.assertIn("LibreOffice", notes)
+        self.assertIn("EDB_CHROME", notes)
 
     def test_runtime_diagnostics_labels_node_wrapped_hwpilot_bridge(self):
         with (
@@ -6495,14 +6512,14 @@ class TestSystemOpenTargets(unittest.TestCase):
             runtime_dir = Path(raw_tmp)
             upload_dir = runtime_dir / "uploads"
             output_dir = runtime_dir / "outputs" / "active"
-            export_dir = runtime_dir / "exports"
+            history_dir = runtime_dir / "outputs" / "older"
             upload_dir.mkdir()
             output_dir.mkdir(parents=True)
-            export_dir.mkdir()
+            history_dir.mkdir()
             protected_upload = upload_dir / "source.pdf"
-            protected_output = output_dir / "board.edb"
-            protected_history = export_dir / "history.zip"
-            orphan = export_dir / "orphan.zip"
+            protected_output = output_dir / "board.png"
+            protected_history = history_dir / "page.png"
+            orphan = upload_dir / "orphan.pdf"
             for path in (protected_upload, protected_output, protected_history, orphan):
                 path.write_bytes(b"artifact")
                 os.utime(path, (1, 1))
@@ -6544,10 +6561,10 @@ class TestSystemOpenTargets(unittest.TestCase):
     def test_runtime_artifact_capacity_only_selects_bytes_above_limit(self):
         with TemporaryDirectory() as raw_tmp:
             runtime_dir = Path(raw_tmp)
-            export_dir = runtime_dir / "exports"
-            export_dir.mkdir()
-            oldest = export_dir / "oldest.zip"
-            newer = export_dir / "newer.zip"
+            upload_dir = runtime_dir / "uploads"
+            upload_dir.mkdir()
+            oldest = upload_dir / "oldest.pdf"
+            newer = upload_dir / "newer.pdf"
             oldest.write_bytes(b"a" * 6)
             newer.write_bytes(b"b" * 6)
             os.utime(oldest, (1, 1))
@@ -7494,9 +7511,9 @@ class TestSystemOpenTargets(unittest.TestCase):
             latest_path = runtime_dir / "latest.json"
             history_path = runtime_dir / "history.json"
             generated_path = runtime_dir / "generated_session.js"
-            export_dir = runtime_dir / "exports"
-            export_dir.mkdir()
-            artifact = export_dir / "old.zip"
+            upload_dir = runtime_dir / "uploads"
+            upload_dir.mkdir()
+            artifact = upload_dir / "old.pdf"
             artifact.write_bytes(b"old")
             os.utime(artifact, (1, 1))
             latest_path.write_text('{"problems": []}', encoding="utf-8")

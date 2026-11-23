@@ -5,10 +5,12 @@ import concurrent.futures
 import errno
 import hashlib
 import json
+import locale
 import math
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -53,7 +55,7 @@ SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", 
 HWP_DOCUMENT_EXTENSIONS = {".hwp", ".hwpx"}
 HWP_RENDER_TREE_BASE_DPI = 72.0
 PDF_NORMALIZED_CACHE_VERSION = 7
-IMAGE_NORMALIZED_CACHE_VERSION = 2
+IMAGE_NORMALIZED_CACHE_VERSION = 4
 HWP_NORMALIZED_CACHE_VERSION = 6
 HWP_FAST_TEXT_SIGNAL_GOOD_ENOUGH = 20
 
@@ -131,6 +133,34 @@ def _iter_libreoffice_executables() -> list[Path]:
     return candidates
 
 
+def _libreoffice_profile_dirs() -> list[Path]:
+    # ponytail: default profile only; a custom -env:UserInstallation or a portable LibreOffice is not seen.
+    appdata = os.environ.get("APPDATA", "").strip()
+    home = Path.home()
+    return [
+        *([_configured_path(appdata) / "LibreOffice" / "4"] if appdata else []),
+        home / "Library" / "Application Support" / "LibreOffice" / "4",
+        home / ".config" / "libreoffice" / "4",
+    ]
+
+
+def _libreoffice_reads_hwp(executable: str | Path) -> bool:
+    """Stock LibreOffice opens only Hangul 97 files; HWP 5 and HWPX need the H2Orestart extension."""
+    # ponytail: folder-name check only; the Java 8+ runtime H2Orestart needs is not verified.
+    install = Path(executable).resolve().parent.parent  # program/soffice.exe or LibreOffice.app/Contents/MacOS/soffice
+    places = [(profile / "user" / "uno_packages", "cache/uno_packages/*/*") for profile in _libreoffice_profile_dirs()]
+    for share in (install / "share", install / "Resources"):  # Windows/Linux and macOS install layouts
+        places += [(share / "uno_packages", "cache/uno_packages/*/*"), (share / "extensions", "*")]
+    for root, pattern in places:
+        try:
+            # Extension files carry a version: H2Orestart-v0.8.0.oxt, H2Orestart-0.7.14.oxt.
+            if any("h2orestart" in entry.name.lower() for entry in root.glob(pattern)):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 @dataclass(slots=True)
 class PreprocessOptions:
     dpi: int = 160
@@ -164,8 +194,7 @@ class PreparedPage:
     @property
     def image(self) -> Image.Image:
         if self._image is None:
-            with Image.open(self.source_path) as source:
-                self._image = source.convert("RGB")
+            self._image = load_image(self.source_path)
         return self._image
 
     @image.setter
@@ -201,7 +230,7 @@ class NormalizedPageImage:
 
     @property
     def image(self) -> Image.Image:
-        return Image.open(self.normalized_path).convert("RGB")
+        return load_image(self.normalized_path)
 
 
 def _require_cv2_numpy() -> None:
@@ -964,6 +993,38 @@ def _render_hwp_pages_with_rhwp_python(
     cached_pages = _load_cached_hwp_core_pages(source_path, target_dir, dpi, renderer="rhwp-python")
     if cached_pages:
         return cached_pages
+    rhwp = _bundled_rhwp()
+    if rhwp is not None:
+        # The same pages _RHWP_PYTHON_RENDER_PNG_SCRIPT prints.
+        try:
+            written = rhwp.parse(str(source_path)).export_png(str(target_dir), prefix=f"{source_path.stem}_page")
+            pages = []
+            for index, raw_path in enumerate(written):
+                with Image.open(raw_path) as image:
+                    width, height = image.size
+                pages.append(
+                    NormalizedPageImage(
+                        page_id=f"{source_path.stem}-page-{index + 1:03d}",
+                        source_path=str(source_path),
+                        normalized_path=str(raw_path),
+                        page_index=index,
+                        width_px=width,
+                        height_px=height,
+                        metadata={
+                            "source_type": "hwp",
+                            "document_like": True,
+                            "dpi": dpi,
+                            "hwp_renderer": "rhwp-python",
+                            "hwp_renderer_version": rhwp.version(),
+                            "hwp_renderer_core_version": rhwp.rhwp_core_version(),
+                            "hwp_renderer_page_count": len(written),
+                        },
+                    )
+                )
+        except BaseException:  # rhwp's PanicException is not an Exception
+            return []
+        _save_hwp_core_render_cache(source_path, target_dir, dpi, pages, renderer="rhwp-python")
+        return pages
     for command_prefix in _iter_rhwp_python_renderer_commands():
         command = [*command_prefix, str(source_path), str(target_dir), str(dpi)]
         try:
@@ -1195,8 +1256,27 @@ for index, raw_path in enumerate(written):
             },
         }
     )
-print(json.dumps(pages, ensure_ascii=False))
+print(json.dumps(pages, ensure_ascii=True))
 """.strip()
+
+
+def _python_interpreter() -> str | None:
+    # A PyInstaller executable is the app, not a Python interpreter: running it
+    # with -c would start a hidden copy of the app (see the PyMuPDF note above).
+    return None if getattr(sys, "frozen", False) else sys.executable
+
+
+def _bundled_rhwp() -> Any:
+    """rhwp for the installed app, which calls it in-process; source runs keep the subprocess path."""
+    # ponytail: in-process parsing has no timeout and a Rust abort takes the app down;
+    # move it to a worker process if a real file hangs.
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        import rhwp  # this import is also what makes PyInstaller bundle rhwp
+    except ImportError:
+        return None
+    return rhwp
 
 
 def _python_can_import_unhwp(python_path: Path) -> bool:
@@ -1248,7 +1328,7 @@ def _iter_unhwp_text_converter_commands() -> list[list[str]]:
         Path(__file__).resolve().parent / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         Path(__file__).resolve().parent / ".app_runtime" / "unhwp_probe_env" / "Scripts" / "python.exe",
         Path(__file__).resolve().parent / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1272,7 +1352,7 @@ def _iter_hwp_hwpx_parser_text_converter_commands() -> list[list[str]]:
         os.environ.get("EDB_HWP_HWPX_PARSER_PYTHON"),
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1298,7 +1378,7 @@ def _iter_rhwp_python_text_converter_commands() -> list[list[str]]:
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         base_dir / ".app_runtime" / "rhwp_python_probe_env" / "Scripts" / "python.exe",
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1324,7 +1404,7 @@ def _iter_rhwp_python_renderer_commands() -> list[list[str]]:
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "bin" / "python",
         base_dir / ".app_runtime" / "rhwp_python_probe_env" / "Scripts" / "python.exe",
         base_dir / ".app_runtime" / "hwp_extra_probe_env" / "Scripts" / "python.exe",
-        sys.executable,
+        _python_interpreter(),
     ]
     candidates: list[list[str]] = []
     seen: set[str] = set()
@@ -1552,6 +1632,12 @@ def _extract_hwp_text_with_hwp_hwpx_parser(source: str | Path, timeout_seconds: 
 
 def _extract_hwp_text_with_rhwp_python(source: str | Path, timeout_seconds: int = 15) -> str:
     source_path = Path(source)
+    rhwp = _bundled_rhwp()
+    if rhwp is not None:
+        try:
+            return (rhwp.parse(str(source_path)).extract_text() or "").replace("\x00", "").strip()
+        except BaseException:  # rhwp's PanicException is not an Exception
+            return ""
     for command_prefix in _iter_rhwp_python_text_converter_commands():
         command = [*command_prefix, str(source_path)]
         try:
@@ -3086,38 +3172,80 @@ def _normalize_pdf_rendered_pages(
     max_dimension: int | None,
 ) -> list[NormalizedPageImage]:
     def _normalize(page: NormalizedPageImage) -> NormalizedPageImage:
-        normalized = normalize_image(
-            page.normalized_path,
-            normalized_output_dir,
-            page_id=page.page_id,
-            page_index=page.page_index,
-            enable_perspective=False,
-            enable_deskew=enable_deskew,
-            enable_margin_crop=enable_margin_crop,
-            max_dimension=max_dimension,
-            base_metadata=dict(page.metadata),
-        )
+        try:
+            normalized = normalize_image(
+                page.normalized_path,
+                normalized_output_dir,
+                page_id=page.page_id,
+                page_index=page.page_index,
+                enable_perspective=False,
+                enable_deskew=enable_deskew,
+                enable_margin_crop=enable_margin_crop,
+                max_dimension=max_dimension,
+                base_metadata=dict(page.metadata),
+            )
+        except Exception as exc:
+            if _is_pdf_resource_error(exc):
+                raise PdfPageProcessingError(source_path, page.page_index + 1, page.page_index + 1, exc, resource_exhausted=True) from exc
+            raise
         normalized.metadata.setdefault("source_pdf_path", str(source_path))
         normalized.metadata["source_type"] = "pdf"
         normalized.metadata["document_like"] = True
         return normalized
 
-    worker_count = 1 if len(rendered) > PDF_PROCESSING_BATCH_PAGES else _resolve_preprocess_page_worker_count(len(rendered))
+    # Results hold no pixels, so peak memory follows the worker count, not
+    # the page count. Out of memory, redo the pages one at a time.
+    worker_count = _resolve_preprocess_page_worker_count(len(rendered))
+    if worker_count > 1:
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
+                normalized_pages = list(executor.map(_normalize, rendered))
+        except PdfPageProcessingError:
+            worker_count = 1
     if worker_count <= 1:
-        normalized_pages = []
-        for page in rendered:
-            try:
-                normalized_pages.append(_normalize(page))
-            except Exception as exc:
-                if _is_pdf_resource_error(exc):
-                    raise PdfPageProcessingError(source_path, page.page_index + 1, page.page_index + 1, exc, resource_exhausted=True) from exc
-                raise
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
-            normalized_pages = list(executor.map(_normalize, rendered))
+        normalized_pages = [_normalize(page) for page in rendered]
     for page in normalized_pages:
         page.metadata["pdf_preprocess_page_worker_count"] = worker_count
     return normalized_pages
+
+
+def _run_tool(command: list[str], *, timeout: float, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    # ponytail: on Windows subprocess.run(timeout=) still waits for pipe EOF after the kill, and
+    # soffice.exe hands its pipes to soffice.bin, so a hung conversion never returned. Output goes
+    # to files and the whole process tree is killed. Text extractors, hwp5html and the rhwp
+    # renderers still use subprocess.run (dev-only tools).
+    windows = os.name == "nt"
+    no_window = getattr(subprocess, "CREATE_NO_WINDOW", 0) if windows else 0
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        process = subprocess.Popen(
+            command, stdout=out, stderr=err, env=env, creationflags=no_window, start_new_session=not windows
+        )
+        try:
+            returncode = process.wait(timeout=timeout)
+        except BaseException:  # the timeout, or a Ctrl+C the child never gets (own session/console)
+            try:
+                if windows:
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=no_window,
+                        timeout=15,
+                        check=False,
+                    )
+                else:
+                    os.killpg(process.pid, signal.SIGKILL)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            process.kill()
+            process.wait()
+            raise
+        encoding = locale.getpreferredencoding(False)  # what text=True decoded with, minus its strict errors
+        out.seek(0)
+        err.seek(0)
+        return subprocess.CompletedProcess(
+            command, returncode, out.read().decode(encoding, "replace"), err.read().decode(encoding, "replace")
+        )
 
 
 def _run_hwp_pdf_converter_commands(
@@ -3173,19 +3301,23 @@ def _run_hwp_pdf_converter_commands(
             for candidate in _hwp_pdf_candidates(target_dir, source_path)
             if candidate.exists()
         }
+        # A LibreOffice profile lock that appears from here on is this soffice's own.
+        own_locks = [
+            profile / ".lock"
+            for profile in (_libreoffice_profile_dirs() if "--headless" in command else [])
+            if not (profile / ".lock").exists()
+        ]
         try:
-            run_kwargs: dict[str, Any] = {
-                "check": False,
-                "stdout": subprocess.PIPE,
-                "stderr": subprocess.PIPE,
-                "text": True,
-                "timeout": timeout_seconds,
-            }
-            if command_env is not None:
-                run_kwargs["env"] = command_env
-            result = subprocess.run(command, **run_kwargs)
+            result = _run_tool(command, timeout=timeout_seconds, env=command_env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             errors.append(f"{command[0]}: {exc}")
+            # A killed soffice cannot remove its lock; left behind, it would make the check after
+            # the loop tell the teacher to quit a LibreOffice that is not open.
+            for lock in own_locks:
+                try:
+                    lock.unlink(missing_ok=True)
+                except OSError:
+                    pass
             continue
 
         for pdf_path in _hwp_pdf_candidates(target_dir, source_path):
@@ -3205,6 +3337,14 @@ def _run_hwp_pdf_converter_commands(
         errors.append(
             f"{command[0]} exited {result.returncode}: {output or 'no PDF output'}"
         )
+    libreoffice = next((command[0] for command in commands if "--headless" in command), None)
+    if (
+        libreoffice
+        and any((profile / ".lock").exists() for profile in _libreoffice_profile_dirs())
+        and _libreoffice_reads_hwp(libreoffice)
+    ):
+        # An open LibreOffice takes over --convert-to, so this soffice ends without a PDF (tdf#37531).
+        errors.append("libreoffice_profile_in_use: default LibreOffice profile is locked")
     return None, errors
 
 
@@ -3226,14 +3366,7 @@ def _convert_hwp_to_hwpx_with_hwpilot(
     for command_prefix in commands:
         command = [*command_prefix, "convert", str(source_path), str(target_path)]
         try:
-            result = subprocess.run(
-                command,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=timeout_seconds,
-            )
+            result = _run_tool(command, timeout=timeout_seconds)
         except (OSError, subprocess.TimeoutExpired) as exc:
             errors.append(f"{command[0]}: {exc}")
             continue
@@ -3366,11 +3499,13 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
     if not commands:
         diagnosis = _format_hwp_conversion_diagnosis(hwp_inspection)
         suffix = f" Diagnosis: {diagnosis}" if diagnosis else ""
-        raise ValueError(
+        error = ValueError(
             "HWP/HWPX input requires a local converter such as LibreOffice with HWP support "
             "or hwp5pdf. HWPilot can only help normalize HWP to HWPX and still needs a PDF "
             f"converter. Install one, or convert the HWP file to PDF first.{suffix}"
         )
+        error.source_file = source_path.name  # names the file on the error card, as PdfPageProcessingError does
+        raise error
 
     has_html_pdf_fallback = bool(_iter_pyhwp_html_converter_commands() and _iter_chrome_pdf_commands())
     direct_timeout_seconds = timeout_seconds
@@ -3412,10 +3547,12 @@ def convert_hwp_to_pdf(source: str | Path, output_dir: str | Path, timeout_secon
     detail = "; ".join(errors) if errors else "no converter produced a PDF"
     diagnosis = _format_hwp_conversion_diagnosis(hwp_inspection)
     suffix = f" Diagnosis: {diagnosis}" if diagnosis else ""
-    raise ValueError(
+    error = ValueError(
         "HWP/HWPX conversion failed. Install LibreOffice with HWP support, "
         f"or convert the HWP file to PDF first. Details: {detail}{suffix}"
     )
+    error.source_file = source_path.name
+    raise error
 
 
 def _extract_pdf_problem_markers(
@@ -3926,14 +4063,27 @@ def _extract_pdf_media_regions(
     return regions
 
 
-def load_image(source: str | Path) -> Image.Image:
+def load_image(source: str | Path, frame: int = 0) -> Image.Image:
     with Image.open(source) as image:
-        return ImageOps.exif_transpose(image).convert("RGB")
+        if frame:
+            image.seek(frame)
+        oriented = ImageOps.exif_transpose(image)
+        if "A" in oriented.getbands() or "transparency" in oriented.info:
+            rgba = oriented.convert("RGBA")
+            matte = Image.new("RGB", rgba.size, "white")
+            matte.paste(rgba, mask=rgba.getchannel("A"))
+            return matte
+        return oriented.convert("RGB")
 
 
 def _read_image_dimensions(source: str | Path) -> tuple[int, int] | None:
     try:
         with Image.open(source) as image:
+            # Transparent source pixels need a white paper matte before a
+            # full-page export can safely reuse RGB image bytes. Keep the
+            # original file untouched and normalize into the managed cache.
+            if "A" in image.getbands() or "transparency" in image.info:
+                return None
             # A camera image needs normalization even when every optional
             # transform is off; its stored raster can be rotated or mirrored.
             if image.getexif().get(274, 1) in {2, 3, 4, 5, 6, 7, 8}:
@@ -3941,6 +4091,38 @@ def _read_image_dimensions(source: str | Path) -> tuple[int, int] | None:
             return image.size
     except OSError:
         return None
+
+
+# Photos/scans above this (24-200 MP phones, 600-DPI A4) cost ~100 B/px in the
+# chalk cutout but show no more on the board. Cap area, not edge, so tall
+# screenshots keep full width. Manual crops of a 48 MP photo come from a
+# ~12.6 MP page, the same detail 문항 자동 분리 keeps (4096 cap).
+MAX_RASTER_PAGE_PIXELS = 4096 * 3072
+
+
+def raster_page_max_dimension(source: str | Path) -> int | None:
+    if Path(source).suffix.lower() not in SUPPORTED_IMAGE_EXTENSIONS:
+        return None
+    try:
+        with Image.open(source) as image:
+            width, height = image.size  # raw size: EXIF rotation keeps area and long edge
+    except OSError:
+        return None
+    if width * height <= MAX_RASTER_PAGE_PIXELS:
+        return None
+    return int(max(width, height) * math.sqrt(MAX_RASTER_PAGE_PIXELS / (width * height)))
+
+
+def _tiff_page_count(source_path: Path) -> int:
+    # Only TIFF frames are pages: phone JPEGs (MPO) and animated PNG/WebP also
+    # report n_frames > 1, but their extra frames are not worksheet pages.
+    if source_path.suffix.lower() not in {".tif", ".tiff"}:
+        return 1
+    try:
+        with Image.open(source_path) as image:
+            return max(1, int(getattr(image, "n_frames", 1)))
+    except Exception:  # the page read below reports a broken file
+        return 1
 
 
 def _passthrough_image_page_if_possible(
@@ -4349,6 +4531,7 @@ def normalize_image(
     *,
     page_id: str | None = None,
     page_index: int = 0,
+    frame: int = 0,
     enable_perspective: bool = True,
     enable_deskew: bool = True,
     enable_margin_crop: bool = True,
@@ -4359,7 +4542,7 @@ def normalize_image(
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    image = load_image(source_path)
+    image = load_image(source_path, frame)
     metadata: dict[str, Any] = dict(base_metadata or {})
     metadata.setdefault("source_type", "image")
 
@@ -4621,7 +4804,8 @@ def prepare_pages(
         return normalized_pages
 
     if suffix in SUPPORTED_IMAGE_EXTENSIONS:
-        passthrough = _passthrough_image_page_if_possible(
+        page_count = _tiff_page_count(source_path)
+        passthrough = None if page_count > 1 else _passthrough_image_page_if_possible(
             source_path,
             page_index=0,
             enable_perspective=enable_perspective,
@@ -4660,12 +4844,14 @@ def prepare_pages(
                     max_dimension=max_dimension,
                     source_sha1=image_source_sha1,
                 ),
-                page_index=0,
+                page_index=index,
+                frame=index,
                 enable_perspective=enable_perspective,
                 enable_deskew=enable_deskew,
                 enable_margin_crop=enable_margin_crop,
                 max_dimension=max_dimension,
             )
+            for index in range(page_count)
         ]
         _save_image_normalized_pages_cache(
             source_path,
@@ -4705,7 +4891,7 @@ def prepare_source_pages(
     # the accumulated source_results list.
     disk_backed = Path(path).suffix.lower() == ".pdf" or len(normalized_pages) > PDF_PROCESSING_BATCH_PAGES
     for page in normalized_pages:
-        image = None if disk_backed else Image.open(page.normalized_path).convert("RGB")
+        image = None if disk_backed else load_image(page.normalized_path)
         original_source_path = page.source_path
         if page.metadata.get("source_type") == "pdf" and page.metadata.get("source_pdf_path"):
             original_source_path = str(page.metadata["source_pdf_path"])
@@ -4769,7 +4955,7 @@ def prepare_source_pages_batch(
 
         for local_page_index, page in enumerate(normalized_pages, start=1):
             page_counter += 1
-            image = Image.open(page.normalized_path).convert("RGB")
+            image = load_image(page.normalized_path)
             if max_dimension:
                 width, height = image.size
                 scale = min(max_dimension / max(width, height), 1.0)

@@ -96,7 +96,8 @@ class TestWindowsLauncher(unittest.TestCase):
             )
 
         self.assertEqual(7, completed.returncode, completed.stdout + completed.stderr)
-        self.assertIn("Local app exited with code 7", completed.stdout + completed.stderr)
+        # PowerShell wraps Write-Error text at the console width, so a long checkout path splits the message.
+        self.assertIn("Local app exited with code 7", " ".join((completed.stdout + completed.stderr).split()))
 
 
 if __name__ == "__main__":

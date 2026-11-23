@@ -54,9 +54,8 @@ class TestPassageDetection(unittest.TestCase):
             "[4-6] Read the following text and answer the questions."
         ))
 
-    def test_accepts_shared_listening_but_rejects_grouped_independent_tasks(self) -> None:
-        self.assertEqual(
-            (16, 17),
+    def test_rejects_audio_only_and_grouped_independent_tasks(self) -> None:
+        self.assertIsNone(
             extract_shared_passage_range(
                 "[16 ~ 17] \ub2e4\uc74c\uc744 \ub4e3\uace0, \ubb3c\uc74c\uc5d0 \ub2f5\ud558\uc2dc\uc624."
             ),
@@ -68,6 +67,23 @@ class TestPassageDetection(unittest.TestCase):
         ):
             with self.subTest(text=text):
                 self.assertIsNone(extract_shared_passage_range(text))
+
+    def test_audio_only_exclusion_is_generic_and_preserves_printed_material(self) -> None:
+        for text in (
+            "[7~9] 다음 대화를 듣고 물음에 답하시오.",
+            "[41-42] Listen to the following passage and answer the questions.",
+            "[2-4] Listen to the conversation. Answer the questions.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(extract_shared_passage_range(text))
+        for text in (
+            "[7~9] 다음 자료를 보고 대화를 듣고 물음에 답하시오.",
+            "[2-4] Read the following chart and listen to the conversation. Answer the questions.",
+            "[2-4] Read and listen to the following passage. Answer the questions.",
+            "[41-42] Read the following passage and answer the questions.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNotNone(extract_shared_passage_range(text))
 
 
 if __name__ == "__main__":

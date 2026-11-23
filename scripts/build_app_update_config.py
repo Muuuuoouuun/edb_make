@@ -62,8 +62,8 @@ def parse_update_pin_verifier(value: str) -> tuple[int, bytes, bytes] | None:
 
 def build_update_pin_verifier(pin: str, app_id: str) -> str:
     normalized = str(pin or "").strip()
-    if not normalized.isascii() or not normalized.isdigit() or not 4 <= len(normalized) <= 12:
-        raise ValueError("EDB_PACKAGE_UPDATE_PIN must contain 4-12 ASCII digits")
+    if not normalized.isascii() or not normalized.isalnum() or not 4 <= len(normalized) <= 12:
+        raise ValueError("EDB_PACKAGE_UPDATE_PIN must contain 4-12 ASCII letters or digits")
     salt = hashlib.sha256(f"{app_id}:classin-edb:update-pin".encode("utf-8")).digest()[:16]
     digest = hashlib.pbkdf2_hmac(
         "sha256",

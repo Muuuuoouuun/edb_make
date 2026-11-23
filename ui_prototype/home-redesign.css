@@ -313,7 +313,7 @@
 
 .home-method-cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   padding: 0;
   margin: 0;
@@ -493,6 +493,8 @@
 .gallery-source-entry { margin-bottom: 12px; }
 .gallery-source-original { display: inline-flex; align-items: center; gap: 4px; margin: 0 10px; padding: 4px 0; font-size: 11px; color: var(--accent-ink); text-decoration: none; }
 .gallery-source-original .ic { width: 12px; height: 12px; }
+.gallery-source-delete { border: 0; background: none; font-family: inherit; color: var(--danger-ink); cursor: pointer; }
+.gallery-source-delete:disabled { color: var(--muted); cursor: not-allowed; }
 .gallery-results { overflow-y: auto; min-width: 0; padding: 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); scrollbar-gutter: stable; }
 .gallery-intro { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
 .gallery-intro h1 { display: flex; align-items: center; gap: 8px; font-size: 20px; line-height: 1.4; letter-spacing: -.04em; margin: 0 0 4px; }

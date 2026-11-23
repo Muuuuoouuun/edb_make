@@ -216,7 +216,8 @@ def make_pdf(path):
 
 
 def snapshot_files(app_home, workspace):
-    files = [app_home / '.app_runtime/user_settings.json', app_home / '.app_runtime/latest_session.json']
+    # No user_settings.json: a Mac update moves it out of Documents; aiEnabled over the API proves it survived.
+    files = [app_home / '.app_runtime/latest_session.json']
     files.extend(path for path in workspace.rglob('*') if path.is_file())
     return {str(path): sha256(path) for path in files if path.is_file()}
 
@@ -227,7 +228,7 @@ def verify_snapshot(snapshot):
     for raw, digest in snapshot.items():
         path = Path(raw)
         if not path.is_file() or sha256(path) != digest:
-            raise RuntimeError('Updater changed or removed saved settings/session/work files')
+            raise RuntimeError('Updater changed or removed saved session/work files')
 
 
 
@@ -320,8 +321,8 @@ def run_transition(args, temp, app_home):
                     raise RuntimeError('Baseline active session has no persistent problem identifiers')
                 snapshot = snapshot_files(app_home, workspace)
                 required = app_home / '.app_runtime/latest_session.json'
-                if str(required) not in snapshot or str(app_home / '.app_runtime/user_settings.json') not in snapshot:
-                    raise RuntimeError('Valid session/settings files were not persisted before updating')
+                if str(required) not in snapshot:
+                    raise RuntimeError('Valid session file was not persisted before updating')
                 expected = {key: feed.metadata[key] for key in ('version', 'downloadUrl', 'sha256', 'sizeBytes', 'arch', 'artifactType')}
                 code, rejected = api('/api/app/update/install', {'pin': wrong_pin, 'expectedUpdate': expected})
                 if code != 403 or rejected.get('code') != 'invalid_update_pin':
@@ -346,6 +347,8 @@ def run_transition(args, temp, app_home):
                 _, after_session = api('/api/session/latest')
                 if after_settings.get('settings', {}).get('aiEnabled') is not False:
                     raise RuntimeError('Saved setting did not survive restart')
+                if args.platform == 'macos' and (app_home / '.app_runtime/user_settings.json').exists():
+                    raise RuntimeError('Updated app left the API-key settings file in Documents')
                 after_problem_ids = [item.get('id') for item in after_session.get('session', {}).get('problems', [])]
                 if before_problem_ids != after_problem_ids:
                     raise RuntimeError('Saved active session did not survive restart')

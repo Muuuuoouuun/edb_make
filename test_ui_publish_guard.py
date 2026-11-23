@@ -79,6 +79,10 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("board_placement_overlap", on_publish)
         self.assertIn("문항 배치가 겹칠 수 있어", on_publish)
         self.assertIn("setView('board')", on_publish)
+        self.assertLess(
+            on_publish.index("selectBoardItem(firstIssue.problemId)"),
+            on_publish.index("문항 배치가 겹칠 수 있어"),
+        )
 
     def test_publish_blocks_source_problem_bbox_overlap_before_request(self) -> None:
         source = (PROJECT_ROOT / "ui_prototype" / "app.jsx").read_text(encoding="utf-8")
@@ -87,8 +91,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("findSourceProblemOverlaps", on_publish)
         self.assertIn("source_problem_bbox_overlap", on_publish)
-        self.assertIn("firstIssue.problemIds || firstIssue.problem_ids", on_publish)
-        self.assertIn("problemIds: focusProblemIds", on_publish)
+        self.assertIn("problemIds: listUnique(sourceOverlapIssues.flatMap(preflightIssueProblemIds))", on_publish)
+        self.assertIn("preflightPairToastLabel(sourceOverlapIssues)", on_publish)
         self.assertIn("source: 'source-overlap-preflight'", on_publish)
         self.assertIn("문항 영역이 겹칠 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
@@ -109,8 +113,8 @@ class TestUiPublishGuard(unittest.TestCase):
 
         self.assertIn("findPassageGroupSourceReuse", on_publish)
         self.assertIn("passage_group_source_reuse", on_publish)
-        self.assertIn("firstIssue.problemIds || firstIssue.problem_ids", on_publish)
-        self.assertIn("problemIds: focusProblemIds", on_publish)
+        self.assertIn("problemIds: listUnique(passageSourceReuseIssues.flatMap(preflightIssueProblemIds))", on_publish)
+        self.assertIn("preflightPairToastLabel(passageSourceReuseIssues)", on_publish)
         self.assertIn("source: 'passage-source-reuse-preflight'", on_publish)
         self.assertIn("지문 묶음 안에서 원본 영역이 반복될 수 있어", on_publish)
         self.assertIn("setView('review')", on_publish)
@@ -145,7 +149,7 @@ class TestUiPublishGuard(unittest.TestCase):
         self.assertIn("step3_page_chrome_artifact", target_helper)
         self.assertIn("blockedPublish?.blockingProblemIds", target_helper)
         self.assertIn("problemIds: focusedProblemIds", target_helper)
-        self.assertIn("서버 사전점검", on_publish)
+        self.assertIn("제작 전 자동 점검", on_publish)
         self.assertIn("setView('review')", on_publish)
 
     def test_publish_blocked_page_chrome_artifacts_get_retry_ui(self) -> None:

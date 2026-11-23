@@ -977,6 +977,7 @@ def detect_pdf_visual_column_divider_x(image: Image.Image) -> float | None:
 def _assign_pdf_marker_columns(
     image: Image.Image,
     markers: list[dict[str, Any]],
+    text_lines: list[dict[str, Any]] | None = None,
 ) -> tuple[list[tuple[int, list[dict[str, Any]], tuple[float, float]]], int, bool]:
     marker_columns = _cluster_pdf_marker_columns(markers, image.width)
     if len(marker_columns) == 1 and all(marker.get("marker_kind") == "badge" for marker in markers):
@@ -1005,6 +1006,36 @@ def _assign_pdf_marker_columns(
                 continue
             column_index = 0 if center_x < boundary_x else 1
             grouped[column_index].append(marker)
+        # A one-column worksheet with figures beside short stems leaves an
+        # empty strip that reads as a gutter. A right "column" with no question
+        # number, no PDF text of 4+ chars and no printed centre rule is that
+        # figure strip. Without a text layer (rhwp HWP pages) "no text there"
+        # proves nothing, and a markerless LEFT column is a passage beside its
+        # questions, so both keep the split. The rule check goes last: it is
+        # the only one that scans pixels.
+        right_column = visual_columns[1]
+        if (
+            text_lines
+            and grouped[0]
+            and not grouped[1]
+            and not any(
+                len(str(line.get("text") or "").strip()) >= 4
+                for _line_box, line in _pdf_text_lines_in_region(
+                    text_lines,
+                    left=right_column.left,
+                    right=right_column.right,
+                    top=0.0,
+                    bottom=float(image.height),
+                )
+            )
+            and _detect_document_separator_split_x(
+                _column_dark_projection(_dark_mask(image, threshold=220)),
+                image.width,
+                image.height,
+            )
+            is None
+        ):
+            return [(1, markers, (0.0, float(image.width)))], 1, False
         entries = [
             (
                 index + 1,
@@ -1726,11 +1757,15 @@ def _pdf_passage_column_text_top(
     right_bound: float,
     bottom: float,
     image_height: int,
+    skip_above: float | None = None,
 ) -> float | None:
     tops: list[float] = []
     for line in text_lines:
         line_box = _marker_bbox(line)
         if line_box is None or line_box.top >= bottom:
+            continue
+        # Page-1 header (exam title, 성명/수험 번호) sits above the page-wide rule.
+        if skip_above is not None and line_box.bottom <= skip_above:
             continue
         line_center_x = (line_box.left + line_box.right) / 2.0
         if not left_bound - 8.0 <= line_center_x <= right_bound + 8.0:
@@ -2045,6 +2080,28 @@ def _segment_pdf_example_markers(
     }
 
 
+def _passage_fragment_has_visible_body(image: Image.Image, box: Box, *, body_top: float) -> bool:
+    """Reject an instruction strip while retaining text, raster and vector bodies."""
+    left = max(0, int(box.left) + 3)
+    right = min(image.width, int(box.right) - 3)
+    top = max(int(box.top), int(body_top) + 2)
+    bottom = min(image.height, int(box.bottom))
+    if right <= left or bottom - top < 4:
+        return False
+    with image.crop((left, top, right, bottom)) as region:
+        gray = ImageOps.grayscale(region)
+        if np is not None:
+            ink = np.asarray(gray) < 245
+            # A page/empty-box border alone does not constitute shared material.
+            ink[:, np.count_nonzero(ink, axis=0) >= ink.shape[0] * 0.95] = False
+            ink[np.count_nonzero(ink, axis=1) >= ink.shape[1] * 0.95, :] = False
+            ys, _xs = np.where(ink)
+            return ys.size >= 24 and int(ys.max() - ys.min()) >= 3 if ys.size else False
+        mask = gray.point(lambda value: 255 if value < 245 else 0)
+        bounds = mask.getbbox()
+        return bounds is not None and bounds[3] - bounds[1] >= 4 and sum(mask.histogram()[1:]) >= 24
+
+
 def _build_pdf_passage_range_blocks(
     image: Image.Image,
     page_id: str,
@@ -2070,6 +2127,7 @@ def _build_pdf_passage_range_blocks(
         text = str(line.get("text") or "").strip()
         range_header = parse_shared_passage_range_header(text)
         header_box = _marker_bbox(line)
+        header_bottom = header_box.bottom if header_box is not None else 0.0
         raw_candidate = parse_passage_range_candidate(text)
         if range_header is None and raw_candidate is not None and header_box is not None:
             header_center_x = (header_box.left + header_box.right) / 2.0
@@ -2105,6 +2163,7 @@ def _build_pdf_passage_range_blocks(
                 range_header = parse_shared_passage_range_header(joined_text)
                 if range_header is not None:
                     text = joined_text
+                    header_bottom = max(header_bottom, following_box.bottom)
                     break
                 previous_box = following_box
                 if same_column_line_count >= 2:
@@ -2213,6 +2272,13 @@ def _build_pdf_passage_range_blocks(
                 marker_box = _marker_bbox(marker)
                 if marker_box is None:
                     continue
+                marker_number = marker.get("number")
+                if isinstance(marker_number, int) and marker_number < start:
+                    # Numbered sections inside the printed passage (reports,
+                    # statutes, outlines) cannot be this range's child questions.
+                    # Keep >=start boundaries, including a following question
+                    # beyond the range, so missing markers never swallow it.
+                    continue
                 if fragment_column_index == column_index and marker_box.top <= header_box.top:
                     continue
                 marker_boundaries.append(marker_box)
@@ -2227,6 +2293,7 @@ def _build_pdf_passage_range_blocks(
                     right_bound=fragment_right,
                     bottom=first_marker_top,
                     image_height=image.height,
+                    skip_above=_scan_page_header_rule_bottom(image),
                 )
                 if detected_top is None:
                     if marker_boundaries:
@@ -2355,6 +2422,9 @@ def _build_pdf_passage_range_blocks(
                 for candidate_box in fragment_text_boxes
             ]
             text_bounds_score = min(text_bounds_scores, default=1.0)
+            fragment_has_visible_body = _passage_fragment_has_visible_body(
+                image, box, body_top=header_bottom if fragment_index == 1 else box.top,
+            )
             metadata = _enrich_block_segmentation_metadata(
                 {
                     "segmenter": "pdf-passage-range",
@@ -2377,6 +2447,7 @@ def _build_pdf_passage_range_blocks(
                         for fragment_text in fragment_texts
                     ),
                     "passage_text_bounds_score": text_bounds_score,
+                    "passage_has_visible_body": fragment_has_visible_body,
                     "passage_center_divider_x": passage_divider_x,
                     "passage_center_divider_exclusion_px": (
                         PDF_PASSAGE_CENTER_DIVIDER_EXCLUSION_PX
@@ -2747,6 +2818,7 @@ def _segment_pdf_problem_markers(
     column_entries, detected_column_count, visual_column_bounds_used = _assign_pdf_marker_columns(
         image,
         column_reference_markers,
+        text_lines if isinstance(text_lines, list) else None,
     )
     if not column_entries:
         return None

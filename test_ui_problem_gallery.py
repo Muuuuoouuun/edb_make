@@ -69,6 +69,9 @@ const sandbox = {
   },
 };
 vm.createContext(sandbox);
+vm.runInContext(section('function isNetworkRequestError(', 'async function probeLocalServerHealth('), sandbox);
+// Uploaded fakes need slice(): the gallery checks a queued file is still readable.
+vm.runInContext(section('async function assertPickedFileReadable(', 'async function uploadSourceFiles('), sandbox);
 vm.runInContext(Babel.transform(section('// ─── PROBLEM-ONLY GALLERY', 'ReactDOM.createRoot('), { presets: ['react'] }).code, sandbox);
 const nodes = value => !value ? [] : Array.isArray(value) ? value.flatMap(nodes)
   : typeof value === 'object' ? [value, ...nodes(value.props?.children)] : [];
@@ -165,11 +168,11 @@ class TestUiProblemGallery(unittest.TestCase):
           await button(render(), '전체 1개 PNG 받기').props.onClick();
           assert.equal(requests.at(-1).payload.mode, 'transparent');
           assert.equal(requests.at(-1).payload.single, false);
-          const individual = () => nodes(render()).find(node => node.props?.['aria-label'] === '1번 PNG 다운로드');
+          const individual = () => nodes(render()).find(node => node.props?.['aria-label'] === '1번 · source.pdf 1쪽 PNG 다운로드');
           await individual().props.onClick();
           assert.equal(requests.at(-1).payload.single, true);
           assert.equal(requests.at(-1).payload.mode, 'transparent');
-          nodes(render()).find(node => node.props?.['aria-label'] === '1번 크게 보기').props.onClick();
+          nodes(render()).find(node => node.props?.['aria-label'] === '1번 · source.pdf 1쪽 크게 보기').props.onClick();
           const preview = () => nodes(render()).find(node => node.type === sandbox.GalleryProblemPreview);
           preview().props.onModeChange('both');
           assert.equal(chooser().props.mode, 'both');
@@ -234,7 +237,7 @@ class TestUiProblemGallery(unittest.TestCase):
           serverJobs=[{id:'source',sourceName:'source.pdf',sourcePageCount:60,processedPages:60,status:'complete',
             problems:Array.from({length:60},(_,i)=>makeProblem(i+1))}];
           await mount();
-          const card = n => nodes(render()).find(node=>node.props?.['aria-label']===`${n}번 크게 보기`);
+          const card = n => nodes(render()).find(node=>node.props?.['aria-label']===`${n}번 · source.pdf ${n}쪽 크게 보기`);
           card(2).props.onClick({ctrlKey:true});
           card(5).props.onClick({shiftKey:true});
           assert.equal(nodes(render()).filter(node=>node.type==='article' && node.props.className.includes('is-selected')).length,4);
@@ -306,7 +309,7 @@ class TestUiProblemGallery(unittest.TestCase):
           await mount();
           const auto=async()=>{render();effects.at(-1)();await new Promise(setImmediate);return render();};
           // Selecting and filtering to a known question must not limit automatic work.
-          nodes(render()).find(n=>n.props?.['aria-label']==='1번 선택').props.onChange();
+          nodes(render()).find(n=>n.props?.['aria-label']==='1번 · source.pdf 1쪽 선택').props.onChange();
           nodes(render()).find(n=>n.type==='input'&&n.props.type==='search').props.onChange({target:{value:'Question 1'}});
           unknownLabels=true;
           await auto();

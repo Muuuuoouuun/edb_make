@@ -11,6 +11,7 @@ import math
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -106,8 +107,21 @@ class GalleryStore:
     def save(self, job: dict[str, Any]) -> None:
         root = self.job_dir(job["id"])
         temporary = root / "manifest.tmp"
-        temporary.write_text(json.dumps(job, ensure_ascii=False), encoding="utf-8")
-        os.replace(temporary, root / "manifest.json")
+        with temporary.open("w", encoding="utf-8") as stream:
+            stream.write(json.dumps(job, ensure_ascii=False))
+            stream.flush()
+            # Without this a power cut can leave a NUL-filled manifest, and list_jobs then hides the whole job.
+            os.fsync(stream.fileno())
+        # OneDrive and virus scanners can hold manifest.json for a moment
+        # (same delays as app_server._replace_file_with_retry, which this module cannot import).
+        for delay in (0.05, 0.1, 0.2, 0.4, 0.8, None):
+            try:
+                os.replace(temporary, root / "manifest.json")
+                return
+            except OSError as exc:
+                if delay is None or getattr(exc, "winerror", None) not in {5, 32, 33}:
+                    raise
+                time.sleep(delay)
 
     def list_jobs(self) -> list[dict[str, Any]]:
         jobs = []
@@ -115,7 +129,9 @@ class GalleryStore:
             for path in self.root.glob("*/manifest.json"):
                 try:
                     jobs.append(self.load(path.parent.name))
-                except ValueError:
+                except ValueError as exc:
+                    # Keep the other jobs visible, but leave a trail in app.log for bug reports.
+                    print(f"[problem-gallery] skipped unreadable job {path.parent.name}: {exc.__cause__!r}", file=sys.stderr)
                     continue
         return sorted(jobs, key=lambda job: job["createdAt"], reverse=True)
 
@@ -198,8 +214,12 @@ class GalleryStore:
         context_end = min(count, end + CONTEXT_PAGES)
         result = None
         new_paths: list[Path] = []
+        # ponytail: a scanner/OneDrive lock can leave a batch folder behind; parser requests run
+        # one at a time (exclusive artifact job), so every batch-* folder here is stale.
+        for stale in self.root.glob("*/batch-*"):
+            shutil.rmtree(stale, ignore_errors=True)
         try:
-            with tempfile.TemporaryDirectory(prefix="batch-", dir=root) as temporary:
+            with tempfile.TemporaryDirectory(prefix="batch-", dir=root, ignore_cleanup_errors=True) as temporary:
                 work = Path(temporary)
                 # Keep preprocessing caches inside this temporary batch too.
                 if source.suffix == ".pdf":
@@ -254,9 +274,10 @@ class GalleryStore:
                     if not label_is_confirmed(record):
                         record["riskFlags"] = sorted(set([*record["riskFlags"], LABEL_REVIEW_FLAG]))
                     added.append(record)
-                job["problems"].extend(added)
-                job.update(processedPages=end, status="complete" if end == count else "partial", error=None)
-                self.save(job)
+            # Commit last: the except branch below assumes this batch was not saved.
+            job["problems"].extend(added)
+            job.update(processedPages=end, status="complete" if end == count else "partial", error=None)
+            self.save(job)
         except Exception as exc:
             for path in new_paths:
                 path.unlink(missing_ok=True)
@@ -353,6 +374,15 @@ class GalleryStore:
             raise ValueError("다운로드할 문제를 찾을 수 없습니다.")
         return gallery_image_filename(job, problem)
 
+    def delete_job(self, job_id: str) -> None:
+        root = self.job_dir(job_id)  # validates the id, so nothing outside the gallery is touched
+        # Manifest first: the source leaves the list even if OneDrive or antivirus briefly
+        # holds one image. ponytail: such a leftover stays until the folder is removed by hand.
+        (root / "manifest.json").unlink(missing_ok=True)
+        shutil.rmtree(root, ignore_errors=True)
+        # Cached ZIPs may hold this source's crops; the next save rebuilds them.
+        shutil.rmtree(self.root / "exports", ignore_errors=True)
+
     def export_images(self, problem_ids: list[str], mode: str = "raw", *, single: bool = False) -> tuple[Path, int]:
         if not isinstance(mode, str) or mode not in EXPORT_MODES:
             raise ValueError("저장 옵션은 기본 자르기, 배경 제거, 둘 다 중에서 선택하세요.")
@@ -384,6 +414,11 @@ class GalleryStore:
         if single and mode != "both":
             return (self._transparent_image(source) if mode == "transparent" else source), 1
         self.root.mkdir(parents=True, exist_ok=True)
+        # The browser downloads each ZIP right after the reply, so an older one is only
+        # a cache. Without this every distinct selection stays on disk forever.
+        for folder in (self.root / "exports").glob("*"):
+            if folder.stat().st_mtime < time.time() - 3600:
+                shutil.rmtree(folder, ignore_errors=True)
         # Immutable crops let repeated saves reuse a completed archive. Partial
         # archives are never published, including after an interrupted process.
         digest = hashlib.sha256(json.dumps([EXPORT_VERSION, EXPORT_NAMING_VERSION, mode, single, fingerprints]).encode()).hexdigest()

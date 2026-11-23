@@ -1,0 +1,1093 @@
+{
+  "schema_version": 1,
+  "status": "passed",
+  "evaluated_source_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+  "evaluated_source_tree": "21ec8d2992339869420787f7390ac56907058215",
+  "date": "2026-10-30",
+  "scope": "Previously exposed fixed regression corpus of ten native-text EBS PDFs (five Korean, five English), 120 pages and 65 shared passages; no unseen/scanned-document or ClassIn GUI qualification.",
+  "contract": "Only passages shared by multiple questions; exclude standalone English passages, listening, questions and options. Full-page mode preserves all source content.",
+  "acceptance": {
+    "cell_mean_minimum": 95,
+    "cell_axis_minimum": 93,
+    "document_mean_minimum": 93,
+    "hard_failures_allowed": 0
+  },
+  "corpus": {
+    "documents": 10,
+    "pages": 120,
+    "shared_passages": 65,
+    "korean_groups": 55,
+    "english_groups": 10,
+    "reference": "shared-passage-evaluation-corpus.json",
+    "exposure": {
+      "status": "previously-exposed-regression-corpus",
+      "note": "All ten sources were exposed during iterative debugging. Original development/holdout split labels are historical strata, not a claim of new blind holdout evaluation."
+    }
+  },
+  "execution": {
+    "cases": 20,
+    "fresh_ui_trials": 60,
+    "distinct_server_processes": 60,
+    "downloaded_edb_parts": 75,
+    "failed_or_dropped_attempts": 0,
+    "incomplete_trials": 0,
+    "fresh_quality_cases": 20,
+    "same_study_exact_canonical_reuse_count": 40,
+    "max_feedback_ms": 177.11549100000002,
+    "max_edb_part_page_count": 50,
+    "ai_or_ocr_backend": "none",
+    "claude_api_calls": 0,
+    "claude_note": "No Claude/Anthropic key was available in the execution environment. Independent agent review was used; no Claude API spend."
+  },
+  "pooled_cells": {
+    "korean/shared-passage": {
+      "document_count": 5,
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.29718064334816,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.85943612866963,
+      "minimum_axis": 99.29718064334816,
+      "minimum_document_mean": 99.70180521606673,
+      "hard_failure_count": 0,
+      "status": "passed"
+    },
+    "korean/full-page": {
+      "document_count": 5,
+      "scores": {
+        "detection": 100.0,
+        "preservation": 98.49870521456644,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.69974104291329,
+      "minimum_axis": 98.49870521456644,
+      "minimum_document_mean": 99.26227237026589,
+      "hard_failure_count": 0,
+      "status": "passed"
+    },
+    "english/shared-passage": {
+      "document_count": 5,
+      "scores": {
+        "detection": 100.0,
+        "preservation": 100.0,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 100.0,
+      "minimum_axis": 100.0,
+      "minimum_document_mean": 100.0,
+      "hard_failure_count": 0,
+      "status": "passed"
+    },
+    "english/full-page": {
+      "document_count": 5,
+      "scores": {
+        "detection": 100.0,
+        "preservation": 98.42136641392341,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.68427328278469,
+      "minimum_axis": 98.42136641392341,
+      "minimum_document_mean": 99.31807366202821,
+      "hard_failure_count": 0,
+      "status": "passed"
+    }
+  },
+  "historical_strata": {
+    "real-original/development": {
+      "status": "passed",
+      "cells": {
+        "korean/shared-passage": {
+          "status": "passed",
+          "document_count": 3,
+          "independent_families": 3,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 99.01679471260672,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 99.80335894252134,
+          "minimum_axis": 99.01679471260672,
+          "case_ids": [
+            "kr-march-g10--shared-passage",
+            "kr-202603242--shared-passage",
+            "kr-202606041--shared-passage"
+          ]
+        },
+        "korean/full-page": {
+          "status": "passed",
+          "document_count": 3,
+          "independent_families": 3,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 97.60768884221788,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 99.52153776844358,
+          "minimum_axis": 97.60768884221788,
+          "case_ids": [
+            "kr-march-g10--full-page",
+            "kr-202603242--full-page",
+            "kr-202606041--full-page"
+          ]
+        },
+        "english/shared-passage": {
+          "status": "passed",
+          "document_count": 3,
+          "independent_families": 3,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 100.0,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 100.0,
+          "minimum_axis": 100.0,
+          "case_ids": [
+            "en-march-g10--shared-passage",
+            "en-202603242--shared-passage",
+            "en-202606041-1--shared-passage"
+          ]
+        },
+        "english/full-page": {
+          "status": "passed",
+          "document_count": 3,
+          "independent_families": 3,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 99.08892235754628,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 99.81778447150926,
+          "minimum_axis": 99.08892235754628,
+          "case_ids": [
+            "en-march-g10--full-page",
+            "en-202603242--full-page",
+            "en-202606041-1--full-page"
+          ]
+        }
+      },
+      "subgroups": {}
+    },
+    "real-original/holdout": {
+      "status": "passed",
+      "cells": {
+        "korean/shared-passage": {
+          "status": "passed",
+          "document_count": 2,
+          "independent_families": 2,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 99.7177595394603,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 99.94355190789206,
+          "minimum_axis": 99.7177595394603,
+          "case_ids": [
+            "kr-june-g11--shared-passage",
+            "kr-202509032--shared-passage"
+          ]
+        },
+        "korean/full-page": {
+          "status": "passed",
+          "document_count": 2,
+          "independent_families": 2,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 99.83522977308928,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 99.96704595461786,
+          "minimum_axis": 99.83522977308928,
+          "case_ids": [
+            "kr-june-g11--full-page",
+            "kr-202509032--full-page"
+          ]
+        },
+        "english/shared-passage": {
+          "status": "passed",
+          "document_count": 2,
+          "independent_families": 2,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 100.0,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 100.0,
+          "minimum_axis": 100.0,
+          "case_ids": [
+            "en-june-g11--shared-passage",
+            "en-202509032-2--shared-passage"
+          ]
+        },
+        "english/full-page": {
+          "status": "passed",
+          "document_count": 2,
+          "independent_families": 2,
+          "scores": {
+            "detection": 100.0,
+            "preservation": 97.42003249848909,
+            "joining": 100.0,
+            "layout": 100.0,
+            "speed": 100.0
+          },
+          "mean": 99.48400649969781,
+          "minimum_axis": 97.42003249848909,
+          "case_ids": [
+            "en-june-g11--full-page",
+            "en-202509032-2--full-page"
+          ]
+        }
+      },
+      "subgroups": {}
+    }
+  },
+  "cases": [
+    {
+      "case_id": "kr-march-g10--shared-passage",
+      "source_id": "kr-march-g10",
+      "subject": "korean",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go1",
+      "source_sha256": "9da0e8ede1f16728a92727b0553449ae1b70357715e51d60f5987b091cf089ad",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.38793312144696,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.87758662428939,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 52521.483736999995,
+        "total_ms_p95": 54029.058081999996,
+        "total_ms_max": 54029.058081999996,
+        "feedback_ms_p95": 118.69876599999998,
+        "peak_rss_bytes_max": 1838829568,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 90000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-march-g10--full-page",
+      "source_id": "kr-march-g10",
+      "subject": "korean",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go1",
+      "source_sha256": "9da0e8ede1f16728a92727b0553449ae1b70357715e51d60f5987b091cf089ad",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 96.31136185132948,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.26227237026589,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 42409.438071000004,
+        "total_ms_p95": 45095.159918000005,
+        "total_ms_max": 45095.159918000005,
+        "feedback_ms_p95": 132.08010400000012,
+        "peak_rss_bytes_max": 2613968896,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-march-g10--shared-passage",
+      "source_id": "en-march-g10",
+      "subject": "english",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go1",
+      "source_sha256": "38c0d5e48106f5a111b7ffe0a0dd298a8d5a193b7673f122a1fe0592abda5397",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 100.0,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 100.0,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 10049.251784,
+        "total_ms_p95": 10890.602340000001,
+        "total_ms_max": 10890.602340000001,
+        "feedback_ms_p95": 134.90709500000003,
+        "peak_rss_bytes_max": 687218688,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-march-g10--full-page",
+      "source_id": "en-march-g10",
+      "subject": "english",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go1",
+      "source_sha256": "38c0d5e48106f5a111b7ffe0a0dd298a8d5a193b7673f122a1fe0592abda5397",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.01499002458337,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.80299800491667,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 21910.350393,
+        "total_ms_p95": 22498.389688,
+        "total_ms_max": 22498.389688,
+        "feedback_ms_p95": 133.08918999999992,
+        "peak_rss_bytes_max": 2636230656,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 30000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-june-g11--shared-passage",
+      "source_id": "kr-june-g11",
+      "subject": "korean",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20260604-go2",
+      "source_sha256": "458b8502dfeb0697c5229f317ff4df9f81e66c11c0046750020c04ed29b74152",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.72943783533982,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.94588756706796,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 43322.949058,
+        "total_ms_p95": 43846.99748,
+        "total_ms_max": 43846.99748,
+        "feedback_ms_p95": 137.92333899999994,
+        "peak_rss_bytes_max": 1853136896,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 90000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-june-g11--full-page",
+      "source_id": "kr-june-g11",
+      "subject": "korean",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20260604-go2",
+      "source_sha256": "458b8502dfeb0697c5229f317ff4df9f81e66c11c0046750020c04ed29b74152",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.69050599488801,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.93810119897759,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 41650.05251,
+        "total_ms_p95": 42694.864954,
+        "total_ms_max": 42694.864954,
+        "feedback_ms_p95": 130.14974500000017,
+        "peak_rss_bytes_max": 2610085888,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-june-g11--shared-passage",
+      "source_id": "en-june-g11",
+      "subject": "english",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20260604-go2",
+      "source_sha256": "b0ce005a1cb79f6e784281897623c0e8fc56097bc7aa7f8b3f3e753a1ce27f46",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 100.0,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 100.0,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 10772.62926,
+        "total_ms_p95": 10804.886204999999,
+        "total_ms_max": 10804.886204999999,
+        "feedback_ms_p95": 110.94039100000009,
+        "peak_rss_bytes_max": 834670592,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-june-g11--full-page",
+      "source_id": "en-june-g11",
+      "subject": "english",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20260604-go2",
+      "source_sha256": "b0ce005a1cb79f6e784281897623c0e8fc56097bc7aa7f8b3f3e753a1ce27f46",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 96.59036831014106,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.31807366202821,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 21189.413753,
+        "total_ms_p95": 21224.272669,
+        "total_ms_max": 21224.272669,
+        "feedback_ms_p95": 138.39267700000005,
+        "peak_rss_bytes_max": 2223415296,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 30000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-202603242--shared-passage",
+      "source_id": "kr-202603242",
+      "subject": "korean",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go2",
+      "source_sha256": "ea1c5f215237ee95ed26483543f5e6837a7486b09c6bb5e2b9cbac1a96d07a4d",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 98.50902608033371,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.70180521606673,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 51120.633440000005,
+        "total_ms_p95": 51273.290406,
+        "total_ms_max": 51273.290406,
+        "feedback_ms_p95": 124.69327599999997,
+        "peak_rss_bytes_max": 2199826432,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 90000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-202603242--full-page",
+      "source_id": "kr-202603242",
+      "subject": "korean",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go2",
+      "source_sha256": "ea1c5f215237ee95ed26483543f5e6837a7486b09c6bb5e2b9cbac1a96d07a4d",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.34960774007669,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.86992154801534,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 42178.227717,
+        "total_ms_p95": 42428.218671,
+        "total_ms_max": 42428.218671,
+        "feedback_ms_p95": 129.06535199999985,
+        "peak_rss_bytes_max": 2682171392,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-202603242--shared-passage",
+      "source_id": "en-202603242",
+      "subject": "english",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go2",
+      "source_sha256": "b3162fec34ed09dc028cb0defc6f31ec631848ed30f61341cd349f8e472b3662",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 100.0,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 100.0,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 10039.947262,
+        "total_ms_p95": 10290.337262,
+        "total_ms_max": 10290.337262,
+        "feedback_ms_p95": 125.21982600000001,
+        "peak_rss_bytes_max": 724738048,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-202603242--full-page",
+      "source_id": "en-202603242",
+      "subject": "english",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260324-go2",
+      "source_sha256": "b3162fec34ed09dc028cb0defc6f31ec631848ed30f61341cd349f8e472b3662",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.31606143556246,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.86321228711249,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 21006.133292,
+        "total_ms_p95": 21029.882592,
+        "total_ms_max": 21029.882592,
+        "feedback_ms_p95": 149.64403500000003,
+        "peak_rss_bytes_max": 2565558272,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 30000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-202606041--shared-passage",
+      "source_id": "kr-202606041",
+      "subject": "korean",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260604-go1",
+      "source_sha256": "81232d51d888a76baf32194a78e546db4c8708be2d20bdac1019012bc29f1458",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.15342493603947,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.83068498720789,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 39491.945814,
+        "total_ms_p95": 39715.044936,
+        "total_ms_max": 39715.044936,
+        "feedback_ms_p95": 124.67138699999987,
+        "peak_rss_bytes_max": 2022150144,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 90000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-202606041--full-page",
+      "source_id": "kr-202606041",
+      "subject": "korean",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260604-go1",
+      "source_sha256": "81232d51d888a76baf32194a78e546db4c8708be2d20bdac1019012bc29f1458",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 97.16209693524749,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.4324193870495,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 42395.54531,
+        "total_ms_p95": 42638.241595,
+        "total_ms_max": 42638.241595,
+        "feedback_ms_p95": 134.31999799999994,
+        "peak_rss_bytes_max": 2603986944,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-202606041-1--shared-passage",
+      "source_id": "en-202606041-1",
+      "subject": "english",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260604-go1",
+      "source_sha256": "0ee4701af2d11eff464eb1ccaa4bc04bb741c81c8c451ffac3a25f054e90c588",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 100.0,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 100.0,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 10947.884309000001,
+        "total_ms_p95": 11210.700477999999,
+        "total_ms_max": 11210.700477999999,
+        "feedback_ms_p95": 177.11549100000002,
+        "peak_rss_bytes_max": 806268928,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-202606041-1--full-page",
+      "source_id": "en-202606041-1",
+      "subject": "english",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "development",
+      "family": "ebsi-20260604-go1",
+      "source_sha256": "0ee4701af2d11eff464eb1ccaa4bc04bb741c81c8c451ffac3a25f054e90c588",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 98.93571561249303,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.7871431224986,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 21401.420326,
+        "total_ms_p95": 21478.810359,
+        "total_ms_max": 21478.810359,
+        "feedback_ms_p95": 123.26759700000002,
+        "peak_rss_bytes_max": 2694004736,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 30000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-202509032--shared-passage",
+      "source_id": "kr-202509032",
+      "subject": "korean",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20250903-go2",
+      "source_sha256": "1db333c3d907095e5a1a55c8edc04dcfd11203f0626c65b0354ec5b442d8c92e",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.70608124358078,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.94121624871616,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 30292.440774,
+        "total_ms_p95": 31026.327714,
+        "total_ms_max": 31026.327714,
+        "feedback_ms_p95": 122.90714200000002,
+        "peak_rss_bytes_max": 1031290880,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 90000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "kr-202509032--full-page",
+      "source_id": "kr-202509032",
+      "subject": "korean",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20250903-go2",
+      "source_sha256": "1db333c3d907095e5a1a55c8edc04dcfd11203f0626c65b0354ec5b442d8c92e",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 16,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 99.97995355129055,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.99599071025811,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 23061.840078,
+        "total_ms_p95": 23148.743646,
+        "total_ms_max": 23148.743646,
+        "feedback_ms_p95": 140.7531379999998,
+        "peak_rss_bytes_max": 2283794432,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-202509032-2--shared-passage",
+      "source_id": "en-202509032-2",
+      "subject": "english",
+      "mode": "shared-passage",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20250903-go2",
+      "source_sha256": "adba3cf2fcf6551eab6a49d27310bd143c50082043dcc24250057b9a89b97049",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 100.0,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 100.0,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 9000.234161999999,
+        "total_ms_p95": 9282.365468,
+        "total_ms_max": 9282.365468,
+        "feedback_ms_p95": 123.49735299999998,
+        "peak_rss_bytes_max": 366452736,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 50000,
+        "feedback_budget_ms": 250
+      }
+    },
+    {
+      "case_id": "en-202509032-2--full-page",
+      "source_id": "en-202509032-2",
+      "subject": "english",
+      "mode": "full-page",
+      "kind": "real-original",
+      "split": "holdout",
+      "family": "ebsi-20250903-go2",
+      "source_sha256": "adba3cf2fcf6551eab6a49d27310bd143c50082043dcc24250057b9a89b97049",
+      "ground_truth_sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "git_commit": "139d0a756cfc19986280182a955c47e8a69538f0",
+      "page_count": 8,
+      "tags": [],
+      "scores": {
+        "detection": 100.0,
+        "preservation": 98.24969668683713,
+        "joining": 100.0,
+        "layout": 100.0,
+        "speed": 100.0
+      },
+      "mean": 99.64993933736743,
+      "hard_failures": [],
+      "status": "passed",
+      "timing": {
+        "trial_count": 3,
+        "total_ms_p50": 11827.476945,
+        "total_ms_p95": 13621.825148,
+        "total_ms_max": 13621.825148,
+        "feedback_ms_p95": 115.43445799999995,
+        "peak_rss_bytes_max": 2274938880,
+        "task_success_fraction": 1.0,
+        "timing_budget_ms": 30000,
+        "feedback_budget_ms": 250
+      }
+    }
+  ],
+  "minimum_document_mean": 99.26227237026589,
+  "minimum_individual_case_axis": 96.31136185132948,
+  "hard_failures": [],
+  "ground_truth_sha256": [
+    "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d"
+  ],
+  "policy_sha256": "0f09095895b0974fbfe95cfc5c9243988f469c4ea60f80468c980413d8e3287c",
+  "measurement_observer_revision": {
+    "common": {
+      "path": "observers/study_measurements_v7.py",
+      "sha256": "c9e459d0e9710b7812eb5cdedd287bc10ba0b9ed21d1d08d760e9d898e958997",
+      "size_bytes": 30146
+    },
+    "native": {
+      "path": "observers/measure_shared_passage_quality_native_final_v7.py",
+      "sha256": "fe32c8c0dfe7186b774b7faf41777b085bfcb8d67334f5b43306af90daef534d",
+      "size_bytes": 56209
+    },
+    "compatibility": {
+      "path": "observers/study_measurements_v7_compatibility.json",
+      "sha256": "3d9f597b360b1a51ed2dfcd9e4146c6fc8a29ce3af4d0a37100df0f95d422087",
+      "size_bytes": 3095
+    },
+    "glyph_shape": {
+      "path": "observers/glyph_shape_v5.py",
+      "sha256": "55500b9432ce69f525a04480808b8224a431319247db0cadc0eac58f1c71c14a",
+      "size_bytes": 2459
+    },
+    "foreground_material": {
+      "path": "observers/foreground_material_v6.py",
+      "sha256": "8c22e32a3d0b0c7dd002ceb8b5277e18267258bad6e4180a152ac2edbe874013",
+      "size_bytes": 740
+    },
+    "cross_study_seeds_allowed": false,
+    "fresh_case_quality_count": 20,
+    "within_study_reuse": "Only exact complete canonical equality of independently reparsed new actual downloads with this study’s V7 representative; no timings/runtime outcomes reused."
+  },
+  "environment": {
+    "platform": "Linux-6.18.55-x86_64-with-glibc2.41",
+    "machine": "x86_64",
+    "python": "Python 3.12.14",
+    "chromium": "Chromium 154.0.8037.57 built on Debian GNU/Linux 13 (trixie)",
+    "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+    "cpu_max": "400000 100000",
+    "cache_policy": "Fresh app process/profile/copied input every trial; no cross-trial reuse; normal intra-task preview→publish reuse permitted.",
+    "network_policy": "Local UI/API only; AI disabled; existing driver strips provider keys."
+  },
+  "validation": {
+    "local_pytest_passed": 2759,
+    "local_pytest_skipped": 45,
+    "local_subtests_passed": 564,
+    "existing_pillow_deprecation_warnings": 2,
+    "frontend_package": "passed",
+    "synthetic_gate": "passed, excluded from measured product scores",
+    "independent_audit_checks": 2858,
+    "source_ci_url": "https://github.com/Muuuuoouuun/edb_make/actions/runs/40977408508"
+  },
+  "evidence_references": [
+    {
+      "path": "candidate-v7-139d0a7-score-report.json",
+      "sha256": "162ee719c24317869513d859f0d49a5b91f36d72d13adcf3498f8710d9bc1b03",
+      "size_bytes": 30503
+    },
+    {
+      "path": "candidate-v7-139d0a7-observations.json",
+      "sha256": "3375ad952f2f552823e27be95cf493085345f08b53b482de3e034509b4f73804",
+      "size_bytes": 7202149
+    },
+    {
+      "path": "candidate-v7-139d0a7-plan.json",
+      "sha256": "19fc716ae577faec6bd47d65ca8924009be31f7cef3b78eae7be2f8ed7348d5a",
+      "size_bytes": 4970
+    },
+    {
+      "path": "candidate-v7-139d0a7-manifest.json",
+      "sha256": "a901a59038a67ea22f33b0f6b969f17334a718b3eda1d71a8e4d40e36ec44cde",
+      "size_bytes": 3609882
+    },
+    {
+      "path": "ground-truth-frozen-v4.json",
+      "sha256": "62ea660dfbfbe3ccab71a5c6372418bb02a4a41a91f2c92afffc3a950d57c80d",
+      "size_bytes": 6013067
+    },
+    {
+      "path": "evaluation-policy.md",
+      "sha256": "0f09095895b0974fbfe95cfc5c9243988f469c4ea60f80468c980413d8e3287c",
+      "size_bytes": 15270
+    },
+    {
+      "path": "formal_study_v5.py",
+      "sha256": "c73b2ad5c55e1fba4f418a26c345809c9044b933ae9f1e2fc46c0326ccbb6a37",
+      "size_bytes": 33363
+    },
+    {
+      "path": "independent-final-audit.json",
+      "sha256": "cd64bd9eb2de2c952bdd9eaa7d1011a199384ac5c81e8a0f67f0b001737c27d4",
+      "size_bytes": 342790
+    },
+    {
+      "path": "candidate-v7-139d0a7/runtime-worker-provenance.json",
+      "sha256": "f4469c4632cdadd0f295e9b50e4e6811d34704858aee61fe53626bc327708ae0",
+      "size_bytes": 75386
+    },
+    {
+      "path": "final-v7-source-tests.log",
+      "sha256": "bc455c001fd947cae3d97b8d2411d6c5eedb09f516a9b2948d07c9e2dab27bfc",
+      "size_bytes": 4150
+    }
+  ],
+  "runtime_code_unchanged_after_evaluation": {
+    "followup_commit": "ce4ac79ef9f2313cec56e4ae6c26223dae18214f",
+    "changed_paths": [
+      ".github/workflows/build-installers.yml",
+      "test_release_packaging_hardening.py"
+    ],
+    "purpose": "Only artifact transport and its contract test; subsequent result documents do not change runtime code. Installers were built from evaluated source 139d0a7."
+  },
+  "native_build_report": "0.2.13-internal-build-validation.md",
+  "limitations": [
+    "All ten sources were exposed during debugging; development/holdout labels are historical strata, not blind holdout.",
+    "Only native-text PDF quality is qualified; no scanned-document generalization or ClassIn application opening.",
+    "Timing is candidate-only on this Linux host, not an interleaved causal speedup comparison. Memory headroom varied across earlier studies.",
+    "Native installer/update checks are separate. Current internal installers have no configured production feed/PIN and are unsigned (Windows) or ad-hoc signed/not notarized (macOS).",
+    "Original source PDFs, images, and full local measurements are retained outside the repository. Evidence references identify those retained bytes; no missing measurements were filled in."
+  ]
+}

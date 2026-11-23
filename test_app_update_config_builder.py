@@ -100,14 +100,14 @@ class TestAppUpdateConfigBuilder(unittest.TestCase):
         self.assertTrue(verifier.startswith("pbkdf2_sha256$210000$"))
         self.assertNotIn("4826", verifier)
 
-    def test_rejects_non_numeric_packaging_pin(self) -> None:
+    def test_rejects_non_alphanumeric_packaging_pin(self) -> None:
         with TemporaryDirectory() as raw_tmp:
             tmpdir = Path(raw_tmp)
             source = tmpdir / "app_update_config.json"
             output = tmpdir / "generated" / "app_update_config.json"
             source.write_text("{}", encoding="utf-8")
             env = os.environ.copy()
-            env["EDB_PACKAGE_UPDATE_PIN"] = "12ab"
+            env["EDB_PACKAGE_UPDATE_PIN"] = "12-b"
 
             result = subprocess.run(
                 [sys.executable, str(BUILDER), str(source), str(output)],
@@ -118,7 +118,7 @@ class TestAppUpdateConfigBuilder(unittest.TestCase):
             )
 
         self.assertNotEqual(0, result.returncode)
-        self.assertIn("4-12 ASCII digits", result.stderr)
+        self.assertIn("4-12 ASCII letters or digits", result.stderr)
         self.assertFalse(output.exists())
 
 

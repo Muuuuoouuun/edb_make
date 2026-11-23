@@ -26,7 +26,7 @@ jobs:
 
           pin = os.environ.get('UPDATE_PIN', '').strip()
           checks = {
-              'EDB_UPDATE_PIN': ('valid' if pin.isascii() and pin.isdigit() and 4 <= len(pin) <= 12 else 'invalid') if pin else 'missing',
+              'EDB_UPDATE_PIN': ('valid' if pin.isascii() and pin.isalnum() and 4 <= len(pin) <= 12 else 'invalid') if pin else 'missing',
               'EDB_QUALITY_GEMINI_API_KEY': 'configured' if os.environ.get('QUALITY_KEY', '').strip() else 'missing',
           }
           for name in ('CORPUS_MANIFEST', 'CORPUS_ROOT', 'CORPUS_BASELINE'):

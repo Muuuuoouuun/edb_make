@@ -38,7 +38,8 @@ const sandbox = {
   console: { warn: (...args) => warnings.push(args) },
 };
 vm.createContext(sandbox);
-vm.runInContext(section('  const updateStatusToast =', '  const openUpdatePage =')
+vm.runInContext(section('const UPDATE_CHANNEL_ERROR_COPY', 'function isUpdateArchitectureMismatch(')
+  + section('  const updateStatusToast =', '  const openUpdatePage =')
   + '\nglobalThis.checkForUpdates = checkForUpdates;'
   + '\nglobalThis.openUpdateSettings = openUpdateSettings;', sandbox);
 """
@@ -92,18 +93,30 @@ class TestUiUpdateEntry(unittest.TestCase):
           ['update_disk_full', '저장 공간 부족', '공간을 확보'],
           ['update_storage_permission_denied', '저장 권한 오류', '보안 프로그램'],
           ['update_staging_failed', '파일 준비 오류', '작업 폴더'],
-          ['update_download_failed', '다운로드 실패', '배포 서버'],
+          ['update_download_failed', '다운로드 실패', '인터넷 연결을 확인'],
           ['update_target_changed', '정보가 바뀌었습니다', '다시 확인'],
           ['update_confirmation_required', '업데이트 정보', '다시 확인'],
           ['update_installer_launch_failed', '설치기 실행 오류', '신고'],
           ['update_size_mismatch', '크기 검증 실패', '다시 확인'],
           ['update_checksum_mismatch', '무결성 검증 실패', '다시 확인'],
+          ['update_translocated_app', '임시 위치', '응용 프로그램 폴더'],
+          ['update_target_not_writable', '덮어쓸 수 없습니다', '다운로드 열기'],
+          ['update_requires_packaged_app', '설치된 앱', '다운로드 열기'],
+          ['update_artifact_too_large', '올바르지 않습니다', '관리자'],
         ]) {
           const message = sandbox.simpleToastErrorMessage({ code, message: 'private diagnostic context' }, '자동 업데이트 시작 실패');
           assert.ok(message.includes(cause), `${code}: ${message}`);
           assert.ok(message.includes(recovery), `${code}: ${message}`);
           assert.ok(!message.includes('private diagnostic context'));
         }
+        const tooLarge = sandbox.simpleToastErrorMessage({ code: 'update_artifact_too_large', message: '업데이트 파일이 허용 크기를 초과합니다.' }, '자동 업데이트 시작 실패');
+        assert.ok(!tooLarge.includes('파일이 너무 큽니다'), tooLarge);
+        assert.equal(
+          sandbox.simpleToastErrorMessage({ code: 'unmapped', message: 'raw', recoverySteps: ['앱을 응용 프로그램 폴더로 옮겨 다시 실행해 주세요.'] }, '자동 업데이트 시작 실패'),
+          '자동 업데이트 시작 실패 · 앱을 응용 프로그램 폴더로 옮겨 다시 실행해 주세요');
+        assert.equal(
+          sandbox.simpleToastErrorMessage({ message: 'raw', recoverySteps: ['retry later'] }, '처리 실패'),
+          '처리 실패 · 다시 시도해 주세요', 'non-Korean steps never reach the toast');
         """)
 
     def test_update_check_deduplicates_in_flight_and_reports_unconfigured_truthfully(self) -> None:
@@ -266,6 +279,7 @@ class TestUpdateInstallSafety(unittest.TestCase):
           loading:null,mutating:false,hasRunningBackgroundJobs:false,confirmingRecognition:false,
           publishBusy:false,downloadBusy:false,resetBusy:false,mutatingRef:{current:false},
           checkForUpdates:async()=>null,setUpdateInstallBusy:()=>{},showSimpleErrorToast:()=>{},
+          setHomeUpdateOpen:()=>{},setUpdateRestarting:value=>{sandbox.restarting=value;},
           messages:[],showToast:message=>sandbox.messages.push(message),calls:[],
           postAppUpdateInstall:async(...args)=>{sandbox.calls.push(args);return {targetVersion:'0.2.5'};},
         };
@@ -286,9 +300,33 @@ class TestUpdateInstallSafety(unittest.TestCase):
           const snapshot=sandbox.appUpdateArtifactSnapshot(sandbox.updateInfo);
           assert.equal(await sandbox.install('1234',snapshot),true);
           assert.equal(sandbox.calls.length,1);assert.equal(sandbox.calls[0][1],snapshot);
+          assert.equal(sandbox.restarting.version,'0.2.5','a started install keeps a full-screen notice instead of a short toast');
           sandbox.updateInfo.latest.version='0.2.6';
           assert.equal(await sandbox.install('1234',snapshot),false,'confirmation must not authorize changed update metadata');
           assert.equal(sandbox.calls.length,1);assert.match(sandbox.messages.at(-1),/정보가 바뀌/);
+        })().catch(error=>{console.error(error);process.exitCode=1;});
+        """)
+
+    def test_blocked_automatic_update_never_posts_and_shows_the_reason(self):
+        run_node(NODE_SETUP + r"""
+        const reason = '앱을 응용 프로그램 폴더로 옮겨야 자동 업데이트할 수 있습니다.';
+        const sandbox = {
+          useCallback:fn=>fn, updateBusy:false, updateInstallBusy:false, updateInstallBlockedReason:'', mutatingRef:{current:false},
+          updateInfo:{updateAvailable:true,automaticUpdateEnabled:true,automaticUpdateReady:true,automaticUpdateBlockedReason:reason,
+            downloadUrl:'https://example.test/a.dmg',sha256:'a'.repeat(64),sizeBytes:1,latest:{version:'0.2.5'}},
+          checkForUpdates:async()=>null, setUpdateInstallBusy:()=>{}, showSimpleErrorToast:()=>{},
+          toasts:[], showToast:(message,tone)=>sandbox.toasts.push([message,tone]), calls:0,
+          postAppUpdateInstall:async()=>{sandbox.calls+=1;return {};},
+        };
+        vm.createContext(sandbox);
+        vm.runInContext(section('function appUpdateArtifactSnapshot(', 'async function postAppUpdateInstall(')
+          + section('  const installUpdateVersion =', '  const refreshSessionHistory =') + '\nglobalThis.install=installUpdateVersion;', sandbox);
+        (async()=>{
+          assert.equal(await sandbox.install('1234', sandbox.appUpdateArtifactSnapshot(sandbox.updateInfo)), false);
+          assert.equal(sandbox.calls, 0);
+          assert.deepEqual(sandbox.toasts, [[reason, 'error']]);
+          const panel = section('  const updateControls = (', '  const updateDialog = (');
+          assert.match(panel, /updateAvailable && !updateAutomaticBlockedReason && <div className="update-install-card">/);
         })().catch(error=>{console.error(error);process.exitCode=1;});
         """)
 
@@ -329,7 +367,13 @@ class TestUpdateInstallSafety(unittest.TestCase):
           assert.equal(state.channelStatus,'error');assert.equal(state.updateAvailable,false);
           assert.equal(state.automaticUpdateReady,false);assert.equal(state.downloadUrl,undefined);
           assert.match(state.error,/network disconnected/);assert.equal(toasts.length,0);
-          assert.match(vm.runInContext("updateStatusToast({channelStatus:'invalid_config',error:'bad hash'})",sandbox),/설정 오류.*bad hash/);
+          const configToast = vm.runInContext("updateStatusToast({channelStatus:'invalid_config',error:'bad hash'})",sandbox);
+          assert.match(configToast,/업데이트 설정에 문제가 있습니다.*다시 설치해 주세요/);
+          assert.ok(!configToast.includes('bad hash'),'raw status errors stay in the dialog details');
+          sandbox.checkForUpdates();
+          pendingRequests[1].resolve({channelStatus:'error',error:'<urlopen error [Errno 11001] getaddrinfo failed>'});
+          await flush();
+          assert.ok(!toasts.at(-1).includes('urlopen'));assert.match(toasts.at(-1),/인터넷 연결을 확인/);
         })().catch(error=>{console.error(error);process.exitCode=1;});
         """)
 

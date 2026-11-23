@@ -81,10 +81,10 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("실제 사용", panel)
         self.assertIn("파일 없음", panel)
         self.assertIn("폴더 없음", panel)
-        self.assertIn("ClassIn 열기", panel)
+        self.assertIn("ClassIn에서 열기", panel)
         self.assertIn("openPublishedEdb(summary)", panel)
-        self.assertIn("summary.canOpenClassinHandoff", panel)
-        self.assertIn("ClassIn 검수", panel)
+        # The English developer handoff report is no longer opened from the UI.
+        self.assertNotIn("openClassinHandoff", panel)
         self.assertIn("summary.classinReviewStatusLabel", panel)
         self.assertIn("summary.classinHandoffStatusLabel", panel)
         self.assertIn("summary.classinPreflightStatusLabel", panel)
@@ -112,12 +112,11 @@ class TestUiPublishArtifacts(unittest.TestCase):
         self.assertIn("publish.canDownload", rail)
         self.assertIn("publish.canOpenEdbFile", rail)
         self.assertIn("publish.canOpenOutputDir", rail)
-        self.assertIn("publish.canOpenClassinHandoff", rail)
         self.assertIn("onDownloadPublish?.(publish)", rail)
         self.assertIn("publishDownloadBusy", rail)
         self.assertIn("openPublishedEdb(publish)", rail)
         self.assertIn("openOutputFolder(publish.outputDir)", rail)
-        self.assertIn("openClassinHandoff(publish)", rail)
+        self.assertNotIn("openClassinHandoff", source)
         self.assertIn("publish.classinReviewStatusLabel", rail)
 
         app = source.split("const handlePublishDownload = async", 1)[1]

@@ -1956,9 +1956,12 @@
     border-radius: 7px;
     background: var(--surface-2);
   }
+  /* 2x2: four Korean scope labels do not fit one row of the side panel. */
   .placement-scope{
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+  .placement-scope button:nth-child(2n){ border-right: 0; }
+  .placement-scope button:nth-child(-n+2){ border-bottom: 1px solid var(--line); }
   .placement-width-options{
     grid-template-columns: repeat(3, minmax(0, 1fr));
     min-width: 0;
@@ -2391,7 +2394,8 @@
     gap: 6px;
     min-width: 0;
   }
-  .publish-result-metrics span{
+  .publish-result-metrics span,
+  .publish-result-metrics .publish-result-issue{
     min-height: 22px;
     display: inline-flex;
     align-items: center;
@@ -2404,6 +2408,14 @@
     font-family: var(--font-mono);
     font-weight: 700;
   }
+  .publish-result-metrics .publish-result-issue{
+    color: var(--ink-2);
+    cursor: pointer;
+    text-align: left;
+  }
+  .publish-result-metrics .publish-result-issue:hover{
+    border-color: var(--accent-ink);
+  }
   .publish-result-actions{
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2411,11 +2423,15 @@
   }
   .publish-result-primary-actions{
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     min-width: 0;
   }
+  /* Download on its own row; ClassIn에서 열기 · 폴더 열기 share the next one,
+     each sized from its label so neither wraps in a 300px panel. */
+  .publish-result-primary-actions .btn.primary{ flex-basis: 100%; }
   .publish-result-primary-actions .btn{
-    flex: 1;
+    flex: 1 1 auto;
     min-width: 0;
     min-height: var(--control-height);
     justify-content: center;
@@ -3474,6 +3490,7 @@
     color: var(--danger-ink);
     background: rgba(213,72,72,.08);
   }
+  .data-folder-fallback-note{ overflow-wrap: anywhere; }
   .update-architecture-note > strong,
   .update-architecture-note > small{
     display: block;
@@ -4913,7 +4930,7 @@
     flex: 0 0 auto;
     background: var(--ok);
   }
-  .status-dot.status-check-needed{ background: #d97757; }
+  .status-dot.status-check-needed{ background: var(--warn-solid); }
   .status-dot.status-failed{ background: var(--danger); }
   .status-badge{
     display: inline-flex;
@@ -4932,8 +4949,12 @@
   .tag.status-tag.status-check-needed{
     background: rgba(217,119,87,.13);
     border-color: rgba(217,119,87,.26);
-    color: #b85737;
+    color: #9a4a2c;
   }
+  /* The light-theme warm text above drops to ~2.3:1 on the dark tint. */
+  body.dark .status-badge.status-check-needed,
+  body.dark .tag.status-tag.status-check-needed,
+  body.dark .recognition-summary span.warn{ color: #e8956f; }
   .status-badge.status-failed,
   .tag.status-tag.status-failed{
     background: rgba(213,72,72,.12);
@@ -5737,9 +5758,9 @@
     z-index: 2;
     pointer-events: none;
   }
-  .review-bbox.risky .review-bbox-label{ background: #d97757; }
-  .review-bbox.status-failed .review-bbox-label{ background: var(--danger); }
-  .review-bbox.page-chrome-artifact .review-bbox-label{ background: var(--danger); }
+  .review-bbox.risky .review-bbox-label{ background: var(--warn-solid); }
+  .review-bbox.status-failed .review-bbox-label{ background: var(--danger-solid); }
+  .review-bbox.page-chrome-artifact .review-bbox-label{ background: var(--danger-solid); }
   .review-bbox.active .review-bbox-label{ background: var(--chalk-warm); color: #2c1d00; }
   .review-bbox.page-chrome-artifact.active .review-bbox-label{ background: var(--danger-solid); color: #ffffff; }
   .review-bbox-risk{
@@ -6295,6 +6316,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  ul.review-summary-note{
+    flex-basis: 100%;
+    margin: 0;
+    padding-left: 18px;
+    white-space: normal;
   }
   .review-bbox.selected{
     border-color: var(--accent-ink);
@@ -7048,6 +7075,9 @@
     font: 700 var(--text-2xs)/1.2 var(--font-mono);
     text-align: center;
   }
+  /* Board shortcut sheet: its own full-width row under the board toolbar. */
+  .board-shortcut-guide{ flex: 1 0 100%; margin-bottom: 4px; }
+  .board-shortcut-guide .board-shortcut-note{ grid-column: 1 / -1; color: var(--muted); }
   .manual-split-empty,
   .manual-split-note{
     padding: 12px;
@@ -7508,7 +7538,7 @@
     font-weight: 700;
   }
   .recognition-summary span.warn{
-    color: #aa6516;
+    color: #8f4a10;
     border-color: rgba(217,119,87,.35);
     background: rgba(217,119,87,.12);
   }
@@ -7706,8 +7736,8 @@
     font-size: var(--text-2xs);
     font-weight: 800;
   }
-  .recognition-box.status-check-needed span{ background: #d97757; }
-  .recognition-box.status-failed span{ background: var(--danger); }
+  .recognition-box.status-check-needed span{ background: var(--warn-solid); }
+  .recognition-box.status-failed span{ background: var(--danger-solid); }
   .recognition-page-stepper{
     position: sticky;
     bottom: 0;
@@ -8035,8 +8065,12 @@
     bottom: 24px; left: 50%; transform: translateX(-50%);
     background: var(--ink); color: var(--on-ink);
     padding: 10px 16px;
-    border-radius: 999px;
+    border-radius: 18px;
+    width: max-content;
+    max-width: min(560px, calc(100vw - 32px));
     font-size: var(--text-sm); font-weight: 500;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
     box-shadow: 0 8px 24px rgba(0,0,0,.25);
     display: flex; align-items: center; gap: 8px;
     z-index: var(--z-toast);
@@ -8069,9 +8103,9 @@
     font-size: var(--text-sm);
     font-weight: 600;
     line-height: 1.35;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: normal;
+    word-break: keep-all;
+    overflow-wrap: anywhere;
   }
   .undo-toast-copy strong{
     color: #fff;
@@ -8104,6 +8138,7 @@
     border: 1px solid rgba(248, 113, 113, 0.4);
     box-shadow: 0 8px 24px rgba(185, 28, 28, 0.28);
   }
+  .toast > .ic{ flex: none; }
   .toast.toast-error .ic{
     color: #f87171;
   }
@@ -8292,9 +8327,6 @@
       max-width: none;
       transform: none;
       animation: none;
-    }
-    .undo-toast-copy{
-      white-space: normal;
     }
   }
   @media (prefers-reduced-motion: reduce){
@@ -8638,6 +8670,7 @@
   .home-recent-date{
     color: var(--muted);
   }
+  .home-recent-edb{ color: var(--ok-ink); }
   .home-recent-open-btn{
     flex: 0 0 auto;
     padding: 4px 10px;
@@ -8791,6 +8824,16 @@
     .home-dashboard{ padding-block: 20px 24px; }
     .home-dashboard-inner{ gap: 20px; }
     .home-hero-dropzone{ padding-block: 20px; gap: 8px; }
+    /* Short laptop screens (1920x1080 at 150% leaves about 1280x600): the review chrome must leave room for the page. */
+    .workspace-session-actions{ padding: 0 16px; }
+    .workspace-session-actions > summary{ min-height: 28px; }
+    .review-stage-toolbar .review-view-control-group,
+    .review-stage-toolbar .review-zoom-controls{ padding: 0; border: 0; background: transparent; }
+    /* Review bars only: the manual split panel measures its sticky top from the editor bars. */
+    .unified-source-editor:not(.is-editing) .review-actionbar{ position: static; }
+    .review-completion-bar{ min-height: 0; padding-block: 8px; margin-bottom: 8px; }
+    .review-completion-help,
+    .original-toolbar-help{ display: none; }
   }
   /* A tablet workspace also needs one full-width pane for legible page art. */
   @media (max-width: 900px){
