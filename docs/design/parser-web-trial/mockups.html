@@ -1,0 +1,809 @@
+<title>문항 파서 웹 체험판 시안</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{width:1440px;height:900px;overflow:hidden}
+body{--font:'Pretendard Variable',Pretendard,'Malgun Gothic',sans-serif;--mono:'JetBrains Mono',Consolas,monospace;--hand:'Caveat','Malgun Gothic',cursive;
+  font:14px/1.5 var(--font);background:var(--bg);color:var(--ink);letter-spacing:-.01em}
+section{width:1440px;height:900px;position:relative;overflow:hidden;display:flex;flex-direction:column}
+section[hidden]{display:none}
+ul{list-style:none}
+button{font:inherit;border:0;cursor:pointer;color:inherit;background:none}
+svg{display:block}
+
+/* ---------- tokens ---------- */
+[data-v=a]{--bg:#f4f5f7;--surface:#fff;--ink:#0e1422;--muted:#5b6475;--line:#e3e6ec;--accent:#2f6fed;--accent-soft:#eaf1ff;--warn:#d97706;--warn-soft:#fff4e0;--ok:#1f7a4a;--box:#2f6fed}
+[data-v=b]{--bg:#1d3a2c;--surface:#24463a;--ink:#f4ede0;--muted:#b7c6bb;--line:rgba(244,237,224,.18);--accent:#f6d365;--accent-soft:rgba(246,211,101,.14);--warn:#f5a7b8;--warn-soft:rgba(245,167,184,.16);--ok:#9fe0b4;--box:#e0a91a;--box-ink:#1d3a2c}
+[data-v=c]{--bg:#f5ead8;--surface:#fffaf1;--ink:#201e1d;--muted:#7a6a5a;--line:#e3d2b8;--accent:#c67139;--accent-soft:#ffe1d0;--warn:#b45309;--warn-soft:#fff1d6;--ok:#17764f;--box:#c67139}
+[data-v=d]{--bg:#0f1117;--surface:#161a23;--surface2:#1d2230;--ink:#ecedf0;--muted:#8b93a7;--line:#262c3a;--accent:#7c5cff;--accent-soft:rgba(124,92,255,.16);--warn:#f5a524;--warn-soft:rgba(245,165,36,.14);--ok:#3ccf91;--box:#7c5cff}
+
+/* ---------- exam paper mock (shared) ---------- */
+.sheet{background:#fff;color:#1d1f24;font-size:var(--fs,9px);aspect-ratio:210/297;padding:5% 5.5%;box-shadow:0 1px 2px rgba(0,0,0,.08),0 8px 24px rgba(15,20,35,.12)}
+.sh-h{display:flex;justify-content:space-between;border-bottom:2px solid #1d1f24;padding-bottom:.7em;margin-bottom:1.6em;font-weight:700;font-size:1.1em}
+.sh-cols{display:grid;grid-template-columns:1fr 1fr;gap:2.2em}
+.sh-cols>div{display:flex;flex-direction:column;gap:2.4em}
+.q{display:flex;gap:.55em;padding:.6em;border-radius:3px;position:relative}
+.qn{font-weight:800;font-size:1.05em}
+.qb{flex:1;display:flex;flex-direction:column;gap:.7em}
+.tx{display:flex;flex-direction:column;gap:.5em}
+.tx i,.ch i{display:block;height:.55em;background:#cdd1d8;border-radius:2px}
+.ch{display:grid;grid-template-columns:repeat(5,1fr);gap:.4em;font-size:.95em;color:#4a4f58}
+.ch span{display:flex;align-items:center;gap:.3em}.ch i{flex:1;max-width:2.6em}
+.fig{height:6.5em;border:1px solid #d9dce2;border-radius:2px;display:grid;place-items:center}
+.fig svg{width:72%;height:84%}
+.bx{border:1px solid #b9bec7;border-radius:2px;padding:.7em;display:flex;flex-direction:column;gap:.5em}.bx i{display:block;height:.55em;background:#dfe2e7;border-radius:2px}
+.sheet .q{outline:1.5px solid var(--box);outline-offset:2px;background:color-mix(in srgb,var(--box) 6%,transparent)}
+.sheet .q::after{content:attr(data-n);position:absolute;top:-1.1em;left:-1.1em;background:var(--box);color:var(--box-ink,#fff);font:700 1em/1 var(--font);padding:.3em .5em;border-radius:3px}
+.sheet .q.sel{outline-width:3px;background:color-mix(in srgb,var(--box) 14%,transparent)}
+.sheet .q.low{outline:2px dashed var(--warn)}
+.sheet .q.low::after{background:var(--warn);color:#fff}
+.sheet.plain .q{outline:none;background:none}.sheet.plain .q::after{display:none}
+.crop{background:#fff;color:#1d1f24;font-size:var(--fs,7px);overflow:hidden}
+.crop{display:flex;align-items:center}.crop .q{padding:1em;width:100%}
+
+/* ---------- small shared bits ---------- */
+.chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 12px;border-radius:999px;font-size:13px;font-weight:600;background:var(--accent-soft);color:var(--ink)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 18px;border-radius:10px;font-weight:700;font-size:14px}
+.btn.pri{background:var(--accent);color:#fff}
+.btn.ghost{border:1px solid var(--line);background:var(--surface)}
+.tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:12px;font-weight:700}
+.tag.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.mono{font-family:var(--mono)}
+
+/* ================= A · STUDIO ================= */
+.a-top{height:64px;flex:none;display:flex;align-items:center;gap:28px;padding:0 32px;background:var(--surface);border-bottom:1px solid var(--line)}
+.logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:17px}
+.logo em{font-style:normal;font-size:11px;font-weight:700;color:var(--accent);background:var(--accent-soft);padding:3px 7px;border-radius:6px}
+.mk{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;font-weight:800}
+.a-top nav{display:flex;gap:22px;color:var(--muted);font-weight:600}
+.quota{margin-left:auto;color:var(--muted);font-weight:600}.quota b{color:var(--accent);font-size:16px}
+.avatar{width:34px;height:34px;border-radius:50%;background:#dfe6f5;display:grid;place-items:center;font-weight:700;color:var(--accent)}
+.a-home{width:880px;margin:0 auto;padding-top:48px;display:flex;flex-direction:column;align-items:center;text-align:center}
+.a-home h1{font-size:44px;line-height:1.2;font-weight:800;letter-spacing:-.03em}
+.a-home h1 span{color:var(--accent)}
+.a-home .sub{margin-top:14px;font-size:17px;color:var(--muted)}
+.a-drop{margin-top:30px;width:100%;height:236px;border:2px dashed #b9c8ea;border-radius:20px;background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+.a-drop .ic{width:56px;height:56px;border-radius:16px;background:var(--accent-soft);display:grid;place-items:center;color:var(--accent)}
+.a-drop strong{font-size:18px}.a-drop .or{color:var(--muted);font-size:13px}
+.a-drop .lim{display:flex;gap:8px;margin-top:6px}
+.a-drop .lim .chip{background:#f1f3f7;color:var(--muted);font-weight:600}
+.a-steps{margin-top:24px;width:100%;display:grid;grid-template-columns:repeat(3,1fr);gap:14px;text-align:left}
+.a-steps li{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;gap:12px}
+.a-steps b{width:26px;height:26px;flex:none;border-radius:50%;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:13px}
+.a-steps h3{font-size:15px}.a-steps p{font-size:13px;color:var(--muted)}
+.a-recent{margin-top:24px;width:100%;text-align:left}
+.a-recent h4{font-size:13px;color:var(--muted);margin-bottom:8px}
+.a-recent ul{background:var(--surface);border:1px solid var(--line);border-radius:14px}
+.a-recent li{display:flex;align-items:center;gap:14px;padding:12px 18px}
+.a-recent li+li{border-top:1px solid var(--line)}
+.a-recent .f{font-weight:700;flex:1}.a-recent .m{color:var(--muted);font-size:13px}
+
+.a-steps-bar{display:flex;align-items:center;gap:8px;margin-left:20px;font-weight:600;font-size:13px;color:var(--muted)}
+.a-steps-bar span{display:flex;align-items:center;gap:6px}
+.a-steps-bar i{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font-style:normal;font-size:11px;background:#e7eaf0}
+.a-steps-bar .done i{background:var(--ok);color:#fff}
+.a-steps-bar .cur{color:var(--ink)}.a-steps-bar .cur i{background:var(--accent);color:#fff}
+.a-steps-bar u{width:24px;height:2px;background:var(--line)}
+.fname{font-weight:700}.fname small{color:var(--muted);font-weight:500;margin-left:6px}
+.a-work{flex:1;display:grid;grid-template-columns:168px 1fr 380px;grid-template-rows:minmax(0,1fr);min-height:0}
+.a-pages{background:var(--surface);border-right:1px solid var(--line);padding:18px 20px;display:flex;flex-direction:column;gap:16px}
+.a-pages h4,.a-list h4{font-size:12px;color:var(--muted);font-weight:700}
+.a-pages figure{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--muted);font-weight:600}
+.a-pages .sheet{--fs:2.6px;width:100%;box-shadow:0 0 0 1px var(--line)}
+.a-pages figure.on .sheet{box-shadow:0 0 0 2.5px var(--accent)}
+.a-pages figure.on{color:var(--accent)}
+.a-canvas{display:flex;flex-direction:column;min-width:0;background:#e9ecf1}
+.a-tool{height:52px;display:flex;align-items:center;gap:6px;padding:0 18px;background:var(--surface);border-bottom:1px solid var(--line)}
+.a-tool button{height:32px;padding:0 12px;border-radius:8px;font-weight:600;font-size:13px;color:#353c4a}
+.a-tool button.on{background:var(--accent-soft);color:var(--accent)}
+.a-tool .sep{width:1px;height:20px;background:var(--line);margin:0 6px}
+.a-tool .hint{margin-left:auto;color:var(--muted);font-size:13px}
+.a-stage{flex:1;display:flex;justify-content:center;padding:28px 0;overflow:hidden}
+.a-stage .sheet{--fs:9.6px;width:540px;height:fit-content}
+.a-list{background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;min-height:0}
+.a-sum{padding:18px 20px 12px}
+.a-sum p{font-size:20px;font-weight:800}.a-sum p span{color:var(--warn);font-size:14px;font-weight:700;margin-left:6px}
+.a-filter{display:flex;gap:6px;margin-top:12px}
+.a-filter button{height:30px;padding:0 12px;border-radius:8px;font-size:13px;font-weight:600;border:1px solid var(--line)}
+.a-filter button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+.a-items{flex:1;min-height:0;overflow:hidden;padding:4px 12px}
+.a-items li{display:flex;align-items:center;gap:12px;padding:8px;border-radius:12px}
+.a-items li.on{background:var(--accent-soft);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.a-items .crop{width:84px;height:58px;border-radius:6px;box-shadow:0 0 0 1px var(--line);--fs:5.6px}
+.a-items .t{flex:1}.a-items .t b{display:block;font-size:14px}.a-items .t span{font-size:12px;color:var(--muted)}
+.a-exp{border-top:1px solid var(--line);padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.a-exp .row{display:flex;justify-content:space-between;align-items:center;font-size:13px;font-weight:600;color:var(--muted)}
+.seg{display:flex;background:#f1f3f7;border-radius:8px;padding:3px}
+.seg span{padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;color:var(--muted)}
+.seg span.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.a-exp .btn{height:48px;font-size:15px;width:100%}
+
+/* ================= B · CHALKBOARD ================= */
+[data-v=b] section{background:radial-gradient(1200px 600px at 20% 10%,rgba(255,255,255,.06),transparent 60%),radial-gradient(900px 500px at 90% 90%,rgba(0,0,0,.18),transparent 60%),var(--bg)}
+.b-top{height:72px;flex:none;display:flex;align-items:center;gap:24px;padding:0 40px}
+.b-logo{font-weight:800;font-size:18px;display:flex;align-items:center;gap:10px}
+.b-logo .mk{background:var(--accent);color:var(--bg)}
+.b-top .quota{color:var(--muted)}.b-top .quota b{color:var(--accent)}
+.hand{font-family:var(--hand);font-weight:700}
+.b-home{flex:1;display:grid;grid-template-columns:520px 1fr;gap:56px;padding:0 64px 60px;align-items:center}
+.b-copy h1{font-size:50px;line-height:1.18;font-weight:800;letter-spacing:-.03em}
+.b-copy h1 em{font-style:normal;color:var(--accent);position:relative}
+.b-copy h1 em svg{position:absolute;left:-4px;right:-4px;bottom:-10px;width:calc(100% + 8px);height:16px}
+.b-copy .sub{margin-top:22px;font-size:17px;color:var(--muted);line-height:1.7}
+.b-steps{margin-top:40px;display:flex;flex-direction:column;gap:18px}
+.b-steps li{display:flex;align-items:center;gap:16px;font-size:16px;font-weight:600}
+.b-steps .n{font-family:var(--hand);font-size:34px;line-height:1;width:36px;color:var(--accent);text-align:center}
+.b-steps small{display:block;font-size:13px;color:var(--muted);font-weight:500}
+.b-frame{height:560px;border-radius:10px;padding:18px;background:linear-gradient(135deg,#9b6a3a,#7a4f28);box-shadow:0 20px 50px rgba(0,0,0,.35),inset 0 0 0 2px rgba(255,255,255,.08);position:relative}
+.b-board{height:100%;border-radius:4px;background:radial-gradient(700px 400px at 30% 20%,#2c5543,#1f3f31);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;position:relative}
+.b-drop{width:76%;height:62%;border:3px dashed rgba(244,237,224,.55);border-radius:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;text-align:center}
+.b-drop .big{font-family:var(--hand);font-size:56px;line-height:1;color:var(--accent)}
+.b-drop strong{font-size:20px}
+.b-drop .btn{background:var(--accent);color:#1d3a2c;margin-top:6px}
+.b-lim{display:flex;gap:18px;color:var(--muted);font-size:14px;font-weight:600}
+.b-lim span::before{content:"✓ ";color:var(--ok)}
+.b-tray{position:absolute;left:40px;right:40px;bottom:-22px;height:14px;border-radius:3px;background:#6b4423;display:flex;gap:14px;padding-left:24px;align-items:flex-start}
+.b-tray i{display:block;width:44px;height:9px;border-radius:5px;margin-top:-6px}
+.b-scrib{position:absolute;font-family:var(--hand);color:rgba(244,237,224,.35);font-size:30px}
+
+.b-work{flex:1;display:grid;grid-template-columns:96px 1fr 420px;min-height:0;padding:0 28px 24px;gap:20px}
+.b-pages{display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:12px}
+.b-pages button{width:56px;height:56px;border-radius:50%;border:2px dashed rgba(244,237,224,.4);font-family:var(--hand);font-size:26px;color:var(--muted)}
+.b-pages button.on{border:2px solid var(--accent);color:var(--accent);background:var(--accent-soft)}
+.b-pages small{font-size:12px;color:var(--muted)}
+.b-desk{overflow:hidden;border-radius:16px;background:rgba(0,0,0,.16);display:flex;flex-direction:column;align-items:center;padding:22px;gap:14px;min-width:0}
+.b-desk .bar{display:flex;gap:8px;align-self:stretch;align-items:center}
+.b-desk .bar button{height:34px;padding:0 14px;border-radius:999px;border:1px solid var(--line);font-weight:600;font-size:13px;color:var(--ink)}
+.b-desk .bar button.on{background:var(--accent);color:#1d3a2c;border-color:var(--accent)}
+.b-desk .bar .hint{margin-left:auto;color:var(--muted);font-size:13px}
+.b-desk .sheet{--fs:9.2px;width:520px;box-shadow:0 18px 40px rgba(0,0,0,.35)}
+.b-side{display:flex;flex-direction:column;min-height:0}
+.b-side h2{font-size:22px;font-weight:800;display:flex;align-items:baseline;gap:10px}
+.b-side h2 .hand{font-size:40px;color:var(--accent);line-height:1}
+.b-side h2 small{font-size:13px;color:var(--warn);font-weight:700;margin-left:auto}
+.b-grid{margin-top:14px;flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;gap:14px;align-content:start;overflow:hidden}
+.b-card{background:var(--surface);border-radius:12px;padding:8px;box-shadow:0 6px 14px rgba(0,0,0,.2)}
+.b-card .crop{height:96px;border-radius:6px;--fs:6.6px}
+.b-card footer{display:flex;align-items:center;justify-content:space-between;padding:8px 4px 2px;font-weight:700}
+.b-card footer .hand{font-size:24px;line-height:1;color:var(--accent)}
+.b-card.low{box-shadow:0 0 0 2px var(--warn),0 6px 14px rgba(0,0,0,.2)}
+.b-card.on{box-shadow:0 0 0 2.5px var(--accent),0 6px 14px rgba(0,0,0,.2)}
+.b-go{margin-top:16px;height:58px;border-radius:14px;background:var(--accent);color:#1d3a2c;font-weight:800;font-size:17px;display:flex;align-items:center;justify-content:center;gap:10px}
+.b-go small{font-weight:600;opacity:.75;font-size:13px}
+
+/* ================= C · PAPER ================= */
+.c-top{height:68px;flex:none;display:flex;align-items:center;gap:28px;padding:0 48px;border-bottom:1px solid var(--line)}
+.c-word{font-weight:900;font-size:20px;letter-spacing:-.04em}
+.c-word span{color:var(--accent)}
+.c-top nav{display:flex;gap:24px;font-weight:600;color:var(--muted)}
+.c-top .quota b{color:var(--accent)}
+.c-home{flex:1;display:grid;grid-template-columns:1fr 600px;padding:0 48px 0 72px;align-items:center}
+.c-kicker{font-size:13px;font-weight:800;letter-spacing:.14em;color:var(--accent)}
+.c-home h1{margin-top:18px;font-size:76px;line-height:1.08;font-weight:900;letter-spacing:-.05em}
+.c-home h1 span{color:var(--accent)}
+.c-home .sub{margin-top:22px;font-size:18px;color:var(--muted);max-width:470px;line-height:1.65}
+.c-steps{margin-top:44px;display:grid;grid-template-columns:repeat(3,1fr);gap:26px;max-width:640px}
+.c-steps li{border-top:2px solid var(--ink);padding-top:12px}
+.c-steps b{font-size:28px;font-weight:900;color:var(--accent);letter-spacing:-.04em}
+.c-steps h3{font-size:15px;margin-top:4px}.c-steps p{font-size:13px;color:var(--muted)}
+.c-stack{position:relative;height:640px}
+.c-stack .sheet{position:absolute;width:330px;left:30px;top:20px;transform:rotate(-5deg);--fs:5.6px}
+.c-stack .crop{position:absolute;width:190px;height:120px;border-radius:6px;box-shadow:0 10px 24px rgba(80,50,20,.18);--fs:6.4px}
+.c-dropcard{position:absolute;right:0;bottom:30px;width:360px;background:var(--surface);border-radius:22px;padding:28px;box-shadow:0 24px 60px rgba(80,50,20,.22);border:1px solid var(--line)}
+.c-dropcard .dz{border:2px dashed #d9b48f;border-radius:16px;height:150px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:#fff6ea}
+.c-dropcard strong{font-size:17px}
+.c-dropcard p{font-size:13px;color:var(--muted)}
+.c-dropcard .btn{width:100%;margin-top:16px;height:50px;font-size:15px}
+.c-foot{position:absolute;left:72px;bottom:28px;font-size:12px;letter-spacing:.08em;color:var(--muted);font-weight:700}
+
+.c-sub{height:60px;flex:none;display:flex;align-items:center;gap:8px;padding:0 48px;border-bottom:1px solid var(--line)}
+.c-sub button{height:34px;padding:0 14px;border-radius:999px;font-weight:700;font-size:13px;color:var(--muted)}
+.c-sub button.on{background:var(--ink);color:var(--bg)}
+.c-sub button.w{background:var(--warn-soft);color:var(--warn)}
+.c-sub .sp{width:1px;height:20px;background:var(--line);margin:0 8px}
+.c-sub .right{margin-left:auto;display:flex;gap:6px}
+.c-main{flex:1;display:grid;grid-template-columns:1fr 360px;min-height:0}
+.c-grid{padding:24px 28px 0 48px;display:grid;grid-template-columns:repeat(5,1fr);gap:16px;align-content:start;overflow:hidden}
+.c-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.c-card header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px 8px}
+.c-card header b{font-size:22px;font-weight:900;letter-spacing:-.04em}
+.c-card .crop{height:118px;margin:0 10px;border-radius:6px;box-shadow:0 0 0 1px var(--line);--fs:6.2px}
+.c-card footer{display:flex;gap:6px;padding:10px}
+.c-card footer button{flex:1;height:28px;border-radius:7px;font-size:12px;font-weight:700;background:#f4ead9;color:var(--muted)}
+.c-card footer button.ok{background:var(--ink);color:var(--bg)}
+.c-card.on{border:2px solid var(--accent)}
+.c-card.low{border:2px solid var(--warn);background:#fff8ea}
+.c-card .note{margin:8px 10px 0;font-size:12px;font-weight:700;color:var(--warn);line-height:1.4}
+.c-side{border-left:1px solid var(--line);padding:24px 28px;display:flex;flex-direction:column;gap:16px;background:#fbf3e6}
+.c-side h4{font-size:12px;font-weight:800;letter-spacing:.1em;color:var(--muted)}
+.c-side .sheet{--fs:5.4px;width:100%}
+.c-bar{height:76px;flex:none;display:flex;align-items:center;gap:18px;padding:0 48px;background:var(--ink);color:var(--bg)}
+.c-bar .cnt{font-size:15px;font-weight:700}.c-bar .cnt b{color:#f3b07e;font-size:20px}
+.c-bar .opts{display:flex;gap:8px;margin-left:24px}
+.c-bar .opts span{height:30px;padding:0 12px;border-radius:999px;border:1px solid rgba(245,234,216,.25);display:flex;align-items:center;font-size:13px;font-weight:600}
+.c-bar .btn{margin-left:auto;height:48px;padding:0 26px;font-size:15px;background:var(--accent);color:#fff}
+
+/* ================= D · DARK PRO ================= */
+.d-wrap{flex:1;display:grid;grid-template-columns:72px 1fr;min-height:0}
+.d-rail{border-right:1px solid var(--line);display:flex;flex-direction:column;align-items:center;padding:18px 0;gap:10px;background:#0b0d12}
+.d-rail .mk{background:var(--accent);margin-bottom:14px}
+.d-rail button{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;color:var(--muted)}
+.d-rail button.on{background:var(--accent-soft);color:var(--accent)}
+.d-main{display:flex;flex-direction:column;padding:28px 36px;gap:22px;min-width:0}
+.d-head{display:flex;align-items:center;gap:16px}
+.d-head h1{font-size:24px;font-weight:800}
+.d-head .plan{font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);padding:4px 9px;border-radius:6px}
+.d-meter{margin-left:auto;display:flex;align-items:center;gap:12px;font-size:13px;color:var(--muted);font-weight:600}
+.d-meter .track{width:160px;height:8px;border-radius:4px;background:var(--surface2);overflow:hidden}
+.d-meter .track i{display:block;width:33%;height:100%;background:var(--accent)}
+.d-row{display:grid;grid-template-columns:1fr 420px;gap:20px}
+.d-card{background:var(--surface);border:1px solid var(--line);border-radius:16px}
+.d-drop{height:300px;display:flex;align-items:center;gap:36px;padding:0 44px;background:linear-gradient(135deg,rgba(124,92,255,.14),transparent 55%),var(--surface);border:1.5px dashed #3a3360}
+.d-drop .ic{width:88px;height:88px;border-radius:24px;background:var(--accent);display:grid;place-items:center;color:#fff;flex:none;box-shadow:0 12px 30px rgba(124,92,255,.4)}
+.d-drop h2{font-size:26px;font-weight:800}
+.d-drop p{color:var(--muted);margin-top:6px;font-size:15px}
+.d-drop .acts{display:flex;gap:10px;margin-top:20px}
+.d-drop .btn.ghost{background:transparent;border-color:var(--line);color:var(--ink)}
+kbd{font-family:var(--mono);font-size:11px;padding:2px 6px;border-radius:5px;background:var(--surface2);border:1px solid var(--line);color:var(--muted)}
+.d-spec{padding:22px 24px}
+.d-spec h3{font-size:14px;font-weight:700;margin-bottom:10px}
+.d-spec dl{display:grid;grid-template-columns:auto 1fr;row-gap:12px;column-gap:20px;font-size:14px}
+.d-spec dt{color:var(--muted)}.d-spec dd{text-align:right;font-weight:600}
+.d-table{padding:6px 0 4px}
+.d-table h3{font-size:14px;font-weight:700;padding:14px 24px 8px;display:flex;justify-content:space-between}
+.d-table h3 span{color:var(--muted);font-weight:500;font-size:13px}
+.d-table table{width:100%;border-collapse:collapse;font-size:14px}
+.d-table th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:8px 24px;border-bottom:1px solid var(--line)}
+.d-table td{padding:17px 24px;border-bottom:1px solid var(--line)}
+.d-table tr:last-child td{border-bottom:0}
+.d-table .mono{color:var(--muted);font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:999px;font-size:12px;font-weight:700}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.pill.ok{color:var(--ok);background:rgba(60,207,145,.12)}.pill.rev{color:var(--accent);background:var(--accent-soft)}
+.pill.run{color:#5fb3ff;background:rgba(95,179,255,.12)}.pill.err{color:#ff6b7a;background:rgba(255,107,122,.12)}.pill.exp{color:var(--muted);background:var(--surface2)}
+.d-prog{display:inline-block;width:80px;height:5px;border-radius:3px;background:var(--surface2);margin-left:8px;vertical-align:middle;overflow:hidden}.d-prog i{display:block;width:62%;height:100%;background:#5fb3ff}
+.d-link{color:var(--accent);font-weight:700;font-size:13px}
+
+.d-work{display:grid;grid-template-rows:56px 1fr 150px;grid-template-columns:1fr 360px;min-height:0;min-width:0}
+.d-tb{grid-column:1/3;display:flex;align-items:center;gap:6px;padding:0 20px;border-bottom:1px solid var(--line)}
+.d-tb .fname{margin-right:14px}
+.d-tb button{height:32px;padding:0 10px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted);display:flex;align-items:center;gap:6px}
+.d-tb button.on{background:var(--accent-soft);color:var(--ink)}
+.d-tb .sp{width:1px;height:20px;background:var(--line);margin:0 6px}
+.d-tb .btn{margin-left:auto;height:36px}
+.d-canvas{background:#0b0d12;display:flex;justify-content:center;padding:24px 0;overflow:hidden;position:relative;min-width:0}
+.d-canvas .sheet{--fs:8.6px;width:470px;height:fit-content;filter:brightness(.96)}
+.d-zoom{position:absolute;left:18px;bottom:16px;display:flex;gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:4px;font-size:12px;font-weight:700;color:var(--muted);align-items:center}
+.d-zoom span{padding:4px 8px}
+.d-insp{grid-row:2/4;grid-column:2;border-left:1px solid var(--line);background:var(--surface);padding:20px 22px;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+.d-insp h3{font-size:18px;font-weight:800;display:flex;align-items:center;gap:10px}
+.d-insp .crop{height:150px;border-radius:10px;--fs:9.4px}
+.d-insp .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.d-field{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+.d-field small{display:block;font-size:11px;color:var(--muted);font-weight:600}
+.d-field b{font-family:var(--mono);font-size:14px}
+.d-conf .track{height:8px;border-radius:4px;background:var(--surface2);overflow:hidden;margin-top:8px}.d-conf .track i{display:block;width:72%;height:100%;background:var(--warn)}
+.d-conf p{font-size:13px;color:var(--warn);margin-top:8px;font-weight:600}
+.d-conf .top{display:flex;justify-content:space-between;font-size:13px;color:var(--muted);font-weight:600}.d-conf .top b{color:var(--warn);font-family:var(--mono)}
+.d-tog{display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:600}
+.d-tog i{width:38px;height:22px;border-radius:11px;background:var(--accent);position:relative}.d-tog i::after{content:"";position:absolute;right:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff}
+.d-insp .acts{display:flex;gap:8px;margin-top:auto}
+.d-insp .acts .btn{flex:1;height:40px}
+.d-insp .btn.ghost{background:transparent;color:var(--ink)}
+.d-film{border-top:1px solid var(--line);display:flex;gap:12px;padding:14px 20px;overflow:hidden;align-items:center}
+.d-film figure{flex:none;width:118px;display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:700;color:var(--muted)}
+.d-film .crop{height:80px;border-radius:8px;--fs:4.6px;box-shadow:0 0 0 1px var(--line)}
+.d-film figure.on .crop{box-shadow:0 0 0 2.5px var(--accent)}.d-film figure.on{color:var(--ink)}
+.d-film figure.low .crop{box-shadow:0 0 0 2px var(--warn)}.d-film figure.low{color:var(--warn)}
+
+/* ---------- reorder + resize (B, C) ---------- */
+.split{cursor:col-resize;display:grid;place-items:center;border-radius:6px;touch-action:none;outline:none}
+.split::before{content:"";width:4px;height:56px;border-radius:2px;background:color-mix(in srgb,var(--ink) 22%,transparent);transition:height .15s,background .15s}
+.split:hover::before,.split.active::before,.split:focus-visible::before{background:var(--accent);height:96px}
+[draggable]{cursor:grab}
+.dragging{opacity:.5;outline:2px dashed var(--accent)!important;outline-offset:3px}
+.src{font-size:11px;font-weight:700;color:var(--muted);white-space:nowrap}
+input[type=range]{accent-color:var(--accent);width:110px}
+.toast{position:absolute;left:50%;bottom:110px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:11px 18px;border-radius:999px;font-weight:700;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.25);white-space:nowrap}
+.b-work{grid-template-columns:96px minmax(0,1fr) 14px var(--side,420px);grid-template-rows:minmax(0,1fr);gap:0 10px}
+.b-desk{container-type:inline-size}
+.b-desk .sheet{--fs:min(9.2px,1.7cqw);width:min(520px,94cqw)}
+.b-grid{grid-auto-rows:max-content;grid-template-columns:repeat(auto-fill,minmax(var(--card,170px),1fr));overflow:auto;padding:4px;margin-top:10px}
+.b-card .crop{height:auto;aspect-ratio:16/9;--fs:calc(var(--card,170px)*.039)}
+.b-card footer{justify-content:flex-start;gap:8px}.b-card footer .tag{margin-left:auto}
+.b-tools{display:flex;align-items:center;gap:12px;margin-top:10px;font-size:13px;color:var(--muted);font-weight:600}
+.b-tools label{margin-left:auto;display:flex;align-items:center;gap:8px}
+.c-main{grid-template-columns:minmax(0,1fr) 14px var(--side,360px);grid-template-rows:minmax(0,1fr)}
+.c-grid{grid-auto-rows:max-content;grid-template-columns:repeat(auto-fill,minmax(var(--card,180px),1fr));overflow:auto;padding:24px 14px 24px 48px}
+.c-card .crop{flex:none;height:auto;aspect-ratio:3/2;--fs:calc(var(--card,180px)*.034)}
+.c-card header{justify-content:flex-start;gap:8px}.c-card header .tag{margin-left:auto}
+.c-side{border-left:0;container-type:inline-size}.c-side .sheet{--fs:1.75cqw}
+.c-sub .hint{margin-left:12px;font-size:13px;color:var(--muted);font-weight:600}
+.c-sub .size{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;color:var(--muted);margin-right:12px}
+
+/* ---------- hover icon actions + export settings (C) ---------- */
+.cw{position:relative;margin:0 10px 10px}
+.cw .crop{margin:0}
+.c-card .note{margin:0 10px 12px}
+.acts{position:absolute;top:8px;right:8px;display:flex;gap:6px;opacity:0;transform:translateY(-4px);transition:opacity .15s,transform .15s;pointer-events:none}
+.c-card:hover .acts,.c-card:focus-within .acts,.c-card.hover .acts{opacity:1;transform:none;pointer-events:auto}
+.acts button{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;background:var(--ink);color:var(--bg);box-shadow:0 4px 12px rgba(0,0,0,.22)}
+.acts button.pri{background:var(--accent);color:#fff}
+.acts button:hover{transform:translateY(-1px)}
+.c-side{gap:14px;overflow:hidden}
+.c-side .orig{height:230px;flex:none;overflow:hidden;border-radius:4px}
+.exp{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:14px}
+.exp h5{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:800;color:var(--muted);margin-bottom:8px}
+.opts2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.opt{display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border:1.5px solid var(--line);border-radius:10px;font-size:13px;font-weight:700;cursor:pointer}
+.opt small,.up small{display:block;font-weight:500;color:var(--muted);font-size:11.5px}
+.opt:has(input:checked){border-color:var(--accent);background:var(--accent-soft)}
+.exp input[type=radio],.exp input[type=checkbox]{accent-color:var(--accent)}
+.opt input{margin-top:3px}
+.up{display:flex;align-items:center;justify-content:space-between;font-size:13px;font-weight:700;cursor:pointer}
+.up input{width:18px;height:18px}
+.up:has(input:disabled){opacity:.5;cursor:not-allowed}
+.scales{display:flex;gap:6px;margin-top:8px}
+.scales label{flex:1;text-align:center;padding:5px;border:1px solid var(--line);border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;position:relative}
+.scales input{position:absolute;opacity:0}
+.scales label:has(input:checked){background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.scales label:has(input:disabled){opacity:.4;cursor:not-allowed}
+.scales label:has(input:focus-visible){outline:2px solid var(--accent)}
+.key{display:flex;gap:6px;margin-top:10px}
+.key input{flex:1;min-width:0;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);padding:0 10px;font:13px var(--mono)}
+.key .btn{height:34px;padding:0 12px;font-size:13px}
+.key-state{font-size:12px;color:var(--muted);margin-top:6px}
+[hidden]{display:none!important}
+.key input::placeholder{font-family:var(--font)}
+
+/* ---------- green theme for the C layout ---------- */
+[data-v][data-theme=green]{--bg:#1d3a2c;--surface:#24463a;--ink:#f4ede0;--muted:#b7c6bb;--line:rgba(244,237,224,.16);--accent:#f6d365;--accent-soft:rgba(246,211,101,.14);--warn:#f5a7b8;--warn-soft:rgba(245,167,184,.16);--ok:#9fe0b4;--box:#e0a91a;--box-ink:#1d3a2c}
+[data-theme=green] section{background:radial-gradient(1200px 600px at 20% 10%,rgba(255,255,255,.05),transparent 60%),var(--bg)}
+[data-theme=green] .c-card header b{font-family:var(--hand);font-size:32px;line-height:1;color:var(--accent);font-weight:700}
+[data-theme=green] .c-card.low{background:color-mix(in srgb,var(--warn) 9%,var(--surface))}
+[data-theme=green] .c-side{background:rgba(0,0,0,.14)}
+[data-theme=green] .c-bar{background:#152a20;color:var(--ink);border-top:1px solid var(--line)}
+[data-theme=green] .c-bar .cnt b{color:var(--accent)}
+[data-theme=green] .c-bar .opts span{border-color:var(--line)}
+[data-theme=green] .btn.pri,[data-theme=green] .c-bar .btn,[data-theme=green] .acts button.pri{color:#1d3a2c}
+[data-theme=green] .c-dropcard .dz{border-color:rgba(244,237,224,.4);background:rgba(0,0,0,.12)}
+[data-theme=green] .c-dropcard .dz svg{stroke:var(--accent)}
+[data-theme=green] .c-word span,[data-theme=green] .c-kicker{color:var(--accent)}
+</style>
+
+<!-- ===================== A · STUDIO ===================== -->
+<section id="a-home" hidden>
+  <header class="a-top">
+    <div class="logo"><span class="mk">P</span>문항 파서 <em>체험판</em></div>
+    <nav><a>사용 방법</a><a>지원 형식</a><a>개인정보 처리</a></nav>
+    <div class="quota">오늘 남은 횟수 <b>2</b> / 3</div><div class="avatar">김</div>
+  </header>
+  <main class="a-home">
+    <h1>시험지를 올리면<br>문항별 <span>PNG</span>로 잘라드려요</h1>
+    <p class="sub">PDF·이미지에서 문항을 자동으로 찾고, 확인한 뒤 한 번에 내려받으세요.</p>
+    <div class="a-drop">
+      <div class="ic"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg></div>
+      <strong>파일을 여기로 끌어다 놓으세요</strong>
+      <span class="or">또는</span>
+      <button class="btn pri">파일 선택</button>
+      <div class="lim"><span class="chip">PDF · PNG · JPG</span><span class="chip">최대 3페이지</span><span class="chip">10MB 이하</span><span class="chip">24시간 뒤 자동 삭제</span></div>
+    </div>
+    <ol class="a-steps" style="list-style:none">
+      <li><b>1</b><div><h3>업로드</h3><p>시험지 PDF나 사진을 올려요</p></div></li>
+      <li><b>2</b><div><h3>자동 인식 · 검수</h3><p>찾은 문항 경계를 확인·수정해요</p></div></li>
+      <li><b>3</b><div><h3>PNG 다운로드</h3><p>문항마다 한 장씩, ZIP으로 받아요</p></div></li>
+    </ol>
+    <div class="a-recent"><h4>최근 작업</h4><ul>
+      <li><span class="f">3월 모의고사_수학.pdf</span><span class="m">3페이지 · 20문항</span><span class="tag warn">검수 중</span><span class="m">21시간 뒤 삭제</span></li>
+      <li><span class="f">단원평가_확률과통계.jpg</span><span class="m">1페이지 · 6문항</span><span class="tag ok">다운로드 완료</span><span class="m">9시간 뒤 삭제</span></li>
+    </ul></div>
+  </main>
+</section>
+
+<section id="a-work" hidden>
+  <header class="a-top">
+    <div class="logo"><span class="mk">P</span></div>
+    <div class="fname">3월 모의고사_수학.pdf<small>3페이지</small></div>
+    <div class="a-steps-bar">
+      <span class="done"><i>✓</i>업로드</span><u></u><span class="done"><i>✓</i>자동 인식</span><u></u><span class="cur"><i>3</i>검수</span><u></u><span><i>4</i>다운로드</span>
+    </div>
+    <div class="quota">오늘 남은 횟수 <b>2</b> / 3</div><div class="avatar">김</div>
+  </header>
+  <div class="a-work">
+    <aside class="a-pages"><h4>페이지</h4>
+      <figure class="on"><div class="sheet" data-count="8" data-p="1"></div>1쪽 · 8문항</figure>
+      <figure><div class="sheet" data-start="9" data-count="7" data-p="2"></div>2쪽 · 7문항</figure>
+      <figure><div class="sheet" data-start="16" data-count="5" data-p="3"></div>3쪽 · 5문항</figure>
+    </aside>
+    <main class="a-canvas">
+      <div class="a-tool">
+        <button class="on">선택</button><button>박스 그리기</button><button>나누기</button><button>합치기</button><span class="sep"></span><button>－</button><button>100%</button><button>＋</button><span class="sep"></span><button>되돌리기</button>
+        <span class="hint">문항을 누르면 오른쪽 목록과 함께 강조돼요</span>
+      </div>
+      <div class="a-stage"><div class="sheet" data-count="8" data-p="1" data-sel="3" data-low="6"></div></div>
+    </main>
+    <aside class="a-list">
+      <div class="a-sum"><p>20문항 찾았어요<span>확인 필요 2</span></p>
+        <div class="a-filter"><button class="on">전체 20</button><button>확인 필요 2</button><button>확인 완료 18</button></div></div>
+      <ul class="a-items">
+        <li><div class="crop" data-n="1"></div><div class="t"><b>1번</b><span>1쪽 · 신뢰도 99%</span></div><span class="tag ok">확인</span></li>
+        <li><div class="crop" data-n="2"></div><div class="t"><b>2번</b><span>1쪽 · 신뢰도 98%</span></div><span class="tag ok">확인</span></li>
+        <li class="on"><div class="crop" data-n="3"></div><div class="t"><b>3번</b><span>1쪽 · 신뢰도 97%</span></div><span class="tag ok">확인</span></li>
+        <li><div class="crop" data-n="4"></div><div class="t"><b>4번</b><span>1쪽 · 신뢰도 96%</span></div><span class="tag ok">확인</span></li>
+        <li><div class="crop" data-n="5"></div><div class="t"><b>5번</b><span>1쪽 · 신뢰도 95%</span></div><span class="tag ok">확인</span></li>
+        <li><div class="crop" data-n="6"></div><div class="t"><b>6번</b><span>1쪽 · 선택지가 잘렸을 수 있어요</span></div><span class="tag warn">확인 필요</span></li>
+        <li><div class="crop" data-n="7"></div><div class="t"><b>7번</b><span>1쪽 · 신뢰도 97%</span></div><span class="tag ok">확인</span></li>
+      </ul>
+      <div class="a-exp">
+        <div class="row">배경<div class="seg"><span class="on">흰색</span><span>투명</span></div></div>
+        <div class="row">해상도<div class="seg"><span>1x</span><span class="on">2x</span><span>3x</span></div></div>
+        <button class="btn pri">PNG 20장 내려받기 (ZIP)</button>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ===================== B · CHALKBOARD ===================== -->
+<section id="b-home" hidden>
+  <header class="b-top">
+    <div class="b-logo"><span class="mk">P</span>문항 파서</div>
+    <span class="chip" style="background:var(--accent-soft);color:var(--accent)">무료 체험</span>
+    <div class="quota">오늘 <b>2</b>번 더 쓸 수 있어요</div>
+  </header>
+  <main class="b-home">
+    <div class="b-copy">
+      <h1>시험지를 칠판에 붙이면<br>문항을 <em>한 장씩<svg viewBox="0 0 200 16" preserveAspectRatio="none"><path d="M2 10 C40 2, 80 14, 120 6 S180 12, 198 5" fill="none" stroke="#f6d365" stroke-width="4" stroke-linecap="round"/></svg></em><br>떼어 드려요</h1>
+      <p class="sub">수업 자료로 바로 쓸 수 있게 문항마다 PNG 이미지로 잘라 드려요.<br>EDB 없이도, 설치 없이도 브라우저에서 끝나요.</p>
+      <ol class="b-steps" style="list-style:none">
+        <li><span class="n">1</span><div>시험지 올리기<small>PDF, PNG, JPG · 최대 3페이지</small></div></li>
+        <li><span class="n">2</span><div>찾은 문항 확인하기<small>잘못 잘린 곳은 끌어서 고쳐요</small></div></li>
+        <li><span class="n">3</span><div>PNG로 받기<small>문항마다 한 장, ZIP 한 번에</small></div></li>
+      </ol>
+    </div>
+    <div class="b-frame">
+      <div class="b-board">
+        <span class="b-scrib" style="left:36px;top:26px">Q1.</span>
+        <span class="b-scrib" style="right:40px;top:30px">x² + 2x</span>
+        <span class="b-scrib" style="left:44px;bottom:34px">PNG ✓</span>
+        <div class="b-drop">
+          <span class="big">drop here</span>
+          <strong>시험지를 여기로 끌어다 놓으세요</strong>
+          <button class="btn">파일 고르기</button>
+        </div>
+        <div class="b-lim"><span>10MB 이하</span><span>3페이지까지</span><span>24시간 뒤 삭제</span></div>
+      </div>
+      <div class="b-tray"><i style="background:#f4ede0"></i><i style="background:#f6d365"></i><i style="background:#f5a7b8"></i><i style="background:#9ec9f0"></i></div>
+    </div>
+  </main>
+</section>
+
+<section id="b-work" hidden>
+  <header class="b-top">
+    <div class="b-logo"><span class="mk">P</span>3월 모의고사_수학.pdf</div>
+    <span class="chip" style="background:var(--accent-soft);color:var(--accent)">문항 확인 중</span>
+    <div class="quota">오늘 <b>2</b>번 더 쓸 수 있어요</div>
+  </header>
+  <div class="b-work">
+    <nav class="b-pages"><button class="on">1</button><small>8문항</small><button>2</button><small>7문항</small><button>3</button><small>5문항</small></nav>
+    <main class="b-desk">
+      <div class="bar"><button class="on">선택</button><button>박스 그리기</button><button>나누기</button><button>합치기</button><span class="hint">노란 테두리 = 찾은 문항 · 분홍 점선 = 확인 필요</span></div>
+      <div class="sheet" data-count="8" data-p="1" data-sel="3" data-low="6"></div>
+    </main>
+    <div class="split" role="separator" aria-orientation="vertical" aria-label="창 크기 조절 (화살표 키 또는 드래그, 더블클릭 시 원래대로)" tabindex="0"></div>
+    <aside class="b-side">
+      <h2><span class="hand">20</span>문항을 찾았어요<small>확인 필요 2</small></h2>
+      <div class="b-tools"><span>끌어서 순서 바꾸기 · Alt + ←/→</span><label>크기 <input type="range" min="130" max="260" value="170" data-cardsize aria-label="카드 크기"></label></div>
+      <div class="b-grid" data-sortable="b"></div>
+      <button class="b-go">PNG 20장 모두 받기 <small>ZIP · 2x</small></button>
+    </aside>
+  </div>
+</section>
+
+<!-- ===================== C · PAPER ===================== -->
+<section id="c-home" hidden>
+  <header class="c-top">
+    <div class="c-word">문항<span>.</span>파서</div>
+    <nav><a>쓰는 법</a><a>자주 묻는 질문</a></nav>
+    <div class="quota" style="margin-left:auto">체험 <b>2</b>회 남음</div>
+    <button class="btn ghost">로그인</button>
+  </header>
+  <main class="c-home">
+    <div>
+      <p class="c-kicker">PDF · 이미지 → 문항별 PNG</p>
+      <h1>시험지 한 장,<br>문항 <span>스무 장.</span></h1>
+      <p class="sub">문항 경계를 자동으로 찾아 한 문항씩 깔끔한 PNG로 잘라 드려요. 확인하고 고친 뒤 한 번에 내려받으면 끝.</p>
+      <ol class="c-steps" style="list-style:none">
+        <li><b>01</b><h3>올리기</h3><p>PDF·PNG·JPG</p></li>
+        <li><b>02</b><h3>확인하기</h3><p>애매한 문항만 골라서</p></li>
+        <li><b>03</b><h3>받기</h3><p>PNG 묶음 ZIP</p></li>
+      </ol>
+    </div>
+    <div class="c-stack">
+      <div class="sheet plain" data-count="8" data-p="1"></div>
+      <div class="crop" data-n="3" style="left:300px;top:60px;transform:rotate(6deg)"></div>
+      <div class="crop" data-n="5" style="left:330px;top:210px;transform:rotate(-3deg)"></div>
+      <div class="c-dropcard">
+        <div class="dz"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#c67139" stroke-width="2" stroke-linecap="round"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg><strong>시험지를 여기에 놓아 주세요</strong><p>3페이지 · 10MB까지</p></div>
+        <button class="btn pri">파일 고르기</button>
+      </div>
+    </div>
+  </main>
+  <p class="c-foot">올린 파일은 24시간 뒤 자동으로 지워져요 · 로그인하면 하루 3회까지 무료</p>
+</section>
+
+<section id="c-work" hidden>
+  <header class="c-top">
+    <div class="c-word">문항<span>.</span>파서</div>
+    <div class="fname">3월 모의고사_수학.pdf<small>18 / 20 확인함</small></div>
+    <div class="quota" style="margin-left:auto">체험 <b>2</b>회 남음</div>
+  </header>
+  <div class="c-sub">
+    <button class="on">전체 20</button><button>1쪽 8</button><button>2쪽 7</button><button>3쪽 5</button><span class="sp"></span><button class="w">확인 필요 2</button><span class="hint">카드를 끌어 순서를 바꿔요 · Alt + ←/→</span>
+    <div class="right"><label class="size">카드 크기 <input type="range" min="140" max="280" value="180" data-cardsize aria-label="카드 크기"></label><button class="on">카드 보기</button><button>페이지 보기</button></div>
+  </div>
+  <div class="c-main">
+    <main class="c-grid" data-sortable="c"></main>
+    <div class="split" role="separator" aria-orientation="vertical" aria-label="창 크기 조절 (화살표 키 또는 드래그, 더블클릭 시 원래대로)" tabindex="0"></div>
+    <aside class="c-side">
+      <h4>원본에서 보기 · 1쪽</h4>
+      <div class="orig"><div class="sheet" data-count="8" data-p="1" data-sel="3" data-low="6"></div></div>
+      <div class="exp" data-export>
+        <h4>PNG 내보내기</h4>
+        <div><h5>배경</h5><div class="opts2">
+          <label class="opt"><input type="radio" name="bg" value="기존 그대로" checked><span>기존 그대로<small>잘린 모습 그대로</small></span></label>
+          <label class="opt"><input type="radio" name="bg" value="배경 제거"><span>배경 제거<small>종이색을 지운 투명 PNG</small></span></label>
+        </div></div>
+        <div class="upbox">
+          <h5>업스케일 <span class="tag warn need">API 키 필요</span></h5>
+          <label class="up"><span>선명하게 키우기<small>작은 글씨·흐린 사진에 유용</small></span><input type="checkbox" name="upscale" role="switch"></label>
+          <div class="scales"><label><input type="radio" name="scale" value="2배" checked>2배</label><label><input type="radio" name="scale" value="4배">4배</label></div>
+          <div class="key"><input type="password" name="apikey" placeholder="업스케일 API 키 붙여넣기" autocomplete="off" aria-label="업스케일 API 키"><button class="btn ghost">연결</button></div>
+          <p class="key-state"></p>
+        </div>
+      </div>
+    </aside>
+  </div>
+  <footer class="c-bar">
+    <span class="cnt"><b>20</b>장 내려받을 준비가 됐어요</span>
+    <div class="opts"><span data-sum="bg"></span><span data-sum="up"></span><span>파일명: 지금 순서대로 01~20</span></div>
+    <button class="btn">PNG ZIP 내려받기</button>
+  </footer>
+</section>
+
+<!-- ===================== D · DARK PRO ===================== -->
+<section id="d-home" hidden>
+  <div class="d-wrap">
+    <nav class="d-rail"><span class="mk">P</span>
+      <button class="on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8v10H3z"/></svg></button>
+      <button><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></button>
+      <button><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg></button>
+    </nav>
+    <main class="d-main">
+      <div class="d-head"><h1>작업 공간</h1><span class="plan">체험판</span>
+        <div class="d-meter">오늘 사용 1 / 3<span class="track"><i></i></span></div></div>
+      <div class="d-row">
+        <div class="d-card d-drop">
+          <div class="ic"><svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 16V4M6 10l6-6 6 6M4 20h16"/></svg></div>
+          <div><h2>새 시험지 파싱</h2><p>파일을 끌어다 놓거나 붙여넣기 하세요. 문항을 찾아 PNG로 잘라 드려요.</p>
+            <div class="acts"><button class="btn pri">파일 선택</button><button class="btn ghost">클립보드에서 붙여넣기 <kbd>Ctrl V</kbd></button></div></div>
+        </div>
+        <div class="d-card d-spec"><h3>체험판 한도</h3><dl>
+          <dt>입력 형식</dt><dd>PDF · PNG · JPG</dd>
+          <dt>1회 최대</dt><dd>3 pages / 10 MB</dd>
+          <dt>하루 사용</dt><dd>3 runs</dd>
+          <dt>출력</dt><dd>PNG × 문항 수 (ZIP)</dd>
+          <dt>보관 기간</dt><dd>24 h 후 삭제</dd>
+          <dt>AI 보정</dt><dd>불확실한 페이지만</dd></dl></div>
+      </div>
+      <div class="d-card d-table">
+        <h3>최근 작업<span>보관 중 4건</span></h3>
+        <table><tr><th>파일</th><th>페이지</th><th>문항</th><th>상태</th><th>삭제까지</th><th></th></tr>
+          <tr><td>3월 모의고사_수학.pdf</td><td class="mono">3</td><td class="mono">20</td><td><span class="pill rev">검수 중 · 2건 확인 필요</span></td><td class="mono">21:14:08</td><td class="d-link">이어서 하기 →</td></tr>
+          <tr><td>단원평가_확률과통계.jpg</td><td class="mono">1</td><td class="mono">6</td><td><span class="pill ok">완료</span></td><td class="mono">09:02:51</td><td class="d-link">PNG 다시 받기</td></tr>
+          <tr><td>중간고사_영어_2학년.pdf</td><td class="mono">3</td><td class="mono">—</td><td><span class="pill run">인식 중</span><span class="d-prog"><i></i></span></td><td class="mono">23:58:40</td><td class="d-link" style="color:var(--muted)">대기</td></tr>
+          <tr><td>스캔_0412.png</td><td class="mono">1</td><td class="mono">—</td><td><span class="pill err">실패 · 해상도 낮음</span></td><td class="mono">04:31:12</td><td class="d-link">다시 시도</td></tr>
+          <tr><td>기말고사_과학_1학년.pdf</td><td class="mono">2</td><td class="mono">14</td><td><span class="pill exp">삭제됨</span></td><td class="mono">—</td><td class="d-link" style="color:var(--muted)">기록만 남음</td></tr>
+        </table>
+      </div>
+    </main>
+  </div>
+</section>
+
+<section id="d-work" hidden>
+  <div class="d-wrap">
+    <nav class="d-rail"><span class="mk">P</span>
+      <button><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-8 9 8v10H3z"/></svg></button>
+      <button class="on"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></button>
+      <button><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg></button>
+    </nav>
+    <div class="d-work">
+      <div class="d-tb">
+        <span class="fname">3월 모의고사_수학.pdf<small>1 / 3쪽</small></span>
+        <button class="on">선택 <kbd>V</kbd></button><button>박스 <kbd>B</kbd></button><button>나누기 <kbd>S</kbd></button><button>합치기 <kbd>M</kbd></button><span class="sp"></span><button>되돌리기 <kbd>Ctrl Z</kbd></button>
+        <button class="btn pri">PNG 내보내기 · 20장</button>
+      </div>
+      <main class="d-canvas">
+        <div class="sheet" data-count="8" data-p="1" data-sel="7" data-low="6"></div>
+        <div class="d-zoom"><span>－</span><span style="color:var(--ink)">86%</span><span>＋</span><span>맞춤</span></div>
+      </main>
+      <aside class="d-insp">
+        <h3>7번 문항 <span class="tag warn">확인 필요</span></h3>
+        <div class="crop" data-n="7"></div>
+        <div class="grid2">
+          <div class="d-field"><small>문항 번호</small><b>7</b></div>
+          <div class="d-field"><small>페이지</small><b>1</b></div>
+          <div class="d-field"><small>위치 (x, y)</small><b>612, 1184</b></div>
+          <div class="d-field"><small>크기 (w × h)</small><b>540 × 388</b></div>
+        </div>
+        <div class="d-conf"><div class="top">인식 신뢰도<b>72%</b></div><div class="track"><i></i></div><p>아래쪽 그림이 다음 문항과 겹쳐 보여요</p></div>
+        <div class="d-tog">공통 지문과 함께 자르기<i></i></div>
+        <div class="acts"><button class="btn ghost">영역 다시 잡기</button><button class="btn pri">확인 <kbd style="background:rgba(255,255,255,.15);color:#fff;border:0">Enter</kbd></button></div>
+      </aside>
+      <div class="d-film">
+        <figure><div class="crop" data-n="1"></div>01</figure>
+        <figure><div class="crop" data-n="2"></div>02</figure>
+        <figure><div class="crop" data-n="3"></div>03</figure>
+        <figure><div class="crop" data-n="4"></div>04</figure>
+        <figure><div class="crop" data-n="5"></div>05</figure>
+        <figure class="low"><div class="crop" data-n="6"></div>06 · 확인 필요</figure>
+        <figure class="on"><div class="crop" data-n="7"></div>07</figure>
+        <figure><div class="crop" data-n="8"></div>08</figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+const P = new URLSearchParams(location.search);
+const v = P.get('v') || 'a', s = P.get('s') || 'home';
+document.body.dataset.v = v;
+if (P.get('theme')) document.body.dataset.theme = P.get('theme');
+document.getElementById(v + '-' + s).hidden = false;
+
+const r = n => Math.abs(Math.sin(n * 91.7) * 1e4) % 1;
+const FIG = '<svg viewBox="0 0 100 60"><path d="M8 52H96M14 58V4" stroke="#9aa0aa" stroke-width="1.2"/><path d="M14 48C34 46 44 8 60 10S82 40 94 22" fill="none" stroke="#1d1f24" stroke-width="1.6"/></svg>';
+function q(n, cls = '') {
+  const lines = 3 + (n % 3), fig = n % 3 === 0, box = n % 4 === 1;
+  let tx = '';
+  for (let i = 0; i < lines; i++) tx += `<i style="width:${i === lines - 1 ? 35 + r(n * 7 + i) * 40 : 86 + r(n * 7 + i) * 14}%"></i>`;
+  const ch = ['①', '②', '③', '④', '⑤'].map(c => `<span>${c}<i></i></span>`).join('');
+  return `<div class="q ${cls}" data-n="${n}"><b class="qn">${n}.</b><div class="qb"><div class="tx">${tx}</div>${fig ? `<div class="fig">${FIG}</div>` : ''}${box ? '<div class="bx"><i style="width:90%"></i><i style="width:70%"></i></div>' : ''}<div class="ch">${ch}</div></div></div>`;
+}
+document.querySelectorAll('.sheet').forEach(sh => {
+  const start = +sh.dataset.start || 1, cnt = +sh.dataset.count || 8, sel = +sh.dataset.sel;
+  const low = (sh.dataset.low || '').split(',').map(Number), cols = ['', ''];
+  for (let k = 0; k < cnt; k++) {
+    const n = start + k;
+    cols[k < Math.ceil(cnt / 2) ? 0 : 1] += q(n, (n === sel ? 'sel ' : '') + (low.includes(n) ? 'low' : ''));
+  }
+  sh.innerHTML = `<header class="sh-h"><span>2026학년도 3월 전국연합 · 수학 영역</span><span>${sh.dataset.p || 1}</span></header><div class="sh-cols"><div>${cols[0]}</div><div>${cols[1]}</div></div>`;
+});
+const NOTES = { 6: ['선택지 ⑤가 잘린 것 같아요', '영역 넓히기', 'expand'], 9: ['두 문항이 붙어 있어요', '나누기', 'split'] };
+const IC = {
+  ok: '<path d="M20 6 9 17l-5-5"/>',
+  edit: '<path d="M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2"/>',
+  split: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/>',
+  expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  del: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+};
+const ib = (k, label, cls = '') => `<button class="${cls}" title="${label}" aria-label="${label}"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">${IC[k]}</svg></button>`;
+const tagOf = n => NOTES[n] ? '<span class="tag warn">확인 필요</span>' : '<span class="tag ok">확인</span>';
+const CARD = {
+  c: n => `<div class="c-card${NOTES[n] ? ' low' : ''}${n === 3 ? ' on' : ''}" draggable="true" tabindex="0" data-n="${n}"><header><b class="ord"></b><span class="src"></span>${tagOf(n)}</header><div class="cw"><div class="crop" data-n="${n}"></div><div class="acts">${NOTES[n]
+      ? ib(NOTES[n][2], NOTES[n][1], 'pri') + ib('ok', '그대로 둘게요') + ib('edit', '영역 고치기')
+      : ib('ok', '확인', 'pri') + ib('edit', '영역 고치기') + ib('del', '이 문항 빼기')}</div></div>${NOTES[n] ? `<p class="note">${NOTES[n][0]}</p>` : ''}</div>`,
+  b: n => `<div class="b-card${NOTES[n] ? ' low' : ''}${n === 3 ? ' on' : ''}" draggable="true" tabindex="0" data-n="${n}"><div class="crop" data-n="${n}"></div><footer><span class="hand ord"></span><span class="src"></span>${tagOf(n)}</footer></div>`,
+};
+// 표시 순서 = 내려받을 PNG 파일명 순서. 원래 번호와 다르면 "원본 n번"을 붙인다.
+function renumber(list) {
+  [...list.children].forEach((c, i) => {
+    const pos = i + 1, n = +c.dataset.n;
+    c.querySelector('.ord').textContent = list.dataset.sortable === 'c' ? String(pos).padStart(2, '0') : pos;
+    c.querySelector('.src').textContent = pos === n ? '' : `원본 ${n}번`;
+  });
+}
+const demo = P.has('demo');
+const ORDER = Array.from({ length: 20 }, (_, i) => i + 1);
+if (demo) ORDER.splice(2, 0, ORDER.splice(4, 1)[0]); // 5번을 3번째로 옮긴 상태
+document.querySelectorAll('[data-sortable]').forEach(list => {
+  list.innerHTML = ORDER.map(n => CARD[list.dataset.sortable](n)).join('');
+  renumber(list);
+});
+document.querySelectorAll('.crop').forEach(c => c.innerHTML = q(+c.dataset.n));
+
+// 순서 바꾸기: 끌어다 놓기 + 키보드(Alt + ←/→)
+document.querySelectorAll('[data-sortable]').forEach(list => {
+  let drag = null;
+  list.addEventListener('dragstart', e => {
+    drag = e.target.closest('[draggable]');
+    if (!drag) return;
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', drag.dataset.n);
+    drag.classList.add('dragging');
+  });
+  list.addEventListener('dragover', e => {
+    if (!drag) return;
+    e.preventDefault();
+    const over = e.target.closest('[draggable]');
+    if (!over || over === drag) return;
+    const r = over.getBoundingClientRect();
+    over[e.clientX > r.left + r.width / 2 ? 'after' : 'before'](drag);
+  });
+  list.addEventListener('dragend', () => {
+    drag?.classList.remove('dragging');
+    drag = null;
+    renumber(list);
+  });
+  list.addEventListener('keydown', e => {
+    const c = e.target.closest('[draggable]');
+    if (!c || !e.altKey) return;
+    if (e.key === 'ArrowLeft' && c.previousElementSibling) c.previousElementSibling.before(c);
+    else if (e.key === 'ArrowRight' && c.nextElementSibling) c.nextElementSibling.after(c);
+    else return;
+    e.preventDefault();
+    c.focus();
+    renumber(list);
+  });
+});
+
+// 창 크기: 가운데 막대를 끌거나 ←/→, 더블클릭하면 기본값
+document.querySelectorAll('.split').forEach(sp => {
+  const box = sp.parentElement, side = sp.nextElementSibling;
+  const set = w => box.style.setProperty('--side', Math.max(260, Math.min(720, w)) + 'px');
+  sp.addEventListener('pointerdown', e => {
+    sp.setPointerCapture(e.pointerId);
+    sp.classList.add('active');
+    const right = side.getBoundingClientRect().right;
+    const move = ev => set(right - ev.clientX - sp.offsetWidth / 2);
+    sp.addEventListener('pointermove', move);
+    sp.addEventListener('pointerup', () => { sp.removeEventListener('pointermove', move); sp.classList.remove('active'); }, { once: true });
+  });
+  sp.addEventListener('dblclick', () => box.style.removeProperty('--side'));
+  sp.addEventListener('keydown', e => {
+    const d = { ArrowLeft: 24, ArrowRight: -24 }[e.key];
+    if (d) { e.preventDefault(); set(side.offsetWidth + d); }
+  });
+});
+
+// 카드 크기 슬라이더
+document.querySelectorAll('[data-cardsize]').forEach(r =>
+  r.addEventListener('input', () => r.closest('section').style.setProperty('--card', r.value + 'px')));
+
+// 내보내기 설정: API 키가 있어야 업스케일을 켤 수 있다
+document.querySelectorAll('[data-export]').forEach(box => {
+  const sec = box.closest('section'), key = box.querySelector('[name=apikey]'), up = box.querySelector('[name=upscale]');
+  const sync = () => {
+    const has = key.value.trim() !== '';
+    up.disabled = !has;
+    if (!has) up.checked = false;
+    box.querySelectorAll('[name=scale]').forEach(r => r.disabled = !up.checked);
+    box.querySelector('.need').hidden = has;
+    box.querySelector('.key-state').textContent = has ? '연결됨 · 업스케일을 켤 수 있어요' : 'API 키를 넣으면 업스케일을 켤 수 있어요';
+    sec.querySelector('[data-sum=bg]').textContent = box.querySelector('[name=bg]:checked').value;
+    sec.querySelector('[data-sum=up]').textContent = up.checked ? '업스케일 ' + box.querySelector('[name=scale]:checked').value : '원본 해상도';
+  };
+  box.addEventListener('input', sync);
+  if (P.has('api')) {
+    key.value = 'demo-key-0000';
+    box.querySelector('[name=bg][value="배경 제거"]').checked = true;
+    sync();
+    up.checked = true;
+    box.querySelector('[name=scale][value="4배"]').checked = true;
+  }
+  sync();
+});
+if (P.get('hover')) document.querySelector(`#${v}-${s} [draggable][data-n="${P.get('hover')}"]`)?.classList.add('hover');
+
+// PNG 시안용 정지 화면: 드래그 중인 카드 + 넓힌 패널
+if (demo) {
+  const sec = document.getElementById(v + '-' + s), sp = sec.querySelector('.split');
+  sec.querySelector('[draggable][data-n="5"]')?.classList.add('dragging');
+  if (sp) {
+    sp.classList.add('active');
+    sp.parentElement.style.setProperty('--side', ({ b: 560, c: 420 }[v] || 400) + 'px');
+    sec.insertAdjacentHTML('beforeend', '<div class="toast">5번을 3번째로 옮기는 중 · 내려받는 PNG 파일명도 이 순서를 따라요</div>');
+  }
+}
+</script>
