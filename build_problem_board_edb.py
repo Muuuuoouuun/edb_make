@@ -3575,6 +3575,10 @@ def _problem_order_key(problem: ProblemUnit, block_by_id: dict[str, ContentBlock
         passage_range = _passage_range_tuple(problem.metadata)
         if passage_range is not None:
             return (0, passage_range[0], 0, problem.unit_id)
+    if _problem_is_question_material_unit(problem):
+        material_range = _passage_range_tuple(problem.metadata, "question_material_range")
+        if material_range is not None:
+            return (0, material_range[0], 0, problem.unit_id)
 
     raw_number = problem.metadata.get("problem_number")
     if isinstance(raw_number, int):
@@ -3816,6 +3820,10 @@ def _problem_is_passage_fragment_unit(problem: ProblemUnit) -> bool:
     return str(problem.metadata.get("passage_role") or "").strip() == "passage_fragment"
 
 
+def _problem_is_question_material_unit(problem: ProblemUnit) -> bool:
+    return str(problem.metadata.get("passage_role") or "").strip() == "question_material_fragment"
+
+
 def _problem_allows_selective_media_preservation(problem: ProblemUnit) -> bool:
     """Keep shared child questions on the legacy Stage-2 treatment."""
     return str(problem.metadata.get("passage_role") or "").strip() != "child_question"
@@ -3900,7 +3908,7 @@ def _drop_pre_first_problem_headers(
     preserved_prefix = [
         problem
         for problem in problems[:first_numbered_index]
-        if _problem_is_passage_fragment_unit(problem)
+        if _problem_is_passage_fragment_unit(problem) or _problem_is_question_material_unit(problem)
     ]
     return preserved_prefix + problems[first_numbered_index:]
 
@@ -4175,7 +4183,9 @@ def _fill_missing_problem_numbers(problems: list[ProblemUnit]) -> None:
     fillable_indexes: list[int] = []
     numbers: list[int | None] = []
     for index, problem in enumerate(problems):
-        if _problem_is_passage_fragment_unit(problem):
+        # Shared material such as a nested [13~14] <보기> sits right before question
+        # 13; extrapolating backwards from 13 would mislabel it as question 12.
+        if _problem_is_passage_fragment_unit(problem) or _problem_is_question_material_unit(problem):
             continue
         fillable_indexes.append(index)
         raw = problem.metadata.get("problem_number")
@@ -4379,8 +4389,8 @@ def _drop_recovered_regions_inside(page: PageModel, region: Box) -> None:
     page.problems = kept_problems
 
 
-def _passage_range_tuple(metadata: dict[str, Any]) -> tuple[int, int] | None:
-    value = metadata.get("passage_range")
+def _passage_range_tuple(metadata: dict[str, Any], key: str = "passage_range") -> tuple[int, int] | None:
+    value = metadata.get(key)
     if not isinstance(value, dict):
         return None
     start = _coerce_int(value.get("start"))
@@ -5039,6 +5049,7 @@ def _demote_nested_passage_materials(
         metadata = problem.metadata
         metadata["question_material_range"] = {"start": nested_start, "end": nested_end}
         metadata["question_material_parent_group_id"] = parent_group_id
+        metadata["question_material_parent_range"] = {"start": parent_start, "end": parent_end}
         metadata["nested_passage_suppressed"] = True
         metadata["passage_role"] = "question_material_fragment"
         for key in (

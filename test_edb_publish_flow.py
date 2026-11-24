@@ -4257,6 +4257,20 @@ class TestEdbPublishFlow(unittest.TestCase):
         self.assertEqual(parent_group, child.metadata.get("passage_group_id"))
         self.assertEqual({"start": 11, "end": 14}, child.metadata.get("passage_range"))
         self.assertFalse(page_2.blocks[0].metadata.get("shared_passage"))
+        self.assertEqual({"start": 11, "end": 14}, material.metadata.get("question_material_parent_range"))
+
+        # The material precedes question 13 on its page: it must not be numbered 12 by
+        # backward extrapolation, and it must still sort right before 13.
+        problem_board._fill_missing_problem_numbers(page_2.problems)
+        self.assertNotIn("problem_number", material.metadata)
+        block_by_id = {block.block_id: block for block in page_2.blocks}
+        self.assertLess(
+            problem_board._problem_order_key(material, block_by_id),
+            problem_board._problem_order_key(child, block_by_id),
+        )
+        # Sorted first and number-less, it must not be trimmed as page-header chrome.
+        ordered = sorted(page_2.problems, key=lambda problem: problem_board._problem_order_key(problem, block_by_id))
+        self.assertEqual([nested_group, "q13"], [problem.unit_id for problem in problem_board._drop_pre_first_problem_headers(ordered, block_by_id)])
 
     def test_later_child_page_content_is_not_materialized_as_passage_continuation(self):
         page_1 = PageModel(

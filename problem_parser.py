@@ -321,7 +321,10 @@ def parse_problems(
             source_page_id=entry.source_page_id,
             number_source=str(metadata_by_id.get(entry.problem_id, {}).get("problem_number_source") or ""),
             passage_role=str(metadata_by_id.get(entry.problem_id, {}).get("passage_role") or ""),
-            passage_range=metadata_by_id.get(entry.problem_id, {}).get("passage_range"),
+            # Nested material (e.g. a [13~14] <보기> inside [11~14]) reports its parent
+            # passage's range, so it is shown together with that passage.
+            passage_range=(metadata_by_id.get(entry.problem_id, {}).get("passage_range")
+                           or metadata_by_id.get(entry.problem_id, {}).get("question_material_parent_range")),
         )
         for entry in entries
     ]
