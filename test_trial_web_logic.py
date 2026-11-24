@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import unittest
 from pathlib import Path
+
+import trial_server
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -208,6 +211,18 @@ class TestTrialPageMarkup(unittest.TestCase):
                 self.assertIn('class="problems-panel"', html)
                 self.assertIn("보통 15~30초 걸려요", html)
                 self.assertNotIn("10~20초", html)
+
+    def test_result_layout_has_resizable_panel_and_premium_card_actions(self) -> None:
+        for relative in self.PAGES:
+            html = (PROJECT_ROOT / relative).read_text(encoding="utf-8")
+            with self.subTest(page=relative):
+                self.assertIn('id="result-splitter" role="separator"', html)
+                self.assertIn('id="card-size"', html)
+        script = (PROJECT_ROOT / "public/app.js").read_text(encoding="utf-8")
+        # Card icons open the premium popup and log events, so each must be a feature the server accepts.
+        actions = set(re.findall(r"^    (\w+): \{ name:", script, re.MULTILINE))
+        self.assertEqual(actions, {"ai", "image", "edit"})
+        self.assertLessEqual(actions, trial_server.EVENT_FEATURES)
 
     def test_app_script_switches_cards_through_the_shared_logic(self) -> None:
         script = (PROJECT_ROOT / "public/app.js").read_text(encoding="utf-8")

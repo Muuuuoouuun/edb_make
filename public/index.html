@@ -107,6 +107,7 @@
           <div class="problems-head">
             <h3 class="problems-head__label" id="problems-title">찾은 문항</h3>
             <a class="result-jump" href="#source-pages">원본 페이지로 이동 ↓</a>
+            <label class="card-size">카드 크기 <input type="range" id="card-size" min="140" max="320" step="10" value="200"></label>
             <div class="preview-toggle" id="preview-toggle" role="group" aria-label="문항 보기 방식" hidden>
               <button type="button" data-mode="raw" aria-pressed="true">원본</button>
               <button type="button" data-mode="board" aria-pressed="false">칠판용</button>
@@ -114,6 +115,7 @@
           </div>
           <ol class="problems" id="problems" aria-label="찾은 문항"></ol>
         </section>
+        <div class="splitter" id="result-splitter" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="source-pages" aria-label="문항과 원본 페이지 너비 조절" aria-valuemin="260" aria-valuemax="720" aria-valuenow="380"></div>
         <section class="source-panel" id="source-pages" aria-labelledby="source-title" tabindex="-1">
           <div class="problems-head">
             <h3 class="problems-head__label" id="source-title">원본 페이지</h3>

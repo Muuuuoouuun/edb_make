@@ -25,6 +25,12 @@
   };
 
   const $ = id => document.getElementById(id);
+  const svgIcon = path => `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+  const CARD_ACTIONS = {
+    ai: { name: "AI로 더 정확하게", icon: svgIcon('<path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/>') },
+    image: { name: "이미지로 저장", icon: svgIcon('<path d="M12 3v12M7 10l5 5 5-5M4 21h16"/>') },
+    edit: { name: "문항 수정", icon: svgIcon('<path d="M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2"/>') },
+  };
   const views = { upload: $("view-upload"), processing: $("view-processing"), result: $("view-result") };
 
   function showView(name) {
@@ -163,6 +169,7 @@
           sitekey: siteKey,
           action: "parse",
           language: "ko",
+          theme: "dark",
           callback: token => {
             state.token = token;
             state.tokenError = false;
@@ -463,27 +470,34 @@
       }
       item.appendChild(head);
 
+      const media = document.createElement("div");
+      media.className = "problem-card__media";
       const source = logic.cardImageSource(problem, state.previewMode);
       if (source) {
         const image = document.createElement("img");
         image.src = source;
         image.alt = `${logic.problemLabel(problem)} 미리보기`;
         image.loading = "lazy";
-        item.appendChild(image);
+        media.appendChild(image);
       }
       item.classList.toggle("problem-card--board", isBoardSource(problem, source));
 
-      if (problem.needs_review) {
-        const ai = document.createElement("button");
-        ai.type = "button";
-        ai.className = "text-button problem-card__ai";
-        ai.textContent = "AI로 더 정확하게 ✦";
-        ai.addEventListener("click", event => {
-          event.stopPropagation();
-          openPremium("ai");
-        });
-        item.appendChild(ai);
+      // The document-level [data-premium] handler opens the popup for these.
+      const actions = document.createElement("div");
+      actions.className = "card-actions";
+      for (const feature of problem.needs_review ? ["ai", "image", "edit"] : ["image", "edit"]) {
+        const action = CARD_ACTIONS[feature];
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.premium = feature;
+        button.className = feature === "ai" ? "is-primary" : "";
+        button.title = `${action.name} ✦`;
+        button.setAttribute("aria-label", `${logic.problemLabel(problem)} ${action.name} (프리미엄)`);
+        button.innerHTML = action.icon;
+        actions.appendChild(button);
       }
+      media.appendChild(actions);
+      item.appendChild(media);
 
       const activate = () => setActive(problem.problem_id, "card");
       item.addEventListener("click", activate);
@@ -587,6 +601,44 @@
     });
   }
 
+  // Result layout: drag or arrow-key the divider to resize the page panel; the slider sizes cards.
+  function bindLayoutControls() {
+    const body = $("result-body");
+    const splitter = $("result-splitter");
+    const source = $("source-pages");
+    const setSide = width => {
+      const side = Math.round(Math.max(260, Math.min(720, body.clientWidth * 0.6, width)));
+      body.style.setProperty("--side", `${side}px`);
+      splitter.setAttribute("aria-valuenow", String(side));
+    };
+    splitter.addEventListener("pointerdown", event => {
+      splitter.setPointerCapture(event.pointerId);
+      splitter.classList.add("is-dragging");
+      const right = source.getBoundingClientRect().right;
+      const move = moveEvent => setSide(right - moveEvent.clientX - splitter.offsetWidth / 2);
+      const end = () => {
+        splitter.removeEventListener("pointermove", move);
+        splitter.classList.remove("is-dragging");
+      };
+      splitter.addEventListener("pointermove", move);
+      splitter.addEventListener("pointerup", end, { once: true });
+      splitter.addEventListener("pointercancel", end, { once: true });
+    });
+    splitter.addEventListener("keydown", event => {
+      const step = { ArrowLeft: 24, ArrowRight: -24 }[event.key];
+      if (step) {
+        event.preventDefault();
+        setSide(source.offsetWidth + step);
+      }
+    });
+    splitter.addEventListener("dblclick", () => {
+      body.style.removeProperty("--side");
+      splitter.setAttribute("aria-valuenow", "380");
+    });
+    $("card-size").addEventListener("input", event => body.style.setProperty("--card", `${event.target.value}px`));
+  }
+
   bindEvents();
+  bindLayoutControls();
   state.configReady = loadConfig();
 })();
