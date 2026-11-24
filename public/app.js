@@ -22,6 +22,7 @@
     lastPayload: null,
     popupContext: {},
     previewMode: "raw",
+    problemFilter: "all",
   };
 
   const $ = id => document.getElementById(id);
@@ -484,6 +485,7 @@
   function createProblemCard(problem) {
     const item = document.createElement("li");
     item.className = "problem-card";
+    item.classList.toggle("problem-card--passage", problem.number === null || problem.number === undefined);
     item.dataset.problemId = problem.problem_id;
     item.tabIndex = 0;
 
@@ -545,8 +547,24 @@
     return item;
   }
 
+  // 몰아보기: show every card, only questions, or only passages. CSS does the hiding.
+  function syncProblemFilter(payload) {
+    const { questionCount, passageCount } = logic.summarize(payload);
+    const filter = $("problem-filter");
+    filter.hidden = questionCount === 0 || passageCount === 0;
+    if (filter.hidden) state.problemFilter = "all";
+    const counts = { all: questionCount + passageCount, questions: questionCount, passages: passageCount };
+    const labels = { all: "전체", questions: "문항", passages: "지문" };
+    for (const button of filter.querySelectorAll("[data-filter]")) {
+      button.textContent = `${labels[button.dataset.filter]} ${counts[button.dataset.filter]}`;
+      button.setAttribute("aria-pressed", String(button.dataset.filter === state.problemFilter));
+    }
+    $("problems").dataset.filter = state.problemFilter;
+  }
+
   function renderResult(payload) {
     state.lastPayload = payload;
+    state.problemFilter = "all";
     const summary = logic.summarize(payload);
     $("result-title").textContent = summary.headline;
     $("result-meta").textContent = `${summary.seconds} · 앞 ${payload.processed_page_count}쪽 처리`;
@@ -566,6 +584,7 @@
     $("empty-result").hidden = !empty;
     $("result-body").hidden = empty;
     syncPreviewToggle(payload);
+    syncProblemFilter(payload);
     renderPages(payload);
     renderProblems(payload);
     showView("result");
@@ -613,6 +632,13 @@
       const button = event.target.closest("[data-mode]");
       if (button) {
         setPreviewMode(button.dataset.mode);
+      }
+    });
+    $("problem-filter").addEventListener("click", event => {
+      const button = event.target.closest("[data-filter]");
+      if (button && state.lastPayload) {
+        state.problemFilter = button.dataset.filter;
+        syncProblemFilter(state.lastPayload);
       }
     });
     $("pages-banner").addEventListener("click", () => openPremium("limit_pages", state.popupContext));

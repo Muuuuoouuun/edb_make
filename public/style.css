@@ -467,6 +467,13 @@ h2 { margin: 0; font-size: var(--text-2xl); letter-spacing: -0.01em; }
 
 .passage-group__questions { grid-template-columns: repeat(auto-fill, minmax(var(--card, 200px), 1fr)); grid-auto-rows: max-content; }
 
+/* 몰아보기: unwrap the passage groups so the cards left visible flow in the main grid. */
+.problems[data-filter="questions"] :is(.passage-group, .passage-group__body, .passage-group__questions),
+.problems[data-filter="passages"] :is(.passage-group, .passage-group__body, .passage-group__passages) { display: contents; }
+
+.problems[data-filter="questions"] :is(.passage-group__head, .passage-group__passages, .problem-card--passage),
+.problems[data-filter="passages"] :is(.passage-group__head, .passage-group__questions, .problem-card:not(.problem-card--passage)) { display: none; }
+
 .problem-card {
   padding: 12px;
   border: 1px solid var(--line);

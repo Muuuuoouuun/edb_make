@@ -99,6 +99,11 @@
           <div class="problems-head">
             <h3 class="problems-head__label" id="problems-title">찾은 문항</h3>
             <a class="result-jump" href="#source-pages">원본 페이지로 이동 ↓</a>
+            <div class="preview-toggle problem-filter" id="problem-filter" role="group" aria-label="문항·지문 몰아보기" hidden>
+              <button type="button" data-filter="all" aria-pressed="true">전체</button>
+              <button type="button" data-filter="questions" aria-pressed="false">문항</button>
+              <button type="button" data-filter="passages" aria-pressed="false">지문</button>
+            </div>
             <label class="card-size">카드 크기 <input type="range" id="card-size" min="140" max="320" step="10" value="200"></label>
             <div class="preview-toggle" id="preview-toggle" role="group" aria-label="문항 보기 방식" hidden>
               <button type="button" data-mode="raw" aria-pressed="true">원본</button>

@@ -59,6 +59,7 @@ test_output_*/
 !ui_prototype/favicon.png
 # Reviewed design evidence uses synthetic fixtures, not generated runtime images.
 !docs/qa/original-editor-20261018/*.png
+!docs/design/parser-web-trial/*.png
 
 # Local one-off packaging/install smoke logs
 /.audit/*-smoke-*.log

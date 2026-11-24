@@ -246,6 +246,11 @@ class TestTrialPageMarkup(unittest.TestCase):
             with self.subTest(page=relative):
                 self.assertIn('id="result-splitter" role="separator"', html)
                 self.assertIn('id="card-size"', html)
+                for mode in ("all", "questions", "passages"):
+                    self.assertIn(f'data-filter="{mode}"', html)
+        css = (PROJECT_ROOT / "public/style.css").read_text(encoding="utf-8")
+        self.assertIn('.problems[data-filter="questions"]', css)
+        self.assertIn('.problems[data-filter="passages"]', css)
         script = (PROJECT_ROOT / "public/app.js").read_text(encoding="utf-8")
         # Card icons open the premium popup and log events, so each must be a feature the server accepts.
         actions = set(re.findall(r"^    (\w+): \{ name:", script, re.MULTILINE))
