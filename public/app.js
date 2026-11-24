@@ -450,69 +450,99 @@
   function renderProblems(payload) {
     const list = $("problems");
     list.replaceChildren();
-    for (const problem of payload.problems) {
-      const item = document.createElement("li");
-      item.className = "problem-card";
-      item.dataset.problemId = problem.problem_id;
-      item.tabIndex = 0;
-
-      const head = document.createElement("div");
-      head.className = "problem-card__head";
-      const label = document.createElement("span");
-      label.className = "problem-card__label";
-      label.textContent = logic.problemLabel(problem);
-      head.appendChild(label);
-      if (problem.needs_review) {
-        const chip = document.createElement("span");
-        chip.className = "review-chip";
-        chip.textContent = "확인 필요";
-        head.appendChild(chip);
-      }
-      item.appendChild(head);
-
-      const media = document.createElement("div");
-      media.className = "problem-card__media";
-      const source = logic.cardImageSource(problem, state.previewMode);
-      if (source) {
-        const image = document.createElement("img");
-        image.src = source;
-        image.alt = `${logic.problemLabel(problem)} 미리보기`;
-        image.loading = "lazy";
-        media.appendChild(image);
-      }
-      item.classList.toggle("problem-card--board", isBoardSource(problem, source));
-
-      // The document-level [data-premium] handler opens the popup for these.
-      const actions = document.createElement("div");
-      actions.className = "card-actions";
-      for (const feature of problem.needs_review ? ["ai", "image", "edit"] : ["image", "edit"]) {
-        const action = CARD_ACTIONS[feature];
-        const button = document.createElement("button");
-        button.type = "button";
-        button.dataset.premium = feature;
-        button.className = feature === "ai" ? "is-primary" : "";
-        button.title = `${action.name} ✦`;
-        button.setAttribute("aria-label", `${logic.problemLabel(problem)} ${action.name} (프리미엄)`);
-        button.innerHTML = action.icon;
-        actions.appendChild(button);
-      }
-      media.appendChild(actions);
-      item.appendChild(media);
-
-      const activate = () => setActive(problem.problem_id, "card");
-      item.addEventListener("click", activate);
-      item.addEventListener("keydown", event => {
-        // Keys pressed on buttons inside the card belong to those buttons.
-        if (event.target !== item) {
-          return;
-        }
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          activate();
-        }
-      });
-      list.appendChild(item);
+    for (const entry of logic.groupPassages(payload.problems)) {
+      list.appendChild(entry.problem ? createProblemCard(entry.problem) : createPassageGroup(entry));
     }
+  }
+
+  function createPassageGroup(group) {
+    const { start, end } = group.range;
+    const element = document.createElement("li");
+    element.className = "passage-group";
+    const head = document.createElement("p");
+    head.className = "passage-group__head";
+    head.textContent = `공통 지문 ${start}~${end}번 · 문항 ${group.children.length}개`;
+    if (group.children.length < end - start + 1) {
+      const note = document.createElement("span");
+      note.className = "muted";
+      note.textContent = "나머지 문항은 처리한 쪽 밖에 있어요";
+      head.appendChild(note);
+    }
+    element.setAttribute("aria-label", head.firstChild.textContent);
+    const body = document.createElement("div");
+    body.className = "passage-group__body";
+    for (const [className, problems] of [["passage-group__passages", group.passages], ["passage-group__questions", group.children]]) {
+      const column = document.createElement("ol");
+      column.className = className;
+      for (const problem of problems) column.appendChild(createProblemCard(problem));
+      body.appendChild(column);
+    }
+    element.append(head, body);
+    return element;
+  }
+
+  function createProblemCard(problem) {
+    const item = document.createElement("li");
+    item.className = "problem-card";
+    item.dataset.problemId = problem.problem_id;
+    item.tabIndex = 0;
+
+    const head = document.createElement("div");
+    head.className = "problem-card__head";
+    const label = document.createElement("span");
+    label.className = "problem-card__label";
+    label.textContent = logic.problemLabel(problem);
+    head.appendChild(label);
+    if (problem.needs_review) {
+      const chip = document.createElement("span");
+      chip.className = "review-chip";
+      chip.textContent = "확인 필요";
+      head.appendChild(chip);
+    }
+    item.appendChild(head);
+
+    const media = document.createElement("div");
+    media.className = "problem-card__media";
+    const source = logic.cardImageSource(problem, state.previewMode);
+    if (source) {
+      const image = document.createElement("img");
+      image.src = source;
+      image.alt = `${logic.problemLabel(problem)} 미리보기`;
+      image.loading = "lazy";
+      media.appendChild(image);
+    }
+    item.classList.toggle("problem-card--board", isBoardSource(problem, source));
+
+    // The document-level [data-premium] handler opens the popup for these.
+    const actions = document.createElement("div");
+    actions.className = "card-actions";
+    for (const feature of problem.needs_review ? ["ai", "image", "edit"] : ["image", "edit"]) {
+      const action = CARD_ACTIONS[feature];
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.premium = feature;
+      button.className = feature === "ai" ? "is-primary" : "";
+      button.title = `${action.name} ✦`;
+      button.setAttribute("aria-label", `${logic.problemLabel(problem)} ${action.name} (프리미엄)`);
+      button.innerHTML = action.icon;
+      actions.appendChild(button);
+    }
+    media.appendChild(actions);
+    item.appendChild(media);
+
+    const activate = () => setActive(problem.problem_id, "card");
+    item.addEventListener("click", activate);
+    item.addEventListener("keydown", event => {
+      // Keys pressed on buttons inside the card belong to those buttons.
+      if (event.target !== item) {
+        return;
+      }
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        activate();
+      }
+    });
+    return item;
   }
 
   function renderResult(payload) {

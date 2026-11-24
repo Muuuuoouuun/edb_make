@@ -204,6 +204,41 @@
     return problem.title ? String(problem.title) : "지문";
   }
 
+  function isQuestion(problem) {
+    return problem.number !== null && problem.number !== undefined;
+  }
+
+  function rangeKey(range) {
+    const valid = range && Number.isInteger(range.start) && Number.isInteger(range.end) && range.start > 0 && range.start <= range.end;
+    return valid ? `${range.start}-${range.end}` : null;
+  }
+
+  // Puts each shared passage and the questions it covers into one entry, in the parser's order:
+  // { passages, children, range } for a group, { problem } otherwise. A question whose passage
+  // was not found (for example it lies past the processed pages) stays on its own.
+  function groupPassages(problems) {
+    const list = Array.isArray(problems) ? problems.filter(Boolean) : [];
+    const groups = new Map();
+    for (const problem of list) {
+      const key = isQuestion(problem) ? null : rangeKey(problem.passage_range);
+      if (key && !groups.has(key)) groups.set(key, { passages: [], children: [], range: problem.passage_range });
+    }
+    const entries = [];
+    for (const problem of list) {
+      const group = groups.get(rangeKey(problem.passage_range));
+      if (!group) {
+        entries.push({ problem });
+      } else if (isQuestion(problem)) {
+        group.children.push(problem);
+      } else {
+        // Later fragments of the same passage (e.g. split across pages) join the first one.
+        if (group.passages.length === 0) entries.push(group);
+        group.passages.push(problem);
+      }
+    }
+    return entries;
+  }
+
   function remainingText(remaining) {
     return remaining > 0 ? `오늘 ${remaining}회 남음` : "오늘 무료 체험을 모두 사용했어요";
   }
@@ -237,6 +272,7 @@
   return {
     FEATURES,
     cardImageSource,
+    groupPassages,
     hasBoardPreviews,
     interpretError,
     isSafeImageSource,

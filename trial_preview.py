@@ -42,6 +42,17 @@ def needs_review(risk_flags: list[str]) -> bool:
     return any(flag in REVIEW_WORTHY_FLAGS for flag in risk_flags)
 
 
+def passage_range(value: Any) -> dict[str, int] | None:
+    """The {start, end} question numbers a shared passage covers, or None when absent or malformed."""
+    if not isinstance(value, dict):
+        return None
+    start, end = value.get("start"), value.get("end")
+    # type() rather than isinstance(): JSON must not carry true/false as question numbers.
+    if type(start) is not int or type(end) is not int or not 0 < start <= end:
+        return None
+    return {"start": start, "end": end}
+
+
 def _finite_bbox(region: Any) -> dict[str, float] | None:
     values = {
         "left": float(region.bbox.left),
@@ -122,6 +133,8 @@ def _payload_for_step(
                 "problem_id": problem.problem_id,
                 "number": problem.number,
                 "title": problem.title,
+                # Set on a shared passage and on each question under it, so the page can group them.
+                "passage_range": passage_range(problem.passage_range),
                 "regions": [
                     {"page_id": region.page_id, "bbox": bbox}
                     for region in problem.regions

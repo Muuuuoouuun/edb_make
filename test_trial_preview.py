@@ -95,6 +95,14 @@ class TestEncodePreviewDataUri(unittest.TestCase):
 
 
 class TestBuildParsePayload(unittest.TestCase):
+    def test_passage_range_is_sent_only_when_well_formed(self):
+        result = _result(problem_count=3)
+        ranges = [{"start": 1, "end": 3}, {"start": True, "end": 3}, {"start": 4, "end": 2}]
+        result = replace(result, problems=[replace(problem, passage_range=value) for problem, value in zip(result.problems, ranges)])
+        payload = build_parse_payload(result, remaining_today=1, elapsed_ms=1, processed_page_limit=4)
+        self.assertEqual([{"start": 1, "end": 3}, None, None], [problem["passage_range"] for problem in payload["problems"]])
+        self.assertIsNone(build_parse_payload(_result(), remaining_today=1, elapsed_ms=1, processed_page_limit=4)["problems"][0]["passage_range"])
+
     def test_shape_and_coordinates(self):
         payload = build_parse_payload(_result(), remaining_today=2, elapsed_ms=1234, processed_page_limit=3)
         self.assertEqual("abc1234", payload["parser_version"])

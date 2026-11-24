@@ -44,6 +44,34 @@ class TestTrialWebLogic(unittest.TestCase):
             """
         )
 
+    def test_group_passages_pairs_shared_passages_with_their_questions(self) -> None:
+        run_node(
+            """
+            const logic = require('./public/trial_logic.js');
+            const r = (start, end) => ({ start, end });
+            const problems = [
+              { problem_id: 'p1', number: null, passage_range: r(1, 3) },
+              { problem_id: 'q1', number: 1, passage_range: r(1, 3) },
+              { problem_id: 'q2', number: 2, passage_range: r(1, 3) },
+              { problem_id: 'q7', number: 7, passage_range: null },
+              { problem_id: 'q11', number: 11, passage_range: r(11, 14) },   // its passage was not found
+              { problem_id: 'p4a', number: null, passage_range: r(4, 6) },
+              { problem_id: 'q4', number: 4, passage_range: r(4, 6) },
+              { problem_id: 'p4b', number: null, passage_range: r(4, 6) },   // second fragment, same passage
+              { problem_id: 'x', number: null, title: '지문', passage_range: null },
+            ];
+            const ids = list => list.map(problem => problem.problem_id);
+            const entries = logic.groupPassages(problems);
+            assert.deepEqual(entries.map(entry => entry.problem ? entry.problem.problem_id : 'group:' + ids(entry.passages).join('+')),
+              ['group:p1', 'q7', 'q11', 'group:p4a+p4b', 'x']);
+            assert.deepEqual(ids(entries[0].children), ['q1', 'q2']);
+            assert.deepEqual(entries[0].range, r(1, 3));
+            assert.deepEqual(ids(entries[3].children), ['q4']);
+            assert.deepEqual(logic.groupPassages(undefined), []);
+            assert.deepEqual(logic.groupPassages([{ problem_id: 'q', number: 1, passage_range: { start: 3, end: 1 } }]).length, 1);
+            """
+        )
+
     def test_popup_content_never_leaves_template_holes_without_context(self) -> None:
         run_node(
             """
