@@ -120,15 +120,26 @@ const crcTable=Uint32Array.from({length:256},(_,value)=>{
 });
 function checksum(bytes) {
   let crc=0xffffffff;
-  for(const b of bytes)crc=crcTable[(crc^b)&255]^(crc>>>8);
+  for(let i=0,n=bytes.length;i<n;i++)crc=crcTable[(crc^bytes[i])&255]^(crc>>>8);
   return (crc^0xffffffff)>>>0;
 }
 // Stored UTF-8 entries, fixed DOS date, no platform timestamps.
 export function zip(files) {
+  if(!Array.isArray(files)||files.length>0xffff)throw Error('ZIP entry limit exceeded.');
+  const encoder=new TextEncoder();
+  let expectedOffset=0,expectedDirSize=0;
+  const entries=files.map(({name,bytes})=>{
+    if(typeof name!=='string'||!/^[^\/\\\u0000]+$/u.test(name)||name==='.'||name==='..'||!(bytes instanceof Uint8Array))throw Error('Invalid ZIP entry.');
+    const label=encoder.encode(name);
+    if(label.length>0xffff||bytes.length>0xffffffff)throw Error('ZIP entry limit exceeded.');
+    expectedOffset+=30+label.length+bytes.length;expectedDirSize+=46+label.length;
+    if(expectedOffset+expectedDirSize+22>0xffffffff)throw Error('ZIP size limit exceeded.');
+    return {label,bytes};
+  });
   const content=[], directory=[];
   let offset=0,dirSize=0;
-  for(const {name,bytes} of files) {
-    const label=new TextEncoder().encode(name),crc=checksum(bytes);
+  for(const {label,bytes} of entries) {
+    const crc=checksum(bytes);
     function header(central) {
       const prefix=central?46:30,arr=new Uint8Array(prefix+label.length),d=new DataView(arr.buffer);
       const n16=(i,v)=>d.setUint16(i,v,true), n32=(i,v)=>d.setUint32(i,v,true);
