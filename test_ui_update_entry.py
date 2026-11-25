@@ -326,7 +326,33 @@ class TestUpdateInstallSafety(unittest.TestCase):
           assert.equal(sandbox.calls, 0);
           assert.deepEqual(sandbox.toasts, [[reason, 'error']]);
           const panel = section('  const updateControls = (', '  const updateDialog = (');
-          assert.match(panel, /updateAvailable && !updateAutomaticBlockedReason && <div className="update-install-card">/);
+          assert.match(panel, /updatePinAvailable && <div className="update-install-card">/);
+          assert.match(panel, /!updatePinAvailable && <div className="runtime-note warn"/);
+          const gate = vm.runInNewContext('(updateInfo, updateAutomaticReady, updateAutomaticBlockedReason, updateArchitectureBlocked) => {'
+            + section('  const updatePinAvailable =', '  const pinArtifact =')
+            + 'return updatePinAvailable;}');
+          assert.equal(gate({updateAvailable:true}, true, '', false), true);
+          assert.equal(gate({updateAvailable:true}, false, '', false), false);
+          assert.equal(gate({updateAvailable:true}, true, reason, false), false);
+          assert.equal(gate({updateAvailable:true}, true, '', true), false);
+          assert.equal(gate({updateAvailable:false}, true, '', false), false);
+
+          const pinEffect = section('  const pinArtifact =', '  const updateStatusLabel =');
+          const applyEffect = vm.runInNewContext('(updateInfo, updateDownloadUrl, setUpdatePinDraft, setShowUpdatePin, useEffect) => {'
+            + 'const updatePinAvailable = true;' + pinEffect + '}');
+          const observed = entry => {
+            let state = 'entered-pin';
+            let visible = true;
+            let key = [];
+            applyEffect(entry, 'https://example.test/a.dmg', value => state = value,
+              value => visible = value, (callback, dependencies) => { key = dependencies; callback(); });
+            return {key, state, visible};
+          };
+          const before = observed({latest:{version:'0.2.5', sha256:'a'.repeat(64)}});
+          const after = observed({latest:{version:'0.2.5', sha256:'b'.repeat(64)}});
+          assert.notDeepEqual(before.key, after.key, 'artifact changes must re-scope the credential draft');
+          assert.equal(after.state, '');
+          assert.equal(after.visible, false);
         })().catch(error=>{console.error(error);process.exitCode=1;});
         """)
 

@@ -11278,11 +11278,14 @@ function SidePanel({
     ? updateInfo.automaticUpdateBlockedSteps.filter(Boolean)
     : [];
   const updateActionBusy = updateBusy || updateInstallBusy;
+  const updatePinAvailable = Boolean(updateInfo?.updateAvailable && updateAutomaticReady
+    && !updateAutomaticBlockedReason && !updateArchitectureBlocked);
+  const pinArtifact = updateInfo?.latest;
   useEffect(() => {
-    if (updateInfo?.updateAvailable) return;
     setUpdatePinDraft('');
     setShowUpdatePin(false);
-  }, [updateInfo?.updateAvailable]);
+  }, [updatePinAvailable, pinArtifact?.version, pinArtifact?.sha256, pinArtifact?.sizeBytes,
+    pinArtifact?.artifactType, pinArtifact?.arch, updateInfo?.sha256, updateInfo?.sizeBytes, updateDownloadUrl]);
   const updateStatusLabel = updateBusy
     ? '확인 중'
     : updateArchitectureBlocked
@@ -11555,7 +11558,10 @@ function SidePanel({
           ? updateAutomaticBlockedSteps.join(' ')
           : '‘다운로드 열기’로 새 설치파일을 받아 설치해 주세요.'}
       </div>}
-      {updateInfo?.updateAvailable && !updateAutomaticBlockedReason && <div className="update-install-card">
+      {updateInfo?.updateAvailable && !updateAutomaticBlockedReason && !updatePinAvailable && <div className="runtime-note warn" role="status">
+        자동 업데이트를 사용할 수 없는 설치본입니다. ‘다운로드 열기’에서 새 설치파일을 받아 주세요.
+      </div>}
+      {updatePinAvailable && <div className="update-install-card">
         {updateInstallSafetyReason && <div className="runtime-note warn" role="status">{updateInstallSafetyReason}</div>}
         <div className="lbl">
           관리자 PIN 업데이트
