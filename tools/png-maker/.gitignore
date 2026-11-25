@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+node_modules/
+.env
+.env.*
+*.png
+*.zip
+*.pdf
+/output/
+/test-results/

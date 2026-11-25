@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#f5f6f3"><link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='9' fill='%23164fd2'/%3E%3Cpath d='M9 15h16v16M15 9v16h16' stroke='white' stroke-width='3' fill='none'/%3E%3C/svg%3E"><link rel="stylesheet" href="./style.css"><title>PNG Maker · 학습지 이미지 자르기</title></head><body>
+<header class="bar"><a href="#home" class="brand"><i class="logo" aria-hidden="true"></i>PNG Maker</a><span class="bar-note"><i></i>내 기기에서 처리</span></header>
+<main>
+<section id="home">
+  <div class="hero-copy"><p class="eyebrow"><span></span>교사를 위한 이미지 편집기</p>
+  <h1>학습지 한 장을<br><em>문항별 PNG로.</em></h1>
+  <p class="lead">이미지를 올리면 문항 영역을 찾아줍니다. 경계와 순서를 다듬고 한 번에 내려받으세요.</p>
+  <div class="actions"><button class="primary upload">PNG 열기 <span>↗</span></button><button class="secondary demo">예제로 시작 <span>→</span></button></div>
+  <p class="quiet input-guide">A4 학습지는 300dpi를 권장합니다. 최대 1,600만 픽셀 · 한 변 16,384px · 64MiB까지 열 수 있습니다. 초과하면 원본을 보관하고 해상도를 낮춘 PNG 사본을 선택하세요.</p></div>
+  <div class="hero-art"><div class="art-head"><b>학습지 미리보기</b><span>기하와 그래프.png</span></div><div class="paper"><div id="hero-sheet"></div></div><div class="art-foot"><span><i></i>4개 영역</span><span>01 → 02 → 03 → 04</span></div></div>
+  <div class="workflow"><article><small>01 / 가져오기</small><h2>학습지 PNG 열기</h2><p>파일은 브라우저 안에서 처리합니다.</p></article><article><small>02 / 편집</small><h2>문항 경계 맞추기</h2><p>제안된 영역을 조절하거나 직접 추가하세요.</p></article><article><small>03 / 다운로드</small><h2>수업 순서로 저장</h2><p>선택한 문항은 PNG로, 전체는 ZIP으로 받으세요.</p></article></div>
+</section>
+<section id="editor" hidden>
+  <div class="editor-title"><div><p class="eyebrow"><span></span>문항 이미지 편집기</p><h1 id="file-title" tabindex="-1">작업 공간</h1></div><div class="editor-actions"><button id="close-file">작업 닫기</button><button class="secondary upload">다른 PNG 열기</button></div></div>
+  <p class="editor-guide">A4 권장 300dpi · 최대 1,600만 픽셀 / 한 변 16,384px / 64MiB. 초과하면 해상도를 낮춘 PNG 사본을 여세요.</p>
+  <div class="studio"><div class="workspace"><div class="tools"><button id="draw" aria-pressed="false">＋ 영역 그리기</button><button id="add">좌표로 추가</button><button id="undo">↶ 실행 취소</button><span id="image-size"></span></div>
+  <div class="stage"><div id="sheet"><canvas id="source"></canvas><div id="overlays"></div></div></div><p class="tip" id="tip">영역을 끌어 이동하고 선택 테두리의 모서리로 크기를 조절하세요.</p></div>
+  <aside><div class="aside-title"><h2>내보낼 순서</h2><span id="count"></span></div><p id="proposal-note"></p><div id="margin-tools" hidden><p id="margin-help"></p><button id="exclude-margins" aria-describedby="margin-help">여백 후보 함께 제외</button></div><button id="column-sort" type="button">전체를 왼쪽 열부터 정렬</button><details id="range-controls"><summary>선택 범위만 정렬</summary><form id="range-form"><label>시작 번호<input type="number" id="range-first" min="1" step="1" required></label><label>끝 번호<input type="number" id="range-last" min="1" step="1" required></label><button type="submit" id="range-sort">이 범위를 왼쪽 열부터 정렬</button></form></details><div id="list"></div>
+  <div id="details"><h3>선택 영역</h3><button type="button" id="keep-margin" hidden>여백 제외에서 보호</button><form id="geometry"><div id="numbers"></div><button class="secondary" type="submit">좌표 적용</button></form>
+  <div class="small-tools"><button id="split-h">상하 분할</button><button id="split-v">좌우 분할</button><button id="remove">삭제</button></div></div>
+  <div class="review"><label><input id="reviewed" type="checkbox"> 문항 경계와 내보낼 순서를 확인했습니다.</label><p id="review-state" aria-live="polite"></p></div><div class="exports"><button id="export-all" class="primary">전체 ZIP 다운로드 ↓</button><button id="export-one" class="secondary">선택 PNG 다운로드 ↓</button></div></aside>
+  </div>
+</section><p id="status" role="status" aria-live="polite"></p></main>
+<dialog id="replace-dialog" aria-labelledby="replace-title" aria-describedby="replace-description"><h2 id="replace-title">현재 작업을 교체할까요?</h2><p id="replace-description"></p><form method="dialog"><button value="cancel" autofocus>현재 작업 유지</button><button class="primary" value="replace">새 이미지로 교체</button></form></dialog>
+<input id="upload" type="file" accept="image/png,.png" hidden>
+<script type="module" src="./app.js"></script></body></html>

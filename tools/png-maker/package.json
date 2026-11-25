@@ -1,0 +1,6 @@
+{
+  "name": "png-maker-local",
+  "private": true,
+  "scripts": { "test": "python tests/run.py" },
+  "devDependencies": { "playwright": "1.61.1" }
+}
