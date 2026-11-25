@@ -6,8 +6,6 @@ import subprocess
 import unittest
 from pathlib import Path
 
-import trial_server
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
@@ -255,7 +253,10 @@ class TestTrialPageMarkup(unittest.TestCase):
         # Card icons open the premium popup and log events, so each must be a feature the server accepts.
         actions = set(re.findall(r"^    (\w+): \{ name:", script, re.MULTILINE))
         self.assertEqual(actions, {"ai", "image", "edit"})
-        self.assertLessEqual(actions, trial_server.EVENT_FEATURES)
+        # Read from source: importing trial_server needs fastapi, which the CI lock does not install.
+        server = (PROJECT_ROOT / "trial_server.py").read_text(encoding="utf-8")
+        accepted = set(re.findall(r'"(\w+)"', re.search(r"^EVENT_FEATURES = frozenset\(\{(.*?)\}\)", server, re.MULTILINE).group(1)))
+        self.assertLessEqual(actions, accepted)
 
     def test_app_script_switches_cards_through_the_shared_logic(self) -> None:
         script = (PROJECT_ROOT / "public/app.js").read_text(encoding="utf-8")
