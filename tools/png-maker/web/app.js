@@ -16,7 +16,22 @@ let regions=[],active=null,serial=1,history=[],drawing=false,drag=null,ready=fal
 const originalMargins=new Map();
 const matchesMargin=r=>{const box=originalMargins.get(r.id);return box && keys.every(k=>box[k]===r[k]);};
 const isMargin=r=>matchesMargin(r)&&!r.keepMargin;
-let documentRevision=0,proposalCount=0,reviewed=false;
+let documentRevision=0,proposalCount=0,reviewed=false,dirty=false;
+const exportHistory=[];
+const progress=$('#export-progress'), exportMessage=$('#export-message');
+const localNotice=(msg,kind='info')=>{exportMessage.textContent=msg;exportMessage.dataset.kind=kind;};
+function updateExportHistory(){
+  $('#export-history').hidden=!exportHistory.length;
+  $('#export-history-items').replaceChildren(...exportHistory.map(record=>{
+    const li=document.createElement('li');
+    li.textContent=record.count+'개 영역 · '+record.format+' · 브라우저에 전달됨';
+    return li;
+  }));
+}
+$('#clear-export-history').onclick=()=>{exportHistory.length=0;updateExportHistory();$('#export-all').focus();};
+function resetExportFeedback(){exportHistory.length=0;updateExportHistory();localNotice('');}
+addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
+
 const keys=['x','y','w','h'],fields={};
 for(const [i,k] of keys.entries()){
   const label=document.createElement('label');label.textContent=['X','Y','너비','높이'][i];
@@ -28,7 +43,7 @@ const selected=()=>regions.find(r=>r.id===active);
 const questionLabel=id=>'문제 '+String(regions.findIndex(r=>r.id===id)+1).padStart(2,'0');
 const uid=()=>'R'+String(serial++).padStart(3,'0');
 function capture(){return {regions:regions.map(r=>({...r})),active};}
-function remember(state=capture()){reviewed=false;history.push(state);if(history.length>60)history.shift();}
+function remember(state=capture()){reviewed=false;dirty=true;history.push(state);if(history.length>60)history.shift();}
 function route(){
   const edit=location.hash==='#edit' && ready;
   $('#home').hidden=edit;$('#editor').hidden=!edit;
@@ -42,7 +57,7 @@ function showSource(source,name){
   const next=document.createElement('canvas');next.id='source';next.width=source.width;next.height=source.height;
   const ctx=next.getContext('2d',{willReadFrequently:true});ctx.drawImage(source,0,0);
   const result=propose(ctx.getImageData(0,0,next.width,next.height));
-  documentRevision++;proposalCount=result.rects.length;reviewed=false;
+  documentRevision++;proposalCount=result.rects.length;reviewed=false;dirty=false;resetExportFeedback();
   canvas.replaceWith(next);canvas.width=canvas.height=1;canvas=next;
   $('#sheet').style.width='min(100%, '+(64*source.width/source.height)+'vh)';
   say('');
@@ -266,9 +281,16 @@ async function exportFiles(all){
   if(exporting||!reviewed)return;
   const order=regions.map(r=>({...r})), chosen=all?order:order.filter(r=>r.id===active);
   if(!chosen.length)return;
-  if(chosen.reduce((n,r)=>n+r.w*r.h,0)>64000000){say('한 번에 내보낼 수 있는 범위는 총 6,400만 픽셀입니다. 영역을 줄이거나 개별 PNG를 받으세요.');return;}
+  if(chosen.reduce((n,r)=>n+r.w*r.h,0)>64000000){localNotice('한 번에 최대 6,400만 픽셀을 내보낼 수 있습니다. 영역을 줄이거나 선택 PNG를 받으세요.','error');return;}
   const names=outputNames($('#file-title').textContent,order.length);
-  const version=documentRevision;exporting=true;render();
+  const trigger=all?$('#export-all'):$('#export-one');
+  const restoreFocus=document.activeElement===trigger;
+  const version=documentRevision;exporting=true;say('');render();
+  progress.max=chosen.length;
+  progress.value=0;
+  progress.hidden=false;
+  localNotice(chosen.length+'개 영역을 준비하고 있습니다.');
+  let prepared=0;
   try{
     const files=[];let blob,name;const out=document.createElement('canvas');
     for(const r of chosen){
@@ -277,12 +299,28 @@ async function exportFiles(all){
       blob=await new Promise((ok,fail)=>out.toBlob(b=>b?ok(b):fail(Error('PNG를 만들 수 없습니다.')),'image/png'));
       name=names.png(order.indexOf(r)+1);
       if(all)files.push({name,bytes:new Uint8Array(await blob.arrayBuffer())});
+      progress.value=++prepared;
     }
     if(version!==documentRevision)throw Error('이미지가 변경되어 다운로드를 중단했습니다.');
-    if(all){blob=zip(files);name=names.zip;}
+    if(all){
+      localNotice('ZIP 파일로 모으는 중입니다.');
+      await new Promise(resolve=>setTimeout(resolve,0));
+      if(version!==documentRevision)throw Error('이미지가 변경되었습니다.');
+      blob=zip(files);name=names.zip;
+    }
     const href=URL.createObjectURL(blob),a=document.createElement('a');a.href=href;a.download=name;a.click();
-    setTimeout(()=>URL.revokeObjectURL(href),30000);say(chosen.length+'개 영역의 다운로드를 시작했습니다.');
-  }catch(e){say(e.message);}finally{exporting=false;render();}
+    setTimeout(()=>URL.revokeObjectURL(href),30000);
+    exportHistory.unshift({count:chosen.length,format:all?'ZIP':'PNG'});
+    if(exportHistory.length>10)exportHistory.pop();
+    updateExportHistory();
+    localNotice(chosen.length+'개 영역의 파일을 브라우저에 전달했습니다. Ctrl+J로 저장 상태를 확인하세요.','ok');
+  }catch(e){
+    if(version===documentRevision){localNotice('파일을 만들지 못했습니다. 편집은 유지됩니다. 다시 시도하거나 선택 PNG를 받으세요.','error');}
+  }finally{progress.hidden=true;exporting=false;render();if(restoreFocus&&document.activeElement===document.body&&!trigger.disabled)trigger.focus({preventScroll:true});}
 }
+addEventListener('keydown',e=>{
+  if(!ready || location.hash!=='#edit' || e.defaultPrevented || e.isComposing || document.querySelector('dialog[open]') || e.target?.closest?.('input,textarea,select,[contenteditable]'))return;
+  if((e.ctrlKey||e.metaKey)&&!e.shiftKey&&e.key.toLowerCase()==='z'&&!$('#undo').disabled){e.preventDefault();$('#undo').click();}
+});
 $('#export-all').onclick=()=>exportFiles(true);$('#export-one').onclick=()=>exportFiles(false);
 route();
